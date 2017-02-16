@@ -525,91 +525,114 @@ classdef am_lib
             sc = sc_(uc,X(2:4,:),B,s2u);
         end
 
-        function [ip]         = get_irreducible_shells(pc,cutoff)
+        function [ip,pp,i2p,p2i] = get_irreducible_shells(pc,uc,cutoff)
             % Cutoff needs to be small otherwise shells at large distances will be incomplete.
             
             import am_lib.*
             
             tiny = am_lib.tiny;
 
-            % define function to get check if rotation is a site-stabilizers (R*tau = tau)
-            is_site_stabilizer_ = @(R,tau) all(all(abs(sortcol_(mod_(R*tau))-sortcol_(mod_(tau)))<tiny,1),2);
+            % readjust cutoff based on unitcell
+            cutoff = min([normc_(uc.bas)/2,cutoff]);
 
-            % get point symmetries in [frac] and [cart]
+            % get point symmetries in [cart]
             [~,R]=get_symmetries(pc); Rc=matmul_(matmul_(pc.bas,R),pc.recbas); nRs=size(R,3);
 
-            % get supercell (TO DO: NEED AN INTELIGENT WAY OF SETTING B BASED ON CUTOFF)
-            B=eye(3)*5; [sc,s2p,p2s] = get_supercell(pc,B);
+            % define function to simultaneously apply operation (helps to not forget about one)
+            bundle_ = @(fwd,tau,species,uc_id,n,j) deal(tau(:,fwd),species(fwd),uc_id(fwd),n(fwd),j(fwd));
 
-            % determine primitive atoms shells
-            Z=[]; Y_ = @(d,r,w,species,pc_id,ic_id,Rstb_ck,Rgen_ck) [d(:);r(:);w(:);species(:);pc_id(:);ic_id(:);pad_(Rstb_ck(:),[nRs,1]);pad_(Rgen_ck(:),[nRs,1])];
-            for uc_id = p2s
-                % get n-centered atomic basis
-                T = sc.tau-sc.tau(:,uc_id); 
+            % determine primitive atoms shells; goals:
+            %   1) save [v] orbit reps (flip the bond, ordering primitive atom indices, if necessary)
+            %   2) save [s_ck] the point group symmetries which stabilize the bond 
+            %   3) save [g_ck] the point group symmetries which generate the orbit
+            Z=[];
+            for pc_id = uc.p2u
+                % center unit cell atomic basis on irreducible atom ic_id [cart]
+                tauc = uc2ws(uc.bas*( uc.tau-uc.tau(:,pc_id) ),uc.bas);
 
-                % get site stabilizer checklist 
-                R_stb_ck=false(1,nRs); for i=[1:nRs]; R_stb_ck(i)=is_site_stabilizer_(R(:,:,i),T); end; R_stb_id=find(R_stb_ck);
+                % copy key parameters
+                species = uc.species; uc_id = [1:uc.natoms].'; n = u2p; j = uc.u2i;
 
-                % find which atoms are related by each symmetry operation (O_ck) by build and solving permutation matrix for orbits
-                PM=zeros(sc.natoms,nRs); for j=[1:nRs]; PM(:,j)=rankcol_([mod_(R(:,:,j)*T);sc.species]); end
-                A=sparse(sc.natoms,sc.natoms); A(sub2ind( size(A),repmat([1:sc.natoms]',nRs,1),PM(:) ))=1; A=fsrref_(A); O_ck=full(A(any(A~=0,2),:));
+                % keep below on cutoff (should have full shells here)
+                [tauc,species,uc_id,n,j]=bundle_(cutoff > normc_(tauc) , tauc,species,uc_id,n,j); 
 
-                % identify reps and set number of orbits
-                O_rep_id=round(findrow_(O_ck)); norbits=numel(O_rep_id);
+                % sort based on position (critical for getting the right rep, see NOTE A)
+                [tauc,species,uc_id,n,j]=bundle_(rankcol_(       tauc ), tauc,species,uc_id,n,j);
 
-                % convert to [cart] and translate all orbit reps to wigner-seitz cell; then compute shell radii
-                O_rep = uc2ws(sc.bas*T(:,O_rep_id),sc.bas); dc=normc_(O_rep);
+                % sort based on distance (reduce sort sensitivity by a factor of 100)
+                [tauc,species,uc_id,n,j]=bundle_(rankcol_(normc_(tauc)/100), tauc,species,uc_id,n,j);
 
-                % goal of the loop over shells:
-                % 	1) flip the bond to sort primitive atom indices
-                %   2) save [s_ck] the point group symmetries which stabilize the bond 
-                %   3) save [g_ck] the point group symmetries which generate the orbit
-                Y=zeros(11+nRs*2,norbits);
-                for i = 1:norbits; if dc(i)<cutoff
+                % build permutation matrix based on valid symmetries; PM = [natoms,nsyms]
+                PM = get_permutation_rep(Rc,tauc,species,''); 
 
-                    % set the rep again, except more systematically this time (Z axis sorted preferentially)
-                    O_full = flipud(uniquecol_( flipud(matmul_(Rc(:,:,R_stb_id),O_rep(:,i))) )); w = size(O_full,2);
+                % construct a sparse binary representation; A = [norbits,natoms]
+                A = get_binary_rep(PM);
 
-                    % flip to order unit cell indicies (negative sign indicates flippped)            
-                    if s2p(uc_id)>s2p(O_rep_id(i))
-                        mn=-[O_rep_id(i), uc_id]; O_rep(:,i)=-O_full(:,1);
-                    else
-                        mn=+[uc_id, O_rep_id(i)]; O_rep(:,i)=+O_full(:,w);
-                    end
+                % determine number of unique primitive cell atoms in each orbit
+                norbits=size(A,1); nms=zeros(norbits,1); for io = 1:norbits; nms(io)=numel(unique(n(A(io,:)))); end
 
-                    % now do it again with the new rep to get the ordering of unique correct 
-                    O_full = matmul_(Rc(:,:,R_stb_id),O_rep(:,i));
+                % get weights
+                w = round(sum(A,2)).'; w = repelem(w,nms);
 
-                    % create orbital generator checklist
-                    [~,u]=unique( rnd_(flipud(O_full)).' ,'rows'); Rgen_ck=zeros(1,nRs); Rgen_ck(R_stb_id(u))=1;
+                % order primitive cell indices, record rep; v = [3,norbits]
+                s=sum(nms); isflipped = false(1,s); v=zeros(3,s); mn = zeros(2,s); ij = zeros(2,s);
+                rep_id = zeros(1,s); s_ck = zeros(nRs,s); g_ck = zeros(nRs,s); k=0; 
+                ml = uc.u2p(pc_id); il = uc.u2i(pc_id);
+                for io = 1:norbits; for nl = unique(n(A(io,:))); k=k+1;
+                        x=find(A(io,:)); jl=j(io);
+                        % KEEP OR FLIP! (NOTE A)
+                        if ml > nl
+                       isflipped(k) = true;
+                          rep_id(k) = x(findrow_(   n(x)==nl));
+                            mn(:,k) =  [nl,ml];
+                            ij(:,k) =  [jl,il];
+                             v(:,k) = - tauc(:,rep_id(k)); 
+                        else
+                       isflipped(k) = false;
+                          rep_id(k) = x(findrowrev_(n(x)==nl));
+                            mn(:,k) =  [ml,nl];
+                            ij(:,k) =  [il,jl];
+                             v(:,k) = + tauc(:,rep_id(k)); 
+                        end
 
-                    % save results
-                    Y(:,i) = Y_(dc(i),O_rep(:,i),w,sc.species(abs(mn)),s2p(abs(mn)).*sign(mn),pc.p2i(s2p(abs(mn))),check2_(matmul_(Rc,O_rep(:,i))-O_rep(:,i)),Rgen_ck);
-                end; end; 
+                        % get orbit rep stabilizers; s_ck = = [nsyms,norbits]
+                        s_ck(:,k) = (PM(rep_id(k),:)==(rep_id(k).')).'; 
+                        % get orbit rep generators; g_ck, g_m, g_j = [nsyms,norbits]
+                        [~,g_id] = unique(PM(rep_id(k),:),'stable'); g_ck(g_id,k) = true;
+                end; end
 
-                % append Z
-                Z = [Z,Y(:,dc<cutoff)];
+                % correct rounding
+                v(abs(v)<tiny) = 0;
+
+                % save properties Z = [ d 1, v (2,3,4), w (5), ij (6,7), mn (8,9), flip (10) ]
+                Y = [normc_(v);v;w;ij;mn;isflipped;s_ck;g_ck];
+                Z = [Z,Y];
+
+                % % print table
+                bar_ = @(x) repmat('-',[1,x]);
+                fprintf('primitive atom #%i at v = [%.5f,%.5f,%.5f] has %i shells \n',find(pc_id==p2u),uc.bas*uc.tau(:,pc_id),norbits);
+                fprintf('%-10s    %-30s    %-4s    %-7s    %-7s    %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','flip'); 
+                fprintf('%-10s    %-30s    %-4s    %-7s    %-7s    %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
+                fprintf('%10.5f  %10.5f %10.5f %10.5f    %4i    %-3i-%3i    %-3i-%3i    %4i\n', Y(1:10,:) );
             end
 
             % reduce to unique rows
-            [~,ip_id,pp_id]=unique( rnd_(Z([1:7,10:11],:)).','rows'); 
+            [~,i2p,p2i]=unique( rnd_(Z(1:7,:)).','rows','stable'); 
 
-            % save p2i indicies
-            for i = 1:numel(ip_id); m{i} = Z(8,pp_id==i); n{i} = Z(9,pp_id==i); end
+            pair_ = @(uc,R,Z) struct('units','cart','bas',uc.bas,'recbas',uc.recbas, ...
+                'symb',{{uc.symb{:}}},'species',uc.species,'mass',uc.mass,...
+                'nshells',size(Z,2),'norbits',Z(5,:),'v',Z(2:4,:),'i',Z(6,:),'j',Z(7,:),'m',Z(8,:),'n',Z(9,:), ...
+                's_ck',logical(Z(9+[1:nRs],:)),'g_ck',logical(Z(9+nRs+[1:nRs],:)),'nRs',size(R,3),'R',R);
 
-            % save results Y([1,[2,3,4],5,[6,7],[8,9],[10,11]],nshells)
-            pair_ = @(pc,R,Z,m,n) struct('units','cart','bas',pc.bas,'recbas',pc.recbas, ...
-                'symb',{{pc.symb{:}}},'species',pc.species,'mass',pc.mass,...
-                'nshells',size(Z,2),'norbits',Z(5,:),'v',Z([2,3,4],:),'m',{m},'n',{n},'i',Z(10,:),'j',Z(11,:), ...
-                'nRs',size(R,3),'R',R,'s_ck',logical(Z(11+[1:nRs],:)),'g_ck',logical(Z(11+nRs+[1:nRs],:)));
-            ip = pair_(pc,Rc, Z(:,ip_id),m,n);
+            pp = pair_(pc,Rc,Z       );
+            ip = pair_(pc,Rc,Z(:,i2p));
 
             % print table
             bar_ = @(x) repmat('-',[1,x]);
-            fprintf('%-10s\n', 'irreducible shells');
-            fprintf('%-10s    %-30s    %-4s    %-7s    %-7s    %-7s\n', 'd [cart]','bond [cart]','#','species','pc(m,n)','ic(i,j)'); 
-            fprintf('%-10s    %-30s    %-4s    %-7s    %-7s    %-7s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(7));
-            fprintf('%10.5f  %10.5f %10.5f %10.5f    %4i    %-3i-%3i    %-3i-%3i    %-3i-%3i\n', Z(1:11,ip_id) );
+            fprintf('%-10s (%i)\n', 'irreducible shells',numel(i2p));
+            fprintf('%-10s    %-30s    %-4s    %-7s    %-7s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)'); 
+            fprintf('%-10s    %-30s    %-4s    %-7s    %-7s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7));
+            fprintf('%10.5f  %10.5f %10.5f %10.5f    %4i    %-3i-%3i    %-3i-%3i\n', Z(1:9,i2p) );
         end
 
 
