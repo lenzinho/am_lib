@@ -221,11 +221,96 @@ classdef am_lib
             % trim unused space
             S=S(:,:,1:k); R=reshape(uniquecol_( reshape(S(1:3,1:3,:),[9,k]) ),3,3,[]);
         end
+        
+        function [PM]    = get_permutation_rep(S,tau,species,flags)
+            % build permutation reprensetation
+            % requires complete basis!
 
-        function           identify_pointgroup(R)
+            import am_lib.*
+
+            % set number of atoms and symmetries
+            natoms = size(tau,2); nSs = size(S,3);
+
+            if   strfind(flags,'closure')
+                % define unique ordering
+                if    strfind(flags,'pbc')
+                    order_ = @(tau,species) rankcol_([mod_(tau);species]);
+                else
+                    order_ = @(tau,species) rankcol_([     tau ;species]);
+                end
+                
+                % define forward order( reference)
+                fwd = order_(tau,species);
+
+                % build permutation matrix
+                if     size(S,1) == 3 % point symmetries
+                    PM=zeros(natoms,nSs); for i=[1:nSs]; PM( order_(S(1:3,1:3,i)*tau(:,:)           ,species) ,i) = fwd; end
+                elseif size(S,1) == 4 % space symmetries
+                    PM=zeros(natoms,nSs); for i=[1:nSs]; PM( order_(S(1:3,1:3,i)*tau(:,:)+S(1:3,4,i),species) ,i) = fwd; end
+                end
+            else
+                % define unique ordering
+                if    strfind(flags,'pbc')
+                    order_ = @(tau,species) [mod_(tau);species];
+                else
+                    order_ = @(tau,species) [     tau ;species];
+                end
+                
+                % get reference
+                ref = order_(tau,species);
+                
+                % build permutation matrix
+                if     size(S,1) == 3 % point symmetries
+                    PM=zeros(natoms,nSs); for i=[1:nSs]; PM(:,i) = member_(order_(S(1:3,1:3,i)*tau           ,species),ref); end
+                elseif size(S,1) == 4 % space symmetries
+                    PM=zeros(natoms,nSs); for i=[1:nSs]; PM(:,i) = member_(order_(S(1:3,1:3,i)*tau+S(1:3,4,i),species),ref); end
+                end
+            end
+            %
+            % CHECKS:
+            % % positions produced by rotation i
+            % for i = 1:size(PM,2)
+            % sum(sum(abs(tau(:,PM(:,i)) - matmul_(S(:,:,i),tau))))
+            % end
+            % 
+            % % orbits of atom i
+            % for i = 1:size(PM,1)
+            % sum(sum(abs(tau(:,PM(i,:)) - matmul_(S,tau(:,i) )),2),1)
+            % end
+        end
+
+        function [A]     = get_binary_rep(PM)
+            
+            import am_lib.*
+            
+            tiny = am_lib.tiny;
+            
+            % binary 
+            [natoms,nRs] = size(PM);
+            
+            % exclude all rows containing all zeros
+            PM = PM(~all(PM==0,2),:);
+
+            % construct sparse vectors
+            m = size(PM,1); t = zeros(1,m); for i = [1:m]; t(i) = PM(i,find(PM(i,:),1)); end
+            v = [ repmat(t(:),nRs,1), PM(:) ]; 
+
+            % exlcude zeros and remove repeat
+            v = v(~any(v==0,2),:); v = unique(v,'rows');
+            
+            % construct a sparse binary representation 
+            A=sparse(v(:,1),v(:,2),ones(size(v,1),1),natoms,natoms);
+
+            % reduce binary rep using fast sparse rref based on QR decomposition
+            A=frref_(A); A(abs(A)<tiny)=0; A(abs(A)>tiny)=1; A=full(A(any(A~=0,2),:)); 
+            
+            % convert to logical
+            A = logical(A);
+        end
+
+        function pg_code = identify_pointgroup(R)
             % 
             % Point symmetries in fractional coordinates so that they are nice integers which can be easily classified.
-            %  (should not matter... trace and det are invariant under similarity transforms...)
             %    element:         e    i  c_2  c_3  c_4  c_6  s_2  s_6  s_4  s_3
             %    trace:          +3   -3   -1    0   +1   +2   +1    0   -1   -2
             %    determinant:    +1   -1   +1   +1   +1   +1   -1   -1   -1   -1
@@ -262,6 +347,7 @@ classdef am_lib
                 elseif and(tr==+0,dt==-1); ps_id(i) = 8;  % 's_6'
                 elseif and(tr==-1,dt==-1); ps_id(i) = 9;  % 's_4'
                 elseif and(tr==-2,dt==-1); ps_id(i) = 10; % 's_3'
+                else                       ps_id(i) = 0;  % unknown
                 end
             end
             % count each type of symmetry
@@ -305,74 +391,21 @@ classdef am_lib
             elseif and(nsyms==24, ni ==1) ; pg_code=29;
             elseif and(nsyms==24, nc4==6) ; pg_code=30;
             elseif and(nsyms==24, ns4==6) ; pg_code=31;
+            else                            pg_code=0;
             end
+        end
+            
+        function pg_name = decode_pg(pg_code)
             % point group dataset
             pg={'c_1' ,'s_2' ,'c_2' ,'c_1h','c_2h','d_2' ,'c_2v','d_2h', ...
                 'c_3' ,'s_6' ,'d_3' ,'c_3v','d_3d','c_4' ,'s_4' ,'c_4h', ...
                 'd_4' ,'c_4v','d_2d','d_4h','c_6' ,'c_3h','c_6h','d_6' , ...
                 'c_6v','d_3h','d_6h','t'   ,'t_h' ,'o'   ,'t_d' ,'o_h'};
             % print point group name
-            fprintf('point group = %s \n',pg{pg_code});
-        end
-            
-        function [PM]    = get_permutation_rep(S,tau,species,flags)
-            % build permutation reprensetation
-            % requires complete basis!
-
-            import am_lib.*
-
-            if    strfind(flags,'pbc')
-                % define unique ordering
-                order_ = @(tau,species) rankcol_([mod_(tau);species]);
-            else
-                % define unique ordering
-                order_ = @(tau,species) rankcol_([     tau ;species]);
-            end
-
-            % set number of atoms and symmetries
-            natoms = size(tau,2); nSs = size(S,3);
-
-            % define forward order
-            fwd = order_(tau,species);
-
-            % build permutation matrix
-            if     size(S,1) == 3 % point symmetries
-                PM=zeros(natoms,nSs); for i=[1:nSs]; PM( order_(S(1:3,1:3,i)*tau(:,:)           ,species) ,i) = fwd; end
-            elseif size(S,1) == 4 % space symmetries
-                PM=zeros(natoms,nSs); for i=[1:nSs]; PM( order_(S(1:3,1:3,i)*tau(:,:)+S(1:3,4,i),species) ,i) = fwd; end
-            end
-            %
-            % CHECKS:
-            % % positions produced by rotation i
-            % for i = 1:size(PM,2)
-            % sum(sum(abs(tau(:,PM(:,i)) - matmul_(S(:,:,i),tau))))
-            % end
-            % 
-            % % orbits of atom i
-            % for i = 1:size(PM,1)
-            % sum(sum(abs(tau(:,PM(i,:)) - matmul_(S,tau(:,i) )),2),1)
-            % end
+            pg_name = pg{pg_code};
         end
 
-        function [A]     = get_binary_rep(PM)
-            
-            import am_lib.*
-            
-            tiny = am_lib.tiny;
-            
-            % binary 
-            [natoms,nRs] = size(PM);
-            
-            % construct a sparse binary representation 
-            A=sparse(repmat([1:natoms].',1,nRs),PM,ones(natoms,nRs),natoms,natoms); A(abs(A)>tiny)=1;
 
-            % reduce binary rep using fast sparse rref based on QR decomposition
-            A=fsrref_(A); A(abs(A)<tiny)=0; A(abs(A)>tiny)=1; A=full(A(any(A~=0,2),:)); 
-            
-            % convert to logical
-            A = logical(A);
-        end
-        
         % unit cells
 
         function [uc,pc,ic]   = get_cells(fname,flags)
@@ -425,7 +458,7 @@ classdef am_lib
             A=zeros(uc.natoms); A(sub2ind([1,1]*uc.natoms,repmat([1:uc.natoms].',nTs,1),PM(:)))=1; A=frref_(A); A=A(~all(A==0,2),:);
 
             % set identifiers
-            p2u = findrow_(A); u2p = ([1:size(A,1)]*A);
+            p2u = findrow_(A).'; u2p = ([1:size(A,1)]*A);
 
             % set basis (the three smallest vectors which preserve periodic boundary conditions)
             inds=[0,0,0];
@@ -449,17 +482,17 @@ classdef am_lib
             S=get_symmetries(pc); nSs=size(S,3);
 
             % get permutation matrix
-            PM = get_permutation_rep(S,pc.tau,pc.species,'pbc');
+            PM = get_permutation_rep(S,pc.tau,pc.species,'pbc,closure');
 
             % construct a sparse binary representation 
             A = get_binary_rep(PM);
 
             % set identifiers
-            i2p = round(findrow_(A)); p2i = round(([1:size(A,1)]*A));
+            i2p = round(findrow_(A)).'; p2i = round(([1:size(A,1)]*A));
 
             % apply these space symmetries to regenerate the primitive cell from the irreducible cell
             % ==> i=2; mod_(matmul_(ic.S(1:3,1:3,ic.S_ck(:,i)),ic.tau(:,i)) + reshape(ic.S(1:3,4,ic.S_ck(:,i)),3,[]))
-            S_ck = false(nSs,numel(i2p)); for i = i2p; [~,a]=unique(PM(i,:)); S_ck(a,i) = true; end
+            S_ck = false(nSs,numel(i2p)); for i = i2p(:).'; [~,a]=unique(PM(i,:)); S_ck(a,i) = true; end
 
             % define irreducible cell creation function and make structure
             ic_ = @(uc,i2u,S,S_ck) struct('units','frac','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas, ...
@@ -1651,14 +1684,19 @@ classdef am_lib
         
         function [C] = findrow_(A)
             % define function to find the first nonzero value in each row of matrix A
-            C = (sum(cumsum(A~=0,2)==0,2)+1).';
+            % returns 0 for rows containing all zeros
+            C = (sum(cumsum(A~=0,2)==0,2)+1);
+            C = C .* ~all(A==0,2);
         end
         
         function [C] = findrowrev_(A)
+            % define function to find the last nonzero value in each row of matrix A
+            % returns 0 for rows containing all zeros
             
             import am_lib.findrow_
             
             C = 1+size(A,2)-findrow_(fliplr(A));
+            C = C .* ~all(A==0,2);
         end
 
         function [C] = pad_(A,n)
@@ -1790,9 +1828,30 @@ classdef am_lib
         end
 
         function [h] = plot3_(A)
-           h = plot3(A(1,:),A(2,:),A(3,:),'o') 
+           h = plot3(A(1,:),A(2,:),A(3,:),'o');
         end
-        
+
+        function [c] = member_(A,B)
+            % get indicies of column vectors A(:,i) in matrix B(:,:)
+            % 0 means not A(:,i) is not in B(:,:)
+
+            nvecs = size(A,2); c = zeros(1,nvecs);
+            for i = 1:nvecs; c(i) = member_engine_(A(:,i),B,am_lib.tiny); end
+
+            function c = member_engine_(A,B,tol)
+                c = 1; r = 1; [d1,d2] = size(B);
+                while r <= d1
+                    if abs(B(r,c)-A(r))<tol
+                        r = r+1;
+                    else
+                        c = c+1;
+                        r = 1;
+                    end
+                    if c>d2; c=0; return; end
+                end
+            end
+        end
+
 
         % aux brillouin zones
 
@@ -2014,7 +2073,10 @@ classdef am_lib
             %       is slower than looping.
 
             % generate mesh
-            [X{1:3}] = meshgrid([-1:1]); G=M*[X{1}(:),X{2}(:),X{3}(:)].'; G2=sum(G.^2,1);
+            G = M * [-1,-1,-1, 0, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 0, 1, 1, 1;
+                     -1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1;
+                     -1,-1,-1,-1,-1,-1,-1,-1,-1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+            G2=sum(G.^2,1);
 
             % call engine
             m=size(K,2); K0 = zeros(3,m); for j = 1:m; K0(:,j) = uc2ws_engine(K(:,j),G,G2); end
@@ -2025,7 +2087,7 @@ classdef am_lib
 
                 go = true;
                 while go; go=false;
-                    for i = 1:27
+                    for i = 1:26
                         P = 2*K.'*G(:,i)-G2(i);
                         if P > + tiny
                             K = K - G(:,i); go=true;
