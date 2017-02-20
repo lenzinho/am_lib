@@ -218,7 +218,7 @@ classdef am_lib
                 if check3_( X_(R(:,:,i)*uc.tau+T(:,j),uc.species) - X ); k=k+1; S(1:3,1:4,k)=[ R(:,:,i), T(:,j) ]; end
             end; end
 
-            % trim unused space
+            % trim unused space, apply mod, and get point symmetries
             S=S(:,:,1:k); R=reshape(uniquecol_( reshape(S(1:3,1:3,:),[9,k]) ),3,3,[]);
         end
         
@@ -280,14 +280,14 @@ classdef am_lib
         end
 
         function [A]     = get_binary_rep(PM)
-            
+
             import am_lib.*
-            
+
             tiny = am_lib.tiny;
-            
+
             % binary 
             [natoms,nRs] = size(PM);
-            
+
             % exclude all rows containing all zeros
             PM = PM(~all(PM==0,2),:);
 
@@ -295,15 +295,15 @@ classdef am_lib
             m = size(PM,1); t = zeros(1,m); for i = [1:m]; t(i) = PM(i,find(PM(i,:),1)); end
             v = [ repmat(t(:),nRs,1), PM(:) ]; 
 
-            % exlcude zeros and remove repeat
-            v = v(~any(v==0,2),:); v = unique(v,'rows');
-            
-            % construct a sparse binary representation 
-            A=sparse(v(:,1),v(:,2),ones(size(v,1),1),natoms,natoms);
+            % exlcude zeros, make symmetric, ensure diagonals, and remove repeat
+            v = v(~any(v==0,2),:); v=[v;[v(:,2),v(:,1)]]; v=[v;[v(:,1),v(:,1)]]; v = unique(v,'rows');
 
-            % reduce binary rep using fast sparse rref based on QR decomposition
-            A=frref_(A); A(abs(A)<tiny)=0; A(abs(A)>tiny)=1; A=full(A(any(A~=0,2),:)); 
-            
+            % construct a sparse binary representation 
+            A = sparse(v(:,1),v(:,2),ones(size(v,1),1),natoms,natoms); A = double((A'*A)~=0);
+
+            % merge and reduce binary rep
+            A = merge_(A); A(abs(A)<tiny)=0; A(abs(A)>tiny)=1; A=full(A(any(A~=0,2),:)); 
+
             % convert to logical
             A = logical(A);
         end
@@ -445,20 +445,21 @@ classdef am_lib
         end
 
         function [pc,p2u,u2p] = get_primitive_cell(uc)
-            
+            % NOTE: saves p2u entries which share a common closest
+            % primitive lattice vector, not just the first primitive atoms
+            % produced by the matrix A. When building shells, this property
+            % is exploited.
+
             import am_lib.*
             
             tiny = am_lib.tiny;
 
-            % build permutation matrix for atoms related by the space symmetries
+            % build permutation matrix for atoms related by translations
             T=get_translations(uc.tau,uc.species); nTs=size(T,2); PM=zeros(uc.natoms,nTs);
             for i = [1:nTs]; PM(:,i)=rankcol_( [mod_(uc.tau+T(1:3,i));uc.species] ); end
 
             % construct a sparse binary representation 
             A=zeros(uc.natoms); A(sub2ind([1,1]*uc.natoms,repmat([1:uc.natoms].',nTs,1),PM(:)))=1; A=frref_(A); A=A(~all(A==0,2),:);
-
-            % set identifiers
-            p2u = findrow_(A).'; u2p = ([1:size(A,1)]*A);
 
             % set basis (the three smallest vectors which preserve periodic boundary conditions)
             inds=[0,0,0];
@@ -466,6 +467,9 @@ classdef am_lib
             for j = 1:nTs; if any(abs( cross(T(:,2),T(:,j)) )>tiny); inds(2)=j; break; end; end
             for j = 1:nTs; inds(3)=j; if abs(det(T(:,inds))+eye(3)*eps) > tiny; break; end; end
             B=T(:,inds); if det(B)<0; B=fliplr(B); end
+            
+            % set identifiers (see NOTE)
+            p2u = member_(B*mod_(B\uc.tau(:,findrow_(A))),uc.tau).'; u2p = ([1:size(A,1)]*A);
 
             % define primitive cell creation function and make structure
             pc_ = @(uc,B,p2u) struct('units','frac','latpar',uc.latpar,'bas',uc.bas*B,'recbas',uc.recbas/B, ...
@@ -479,7 +483,7 @@ classdef am_lib
             import am_lib.*
 
             % get seitz matrices
-            S=get_symmetries(pc); nSs=size(S,3);
+            [S,~] = get_symmetries(pc); nSs=size(S,3);
 
             % get permutation matrix
             PM = get_permutation_rep(S,pc.tau,pc.species,'pbc,closure');
@@ -551,7 +555,7 @@ classdef am_lib
                 tauc = uc2ws(uc.bas*( uc.tau-uc.tau(:,pc_id) ),uc.bas);
 
                 % copy key parameters
-                species = uc.species; uc_id = [1:uc.natoms].'; n = u2p; j = uc.u2i;
+                species = uc.species; uc_id = [1:uc.natoms].'; n = uc.u2p; j = uc.u2i;
 
                 % keep below on cutoff (should have full shells here)
                 [tauc,species,uc_id,n,j]=bundle_(cutoff > normc_(tauc) , tauc,species,uc_id,n,j); 
@@ -610,7 +614,7 @@ classdef am_lib
 
                 % % print table
                 bar_ = @(x) repmat('-',[1,x]);
-                fprintf('primitive atom #%i at v = [%.5f,%.5f,%.5f] has %i shells \n',find(pc_id==p2u),uc.bas*uc.tau(:,pc_id),norbits);
+                fprintf('primitive atom #%i at v = [%.5f,%.5f,%.5f] has %i shells \n',find(pc_id==uc.p2u),uc.bas*uc.tau(:,pc_id),norbits);
                 fprintf('%-10s    %-30s    %-4s    %-7s    %-7s    %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','flip'); 
                 fprintf('%-10s    %-30s    %-4s    %-7s    %-7s    %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
                 fprintf('%10.5f  %10.5f %10.5f %10.5f    %4i    %-3i-%3i    %-3i-%3i    %4i\n', Y(1:10,:) );
@@ -1646,15 +1650,15 @@ classdef am_lib
     methods (Static)%, Access = protected)
         
         % library of simple functions
-        
+
         function [C] = mod_(A)
             C = mod(A+am_lib.tiny,1)-am_lib.tiny; 
         end
-        
+
         function [C] = rnd_(A)
             C = round(A,-log10(am_lib.tiny));
         end
-        
+
         function [C] = matmul_(A,B)
             % define high dimensional matrix multiplication: A [(m,n),(a,b)] * B [(n,p),(b,c)] = C [(m,p),(a,c)]
             aug_ = @(x,i,y) [x(1:(i-1)),y,x(i:end)]; 
@@ -1662,11 +1666,15 @@ classdef am_lib
             C = squeeze(sum(bsxfun(@times, reshape(A,aug_(size(A),3,1)), reshape(B,aug_(size(B),1,1))), 2));
         end
 
+        function [C] = flatten_(A)
+            C = A(:);
+        end
+
         function [C] = kron_(A,B)
             % define high dimensional kronecker self-product: for i=[1:size(A,3)]; C(:,:,i)=kron(A(:,:,i),B(:,:,i)); end
             C = reshape(bsxfun(@times, permute(A,[4 1 5 2 3]), permute(B,[1 4 2 5 3])), size(A,1)*size(B,1),[],size(A,3));
         end
-        
+
         function [C] = sortcol_(A)
             % column vector-based rank, sort, unique with numeric precision
             import am_lib.rnd_
@@ -1678,40 +1686,40 @@ classdef am_lib
             import am_lib.rnd_
             C = sortrowsc(rnd_(A).',[1:size(A,1)]).'; 
         end                 
-        
+
         function [C] = uniquecol_(A)
             % get unique values with numeric precision
             import am_lib.rnd_
             C = unique(rnd_(A).' ,'rows').'; 
         end
-        
+
         function [C] = sum_(A,B)
             % define outer sum of two vector arrays
             C = reshape(repmat(A,[1,size(B,2)]),size(A,1),[]) + reshape(repmat(B,[size(A,2),1]),size(B,1),[]);
         end
-        
+
         function [C] = check2_(A)
             % check second dimension
             C = all(abs(A)<am_lib.tiny,1);
         end
-        
+
         function [C] = check3_(A)
             % define function to compare first two dimensons
             C = all(all(abs(A)<am_lib.tiny,1),2);
         end
-        
+
         function [C] = normc_(A)
             % get length of each column vector
             C = sqrt(sum(A.^2,1));
         end
-        
+
         function [C] = findrow_(A)
             % define function to find the first nonzero value in each row of matrix A
             % returns 0 for rows containing all zeros
             C = (sum(cumsum(A~=0,2)==0,2)+1);
             C = C .* ~all(A==0,2);
         end
-        
+
         function [C] = findrowrev_(A)
             % define function to find the last nonzero value in each row of matrix A
             % returns 0 for rows containing all zeros
@@ -1732,20 +1740,20 @@ classdef am_lib
             C = 1./(pi*(A.^2+1)); 
             
         end
-        
+
         function [C] = gauss_(A)
             C = exp(-abs(A).^2)./sqrt(pi);
         end
-        
+
         function [C] = delta_(A)
             % define tiny, kronecker delta, and heavside
             C = logical(abs(A)<am_lib.tiny); 
         end
-        
+
         function [C] = theta_(A)
             C = logical(A>0);
         end
-        
+
         function [A] = R_axis_(R)
             % define basic parameters and functions
             tiny = 1E-8; normalize_ = @(v) v/norm(v); 
@@ -1768,12 +1776,46 @@ classdef am_lib
             % adjust sign
             A = sign(dot(c,A))*A;
         end
-        
+
         function [A] = R_angle_(R)
             % define conversion of proper rotations to axis & angle representation
             A = acos((trace(R)-1)/2); 
         end
-        
+
+        function [A] = merge_(A)
+
+            [m,n] = size(A); tol=max(m,n)*eps(class(A))*norm(A,'inf');
+
+            i = 1; j = 1; go=true;
+            while go
+                go = false;
+                while (i <= m) && (j <= n)
+                    % Find value and index of largest element in the remainder of column j.
+                    [p,k] = max(abs(A(i:m,j))); k = k+i-1;
+                    if (p <= tol)
+                       % The column is negligible, zero it out.
+                       A(i:m,j) = 0; %(faster for sparse) %zeros(m-i+1,1);
+                       j = j + 1;
+                    else
+                        % Swap i-th and k-th rows.
+                        A([i k],j:n) = A([k i],j:n);
+                        % see which rows overlap with the i-th row
+                        ex_ = (A(i,:)*A~=0);
+                        % merge overlaps and zero all other rows
+                        A(ex_,:)=0; A(i,ex_)=1;
+                        i = i + 1;
+                        j = j + 1;
+                    end
+                end
+                % is one loop enough?! added go loop here to try and help.
+                % maybe this is not right.
+                AA = A*A';
+                if any(any( diag(diag(AA))-AA >tol ,2),1)
+                    go = true;
+                end
+            end
+        end
+
         function [A] = frref_(A)
             %frref_   Fast reduced row echelon form.
             %   R = frref_(A) produces the reduced row echelon form of A.
@@ -1845,21 +1887,18 @@ classdef am_lib
             F = sparse([],[],[], m, n);
             F(indep_rows, i_indep) = R(indep_rows, i_dep) \ R(indep_rows, i_indep);
             F(indep_rows, i_dep) = speye(length(i_dep));
-
-            % result
-            A = F;
-        end
-
-        function [h] = plot3_(A)
-           h = plot3(A(1,:),A(2,:),A(3,:),'o');
         end
 
         function [c] = member_(A,B)
-            % get indicies of column vectors A(:,i) in matrix B(:,:)
+            % get indicies of column vectors A(:,i,j) in matrix B(:,:)
             % 0 means not A(:,i) is not in B(:,:)
 
-            nvecs = size(A,2); c = zeros(1,nvecs);
-            for i = 1:nvecs; c(i) = member_engine_(A(:,i),B,am_lib.tiny); end
+            [~,m,n] = size(A); c = zeros(m,n);
+            for i = 1:m
+            for j = 1:n
+                c(i,j) = member_engine_(A(:,i,j),B,am_lib.tiny);
+            end
+            end
 
             function c = member_engine_(A,B,tol)
                 c = 1; r = 1; [d1,d2] = size(B);
@@ -1873,6 +1912,10 @@ classdef am_lib
                     if c>d2; c=0; return; end
                 end
             end
+        end
+
+        function [h] = plot3_(A)
+           h = plot3(A(1,:),A(2,:),A(3,:),'o');
         end
 
 
