@@ -479,14 +479,22 @@ classdef am_lib
         end
 
         function [ic,i2p,p2i] = get_irreducible_cell(pc)
+            % idenitifes irreducible atoms and the space symmetries s_ck
+            % necessary to regenerate the primitive cell from them.
             
             import am_lib.*
 
+            % define function to simultaneously apply operation (helps to not forget about one)
+            bundle_ = @(ex_,PM,Sinds) deal(PM(:,ex_),Sinds(ex_));
+            
             % get seitz matrices
-            [S,~] = get_symmetries(pc); nSs=size(S,3);
-
+            [S,~] = get_symmetries(pc); nSs=size(S,3); Sinds=[1:nSs];
+            
             % get permutation matrix
-            PM = get_permutation_rep(S,pc.tau,pc.species,'pbc,closure');
+            PM = get_permutation_rep(S,pc.tau,pc.species,''); 
+            
+            % bundle to exclude symmetries in which an atom was mapped to (zero) out of the primitive cell
+            [PM,Sinds]=bundle_(~any(PM==0,1),PM,Sinds);
 
             % construct a sparse binary representation 
             A = get_binary_rep(PM);
@@ -494,16 +502,16 @@ classdef am_lib
             % set identifiers
             i2p = round(findrow_(A)).'; p2i = round(([1:size(A,1)]*A));
 
-            % apply these space symmetries to regenerate the primitive cell from the irreducible cell
-            % ==> i=2; mod_(matmul_(ic.S(1:3,1:3,ic.S_ck(:,i)),ic.tau(:,i)) + reshape(ic.S(1:3,4,ic.S_ck(:,i)),3,[]))
-            S_ck = false(nSs,numel(i2p)); for i = i2p(:).'; [~,a]=unique(PM(i,:)); S_ck(a,i) = true; end
+            % apply these space symmetries to generate the primitive cell from the irreducible cell
+            % ==> sym_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:); i=2; sym_apply_(S(:,:,ic.s_ck(:,i)),ic.tau(:,i))
+            nics = numel(i2p); s_ck = false(nSs,nics); for i = 1:nics; [~,a]=unique(PM(i2p(i),:)); s_ck(Sinds(a),i) = true; end
 
             % define irreducible cell creation function and make structure
-            ic_ = @(uc,i2u,S,S_ck) struct('units','frac','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas, ...
+            ic_ = @(uc,i2u,S,s_ck) struct('units','frac','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas, ...
                 'vol',uc.vol,'symb',{{uc.symb{uc.species(i2u)}}},'nspecies',sum(unique(i2u).'==i2u,2).', ...
                 'natoms',numel(i2u),'tau',uc.tau(1:3,i2u),'species',uc.species(i2u),'mass',uc.mass(uc.species(i2u)),...
-                'S_ck',S_ck,'nSs',size(S,3),'S',S);
-            ic = ic_(pc,i2p,S,S_ck);
+                's_ck',s_ck,'nSs',size(S,3),'S',S);
+            ic = ic_(pc,i2p,S,s_ck);
         end
 
         function [sc,s2u,u2s] = get_supercell(uc,B)
@@ -2638,6 +2646,7 @@ cmap = map_(n,cmap);
         end
          
     end
+    
 end
 
 
