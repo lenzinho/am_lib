@@ -299,7 +299,7 @@ classdef am_lib
             v = v(~any(v==0,2),:); v=[v;[v(:,2),v(:,1)]]; v=[v;[v(:,1),v(:,1)]]; v = unique(v,'rows');
 
             % construct a sparse binary representation 
-            A = sparse(v(:,1),v(:,2),ones(size(v,1),1),natoms,natoms); A = double((A'*A)~=0);
+            A = sparse(v(:,1),v(:,2),ones(size(v,1),1),natoms,natoms); % A = double((A'*A)~=0);
 
             % merge and reduce binary rep
             A = merge_(A); A(abs(A)<tiny)=0; A(abs(A)>tiny)=1; A=full(A(any(A~=0,2),:)); 
@@ -1924,6 +1924,11 @@ classdef am_lib
 
         function [h] = plot3_(A)
            h = plot3(A(1,:),A(2,:),A(3,:),'o');
+        end
+        
+        function [h] = plotv3_(A)
+           A = repelem(A,1,2); A(:,1:2:end)=0;
+           h = plot3(A(1,:),A(2,:),A(3,:),'o-');
         end
 
 
