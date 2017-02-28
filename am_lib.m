@@ -212,7 +212,7 @@ classdef am_lib
 
             % get seitz operators which leave the atomic basis invariant
             X_= @(tau,species) sortcol_([species;mod_(tau)]); X = X_(uc.tau,uc.species); 
-            R = get_rotations_frac_(uc.bas); T = uniquecol_( sum_(uc.tau,-uc.tau) ); 
+            R = get_rotations_frac_(uc.bas); T = uniquecol_( osum_(uc.tau,-uc.tau) ); 
             nRs = size(R,3); nTs = size(T,2); S = zeros(4,4,nRs*nTs); S(4,4,:)=1; k=0;
             for i = 1:nRs; for j = 1:nTs
                 if check3_( X_(R(:,:,i)*uc.tau+T(:,j),uc.species) - X ); k=k+1; S(1:3,1:4,k)=[ R(:,:,i), T(:,j) ]; end
@@ -220,6 +220,10 @@ classdef am_lib
 
             % trim unused space, apply mod, and get point symmetries
             S=S(:,:,1:k); R=reshape(uniquecol_( reshape(S(1:3,1:3,:),[9,k]) ),3,3,[]);
+            
+            % put identity first
+            id = member_(flatten_(eye(4)),reshape(S,4^2,[])); S(:,:,[1,id])=S(:,:,[id,1]);
+            id = member_(flatten_(eye(3)),reshape(R,3^2,[])); R(:,:,[1,id])=R(:,:,[id,1]);
         end
 
         function [PM]    = get_permutation_matrix(S,tau,species,flags)
@@ -282,35 +286,38 @@ classdef am_lib
         function [MT]    = get_multiplication_table(S)
             % get multiplication table
             % for i = 1:nSs; MT2(i,:) = member_(rs_(matmul_(S(:,:,i),S)),rs_(S)); end; MT-MT2 % EXPLICIT
+            % to get inverse elements: nSs=size(MT,1); identity=find(all(MT==[1:nSs].',1)); [MT==identity]*[1:nSs].'
             
             import am_lib.*
             
-            nSs=size(S,3);
-            
             if     size(S,1) == 4
                 % seitz operator (applies mod to translational components)
-                md_ = @(X) [X(1:12,:);mod_(X(13:15,:));X(16,:)];
+                md_ = @(X) [X(1:12,:);mod_(X(13:15,:));X(16:end,:)];
                 rs_ = @(X) md_(reshape(X,4^2,[]));
                 
-                % seitz operator combined with permutation (for pairs and triplets)
-                if S(4,1,1)~=0
-                    % define function to apply symmetries to position vectors
-                    Z = zeros([size(S),size(S,3)]);
-                    Z(1:3,1:3,:,:) = matmul_(S(1:3,1:3,:),permute(S(1:3,1:3,:),[1,2,4,3]));
-                    Z(1:3,4:4,:,:) = matmul_(S(1:3,1:3,:),permute(S(1:3,4:4,:),[1,2,4,3]));
-                    % apply permutation manually
-                    ex_ = find(S(4,:,1));
-                    for i = 1:size(S,3); for j = 1:size(S,3)
-                    Z(4,ex_,i,j) = S(4,S(4,ex_,j),i);
-                    end; end
-                    MT = reshape(member_( rs_(Z) , rs_(S) ),nSs,nSs);
-                    return
-                end
+                nSs=size(S,3);
+
+                MT = reshape( member_( rs_(matmul_(S,permute(S,[1,2,4,3]))) , rs_(S) ) , nSs,nSs);
+                
             elseif size(S,1) == 3 
                 % point operator
-                rs_ = @(X)     reshape(X,3^2,[]);               
+                rs_ = @(X)     reshape(X,3^2,[]);
+                                
+                nSs=size(S,3);
+
+                MT = reshape( member_( rs_(matmul_(S,permute(S,[1,2,4,3]))) , rs_(S) ) , nSs,nSs);
+                
+            elseif size(S,1) == 1
+                % seitz operator combined with permutation (represented as a two-part cell)
+                md_ = @(X) [X(1:12,:);mod_(X(13:15,:));X(16:end,:)];
+                rs_ = @(X) md_(reshape(X,4^2,[]));
+                                
+                nSs=size(S{1},3);
+                ref = [rs_(S{1});reshape(S{2},size(S{2},1),[])];
+                opr = [rs_(matmul_(S{1},permute(S{1},[1,2,4,3]))); reshape(operm_(S{2},S{2}),size(S{2},1),[])];
+
+                MT = reshape( member_( opr , ref ) , nSs,nSs);
             end
-                MT = reshape(member_( rs_(matmul_(S,permute(S,[1,2,4,3]))) , rs_(S) ),nSs,nSs);
         end
 
         function [C]     = get_connectivity(PM)
@@ -342,6 +349,13 @@ classdef am_lib
             C = logical(C);
         end
 
+        function [inv_]  = get_inverse_list(MT)
+            % lists inverse elements
+            import am_lib.*
+            
+            nSs=size(MT,1); id=find(all(MT==[1:nSs].',1)); inv_=[MT==id]*[1:nSs].';
+        end
+        
         function pg_code = identify_pointgroup(R)
             % 
             % Point symmetries in fractional coordinates so that they are nice integers which can be easily classified.
@@ -559,7 +573,7 @@ classdef am_lib
             n=round(sum(abs(B),1)); [Y{3:-1:1}]=ndgrid(1:n(1),1:n(2),1:n(3)); nLs=prod(n); L=reshape(cat(3+1,Y{:})-1,[],3).'; 
 
             % expand atoms, coordinates supercell fractional, and reduce to primitive supercell
-            X=uniquecol_([ reshape(repmat([1:uc.natoms],nLs,1),1,[]); mod_(inv(B)*sum_(L,uc.tau)) ]);
+            X=uniquecol_([ reshape(repmat([1:uc.natoms],nLs,1),1,[]); mod_(inv(B)*osum_(L,uc.tau)) ]);
 
             % create mapping
             s2u = X(1,:); [~,u2s]=unique(s2u); u2s=u2s(:).';
@@ -573,32 +587,29 @@ classdef am_lib
 
         function [ip,pp,p2i,i2p] = get_shells(pc,uc,cutoff)
             % Cutoff needs to be small otherwise shells at large distances will be incomplete.
+            % MECHANISM A: pair symmetryes involve rotations and
+            %              permutations of atomic positions. The symmetries
+            %              are represented as a cell Q. The first part
+            %              Q{1}(:,:,:) contains the seitz operation and the
+            %              second part Q{2}(:,:) the permutation indicies.
+            %              The action of Q is determined by building the
+            %              permutation matrix PM using the matrices P1s and
+            %              P2s which correspond to the atomic pair-forming
+            %              indicies.
+            % MECHANISM B: The irreducible pairs (i2p) are identified by
+            %              the symmetries for which the operation which
+            %              takes the irreducible pair to the primitive pair
+            %              is equal to the identity. In order for this to
+            %              happen properly, the algorithm below must be
+            %              given a chance to choose the identity symmetry
+            %              as Qi before any other symmetry. This is done by
+            %              sorting the symmetrying so as to put the
+            %              identity first. 
             
             import am_lib.*
-            
-            % define function to apply symmetries to position vectors
-            sym_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
-
-            % define function to change basis of seitz symmetry
-            sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
-
-            % define function to get the closest primitive lattice vector in supercell basis
-            G_ = @(uc2pc,tau) tau - reshape(matmul_(uc2pc,mod_(matmul_(inv(uc2pc),tau))),size(tau));
-
-            % define function to get distance [cart] from positions [frac]
-            d_ = @(r) normc_(uc2ws(uc.bas*r,uc.bas));
 
             % define function to get bond vector from unit cell atom pair indicies
             diff_ = @(V) uc.tau(:,V(1,:))-uc.tau(:,V(2,:));
-
-            % define pair saving function
-            pair_ = @(uc,Q,Z) struct('units','frac','bas',uc.bas,'recbas',uc.recbas, ...
-                'symb',{{uc.symb{:}}},'species',uc.species,'mass',uc.mass,...
-                'nshells',size(Z,2),'norbits',Z(5,:),'v',Z(2:4,:),'i',Z(6,:),'j',Z(7,:),'m',Z(8,:),'n',Z(9,:), ...
-                's_ck',Z([10+[1:size(Q,3)]],:),'g_ck',Z([10+size(Q,3)+[1:size(Q,3)]],:),'Qi',Z(end,:),'nQs',size(Q,3),'Q',Q);
-
-            % ----------------------------------------------------------------------- %
-
 
             % readjust cutoff based on unitcell
             cutoff = min([normc_(uc.bas)/2,cutoff]);
@@ -606,15 +617,34 @@ classdef am_lib
             % get conversion from primitive to supercell basis
             uc2pc = pc.bas/uc.bas;
 
+            % define function to change basis of seitz symmetry
+            sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
             % get space symmetries in [supercell basis]
             [S,~] = get_symmetries(pc); nSs = size(S,3); S = sym_rebase_(uc2pc,S);
 
-            % designate forth row of S to denote permutations, save permutation+space symmetry as Q
-            M = [[1,2,0,0];[2,1,0,0]].';
-            Q = repmat(S,1,1,size(M,2));
-            Q(4,:,:) = permute(repelem(M,1,nSs),[3,1,2]);
+            % save space symmetry combined with permutation of atomic
+            % positions as Q (MECHANISM A)
+            M = [[1,2];[2,1]].';
+            Q{1} = repmat(S,1,1,size(M,2));
+            Q{2} = repelem(M,1,nSs);
             nQs=size(S,3)*size(M,2);
+            
+            % get multiplication table, list of inverse elements, and identity (MECHANISM B)
+            MT=get_multiplication_table(Q); inv_=get_inverse_list(MT).'; id=find(all(MT==[1:size(MT,1)].',1));
+            
+            % define pair saving function
+            pair_ = @(pc,Q,Z) struct('units','frac','bas',pc.bas,'recbas',pc.recbas, ...
+                'symb',{{pc.symb{:}}},'species',pc.species,'mass',pc.mass,...
+                'nshells',size(Z,2),'norbits',Z(5,:),'v',Z(2:4,:), ...
+                'i',Z(6,:),'j',Z(7,:),'m',Z(8,:),'n',Z(9,:), ...
+                's_ck',logical(Z(10             +[1:size(Q{1},3)],:)), ...
+                'g_ck',logical(Z(10+size(Q{1},3)+[1:size(Q{1},3)],:)), ...
+                'Qi',Z(end,:),'iQi',inv_(Z(end,:)),'nQs',size(Q{1},3),'Q',{Q});
 
+            % define function to apply symmetries to position vectors
+            sym_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
+            % define function to get the closest primitive lattice vector in supercell basis
+            G_ = @(uc2pc,tau) tau - reshape(matmul_(uc2pc,mod_(matmul_(inv(uc2pc),tau))),size(tau));
             % determine primitive atoms shells which are connected
             P1s=[];P2s=[]; npcs=numel(uc.p2u); npairs=zeros(1,npcs);
             for i = 1:npcs
@@ -641,27 +671,28 @@ classdef am_lib
             % get permutation representation (entries are unique pair indicies)
             PM = reshape(p2i,size(P1s));
 
-            % get map connecting pairs (sort A based on distances)
+            % get map connecting pairs
             A = get_connectivity(PM); 
 
             % sort rows of A based on pair distances [cart]
+            d_= @(r) normc_(uc2ws(uc.bas*r,uc.bas));
             A = A( rankcol_( d_(diff_(V(:,findrow_(A)))) ),:);
 
             % save irrep pair information
             nirreps = size(A,1); PMi = findrow_(A); PMs = PM(PMi,:); 
-            w    = sum(diff(sort(PMs.').',1,2)~=0,2).'+1; % weights
-            xy   = V(:,PMi);   % uc indicies
-            mn   = uc.u2p(xy); % pc indicies
-            ij   = uc.u2i(xy); % ic indicies
-            v    = uc2pc\diff_(xy);  % bond vector [primitive frac]
-            d    = normc_(v);  % bond length [frac]
-            s_ck = [PMs==PMi].';
-            g_ck = zeros(size(s_ck));
+            xy   = V(:,PMi);           % uc indicies
+            mn   = uc.u2p(xy);         % pc indicies
+            ij   = uc.u2i(xy);         % ic indicies
+            v    = uc2pc\diff_(xy);    % bond vector [primitive frac]
+            d    = normc_(v);          % bond length [frac]
+            s_ck = [PMs==PMi].';       % stabilzers
+            g_ck = uniquemask_(PMs.'); % generators (meaningless for irreps, but used for weights below)
+            w    = sum(g_ck,1);        % points in orbit (weights)
             Qi   = repelem(find(prod(s_ck,2)),1,size(s_ck,2));
 
             % save pair
             Z    = [d;v;w;ij;mn;[1:nirreps];s_ck;g_ck;Qi];
-            ip   = pair_(uc,Q,Z); 
+            ip   = pair_(pc,Q,Z); 
 
             % print irreducible pairs (NOTE: bonds and distances are converted to cart for printing)
             Z(2:4,:) = uc2ws(uc.bas*uc2pc*Z(2:4,:),uc.bas); Z(1,:) = normc_(Z(2:4,:));
@@ -672,48 +703,63 @@ classdef am_lib
             fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Z([1:10],:) );
             fprintf('\n');
 
-            Z=[];
-            for i = 1:pc.natoms
-                for j = 1:nirreps
-                    % get pairs centered on irreducible atom i that belong to irreducible shell j
-                    ex_ = [V(1,PMs(j,:))==pc.p2u(i)];
-                    % record the first occurance of each value in PMs(j,:)
-                    ey_ = uniquemask_(PMs(j,:));
-                    % if such a shell exists, analyze it
-                    if any(ex_)
-                        % get pairs which involve only two different primitive atoms
-                        for k = 1:pc.natoms
-                            ez_ = [uc.u2p(V(2,PMs(j,:)))==k];
-                            g_ck = and( and(ex_ ,ez_), ey_ );
-                            if any(g_ck)
+            Z=[];i2p=[];p2i=[];
+            for i = 1:nirreps
+            for m = 1:pc.natoms
+            for n = 1:pc.natoms
+                % see which shell involve primitive atoms j and k
+                ex_ = all(pc.u2p(V(:,PMs(i,:)))==[m;n],1);
+                % if such a shell exists, analyze it
+                if any(ex_)
+                    
+                    % record rep info
+                    % NOTE: apply Qi to the prototypical irrep to get the reps for each orbit
+                    %       it is important to choose the identity whenever
+                    %       possible here. This is done by putting the
+                    %       identity first. (MECHANISM B)
+                    Qi = find(ex_,1);     % record operation which takes PMi(j) -> xy
+                    PMr = PMs(i,Qi);      % rep index
+                    
+                    % record basic info
+                    xy  = V(:,PMr);       % uc indicies
+                    mn  = uc.u2p(xy).';   % pc indicies
+                    ij  = uc.u2i(xy).';   % ic indicies
+                    v   = uc2pc\diff_(xy);% bond vector [primitive frac]
+                    d   = normc_(v);      % bond length [primitive frac]
+                    
+                    % record stabilizers, generators, and weight
+                    % NOTE: PM(PMr,:)              == PMs(i,MT(:,Qi))
+                    %       PM(PMr,MT(:,inv_(Qi))) == PMs(i,:)
+                    PMq = PMs(i,MT(:,Qi));
+                    s_ck= [PMq==PMi(i)].';
+                    g_ck= [uniquemask_(PMq(:)) & ex_(:)].';
+                    w   = sum(g_ck);
+                    
+                    % save stuff [ d(1), r(2,3,4), w(5), ij(6,7), mn(8,9), irres(10), s_ck, g_ck ]
+                    Z = [Z,[d(:);v(:);w(:);ij(:);mn(:);i;s_ck(:);g_ck(:);Qi]];
 
-                                w   = sum(g_ck);      % number of pairs in orbit
-                                Qi  = find(g_ck,1);   % record operation which takes PMi(j) -> xy
-                                PMr = PMs(j,Qi);      % rep index
-                                xy  = V(:,PMr);       % uc indicies
-                                mn  = uc.u2p(xy).';   % pc indicies
-                                ij  = uc.u2i(xy).';   % ic indicies
-                                v   = uc2pc\diff_(xy);% bond vector [primitive frac]
-                                d   = normc_(v);      % bond length [primitive frac]
-                                s_ck=[PMs(j,:)==PMr]; % record stabilizers
-
-            %                     AA = mod_(sym_apply_( Q(:,:,Qi) , diff_(  V(Q(4,1:2,Qi),PMi(j)) ) ));
-            %                     BB = mod_(diff_(xy));
-            %                     max(abs(AA(:)-BB(:)))
-
-                                % [ d(1), r(2,3,4), w(5), ij(6,7), mn(8,9), irres(10), s_ck, g_ck ]
-                                Z = [Z,[d(:);v(:);w(:);ij(:);mn(:);j;s_ck(:);g_ck(:);Qi]];
-                            end
-                        end
-                    end
+                    % save i2p and p2i
+                    p2i=[p2i;i]; if Qi==id; i2p=[i2p;numel(p2i)]; end
+                    
+                    % DEBUGGING STUFF:
+                    % mod_(squeeze(sym_apply_( Q{1}(:,:,s_ck), permute(diff_(xy(Q{2}(:,s_ck))),[1,3,2]) ))) % CHECK STABILIZERS
+                    % mod_(squeeze(sym_apply_( Q{1}(:,:,g_ck), permute(diff_(xy(Q{2}(:,g_ck))),[1,3,2]) ))) % CHECK GENERATORS
+                    % normc_( uc2ws(uc.bas*mod_(squeeze(sym_apply_( Q{1}(:,:,g_ck), permute(diff_(xy(Q{2}(:,g_ck))),[1,3,2]) ))),uc.bas)) % CHECK GENERATORS DISTANCES
+                    % AA = mod_(sym_apply_(Q{1}(:,:,Qi),diff_(V(Q{2}(:,Qi),PMi(i))))); BB = mod_(diff_(xy)); max(abs(AA(:)-BB(:))) % CHECK Qi (prototype to rep symmetry)
                 end
             end
+            end
+            end
+            
+            % save map (Qi == identity corresponds to i2p, MECHANISM B)
+            p2i = Z(10,:); i2p = find(Z(end,:)==id);
 
             % save primitive pairs
-            pp = pair_(uc,Q,Z);
+            pp = pair_(pc,Q,Z);
 
             % print primitive pairs
             fprintf('%s %5i primitive shells %s\n', bar_(27), size(Z,2), bar_(27) );
+            Z(2:4,:) = uc2ws(uc.bas*uc2pc*Z(2:4,:),uc.bas); Z(1,:) = normc_(Z(2:4,:));
             for i = 1:pc.natoms
                 bar_ = @(x) repmat('-',[1,x]); ex_ = Z(8,:)==i;
                 fprintf('primitive atom %i at [%.5f,%.5f,%.5f] has %i shells\n', i,pc.bas*pc.tau(:,i),sum(ex_));
@@ -722,9 +768,6 @@ classdef am_lib
                 fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Z([1:10],ex_) );
                 fprintf('\n');
             end
-            
-            % record mapping between primitive and irreducible shells
-            p2i = Z(10,:); [~,i2p,~]=unique(p2i,'stable');
         end
 
 
@@ -838,7 +881,7 @@ classdef am_lib
 
         % phonons
 
-        function [bvk,ip] = get_bvk(cutoff,pc,uc,fname,flags)
+        function [bvk,pp] = get_bvk(cutoff,pc,uc,fname,flags)
             % for paper:
             % cutoff = 5; % Angstroms 
             % fname = 'infile.force_position.4.00-300'
@@ -850,10 +893,13 @@ classdef am_lib
             if and(strfind(flags,'continue'),exist(sfile,'file')); load(sfile); return; end 
 
             % get irreducible shells
-            ip  = get_irreducible_shells(pc,cutoff);
+            [~,pp,p2i,i2p] = get_shells(pc,uc,cutoff); 
+            
+            % save shells maps
+            pp.i2p = i2p; pp.p2i = p2i;
 
-            % force force constant model
-            bvk = get_bvk_model(ip);
+            % force constant model
+            bvk = get_bvk_model(pp);
 
             % get force constants
             bvk = get_bvk_force_constants(bvk,ip,uc,fname);
@@ -862,7 +908,7 @@ classdef am_lib
             save(sfile,'bvk','ip')
         end
 
-        function [bvk] = get_bvk_model(ip)
+        function [bvk] = get_bvk_model(pp)
             %
             % NOTE #1: sum rules are enforced again in the extraction of
             % symmetry-adapted force constants and the implementation here is
@@ -989,9 +1035,9 @@ classdef am_lib
 
                 % solve for the symmetry adapted force constants : A x = B
                 for j = 1:ip.nshells
-                    mask = k2ijor{i}(:,2)==j; sum_mask = sum(mask);
-                    if sum_mask>0
-                        A = repmat(double(bvk.W{j}),sum_mask,1);
+                    mask = k2ijor{i}(:,2)==j; osum_mask = sum(mask);
+                    if osum_mask>0
+                        A = repmat(double(bvk.W{j}),osum_mask,1);
                         B = reshape(fc3x3(:,:,mask),[],1);
                         % get force constants as row vectors
                         bvk.fc{j} = reshape( A \ B , 1, []); 
@@ -1782,12 +1828,17 @@ classdef am_lib
         end
         
         function [C] = uniquemask_(A)
-            % returns a vector whose position marks the first occuracne of a value
+            % returns a matrix with column vectors marking the first
+            % occurance of a value in each column
             import am_lib.rnd_
-            [~,b]=unique(rnd_(A)); C = false(1,numel(A)); C(b) = true;
+            
+            C = false(size(A));
+            for i = 1:size(A,2)
+                [~,b]=unique(rnd_(A(:,i))); C(b,i) = true;
+            end
         end
 
-        function [C] = sum_(A,B)
+        function [C] = osum_(A,B)
             % define outer sum of two vector arrays
             C = reshape(repmat(A,[1,size(B,2)]),size(A,1),[]) + reshape(repmat(B,[size(A,2),1]),size(B,1),[]);
         end
@@ -1807,9 +1858,24 @@ classdef am_lib
             C = sqrt(sum(A.^2,1));
         end
 
-        function [C] = permute_(A,I)
+        function [C] = operm_(A,I)
+            % outer permutation operation
+            % explicit: 
+            %     for i = 1:size(I,2)
+            %     for j = 1:size(A,2)
+            %         D(:,i,j) = A(I(:,i),j);
+            %     end
+            %     end
+            %     C-D
+            
+            import am_lib.*
+            
+            C = reshape(perm_(repmat(A,1,size(I,2)),repelem(I,1,size(A,2))),size(I,1),size(I,2),size(A,2));
+        end
+        
+        function [C] = perm_(A,I)
             % permute each column of A according to the indicie matrix I
-            % for example: A=randi(10,5,5); [B,I]=sort(A); B-permute_(A,I)
+            % for example: A=randi(10,5,5); [B,I]=sort(A); B-perm_(A,I)
             % Explicit: 
             % for i = 1:size(A,2)
             %   C(:,i) = C(I(:,i),i);
