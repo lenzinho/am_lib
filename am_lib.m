@@ -318,6 +318,40 @@ classdef am_lib
 
                 MT = reshape( member_( opr , ref ) , nSs,nSs);
             end
+            
+            if any(MT(:)==0)
+                error('MT is in correct. Check for mistakes in the symmetry and ensure that the symmetry is in the primitive basis');
+            end
+        end
+        
+        function [id]    = find_the_identity(S)
+            % get multiplication table
+            % for i = 1:nSs; MT2(i,:) = member_(rs_(matmul_(S(:,:,i),S)),rs_(S)); end; MT-MT2 % EXPLICIT
+            % to get inverse elements: nSs=size(MT,1); identity=find(all(MT==[1:nSs].',1)); [MT==identity]*[1:nSs].'
+            
+            import am_lib.*
+            
+            if     size(S,1) == 4
+                % seitz operator
+                rs_ = @(X) reshape(X,4^2,[]);
+                
+                id = member_( rs_(eye(4)) , rs_(S) );
+                
+            elseif size(S,1) == 3 
+                % point operator
+                rs_ = @(X) reshape(X,3^2,[]);
+                
+                id = member_( rs_(eye(3)) , rs_(S) );
+                
+            elseif size(S,1) == 1
+                % seitz operator combined with permutation (represented as a two-part cell)
+                rs_ = @(X) reshape(X,4^2,[]);
+                                
+                ref = [rs_(S{1});reshape(S{2},size(S{2},1),[])];
+                opr = [rs_(eye(4));[1:size(S{2},1)].'];
+                                
+                id = member_( opr , ref );
+            end
         end
 
         function [C]     = get_connectivity(PM)
@@ -619,8 +653,9 @@ classdef am_lib
 
             % define function to change basis of seitz symmetry
             sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
-            % get space symmetries in [supercell basis]
-            [S,~] = get_symmetries(pc); nSs = size(S,3); S = sym_rebase_(uc2pc,S);
+            
+            % get space symmetries in [primitive basis]
+            [S,~] = get_symmetries(pc); nSs = size(S,3); 
 
             % save space symmetry combined with permutation of atomic
             % positions as Q (MECHANISM A)
@@ -630,7 +665,11 @@ classdef am_lib
             nQs=size(S,3)*size(M,2);
             
             % get multiplication table, list of inverse elements, and identity (MECHANISM B)
-            MT=get_multiplication_table(Q); inv_=get_inverse_list(MT).'; id=find(all(MT==[1:size(MT,1)].',1));
+            MT=get_multiplication_table(Q); inv_=get_inverse_list(MT).'; id=find_the_identity(Q);
+            
+            % convert symmetries to supercell basis
+            Q{1} = sym_rebase_(uc2pc,Q{1});
+            S    = sym_rebase_(uc2pc,S   );
             
             % define pair saving function
             pair_ = @(pc,Q,Z) struct('units','frac','bas',pc.bas,'recbas',pc.recbas, ...
@@ -705,6 +744,9 @@ classdef am_lib
 
             Z=[];i2p=[];p2i=[];
             for i = 1:nirreps
+%                     X=PM(A(i,:),:)
+%                     Qi = findrow_(X(:,id)==repelem(X(1,:),size(X,1),1));
+%                     perm_(X.',inv_(MT( Qi ,:)).' ).'
             for m = 1:pc.natoms
             for n = 1:pc.natoms
                 % see which shell involve primitive atoms j and k
@@ -717,7 +759,9 @@ classdef am_lib
                     %       it is important to choose the identity whenever
                     %       possible here. This is done by putting the
                     %       identity first. (MECHANISM B)
+                    if ex_(id); Qi = id; else
                     Qi = find(ex_,1);     % record operation which takes PMi(j) -> xy
+                    end
                     PMr = PMs(i,Qi);      % rep index
                     
                     % record basic info
@@ -730,7 +774,9 @@ classdef am_lib
                     % record stabilizers, generators, and weight
                     % NOTE: PM(PMr,:)              == PMs(i,MT(:,Qi))
                     %       PM(PMr,MT(:,inv_(Qi))) == PMs(i,:)
-                    PMq = PMs(i,MT(:,Qi));
+                    %
+                    PMq = PMs(i,inv_(MT(Qi,:)));
+%                     [PMs(i,:); PM(PMr,inv_(MT(:,Qi)));  PM(PMr,:); PMs(i, MT(:,Qi))]
                     s_ck= [PMq==PMi(i)].';
                     g_ck= [uniquemask_(PMq(:)) & ex_(:)].';
                     w   = sum(g_ck);
@@ -741,7 +787,9 @@ classdef am_lib
                     % save i2p and p2i
                     p2i=[p2i;i]; if Qi==id; i2p=[i2p;numel(p2i)]; end
                     
+                    
                     % DEBUGGING STUFF:
+                    % id=find_the_identity(Q);X=PM(A(i,:),:),findrow_(X(:,id)==repmat(X(1,:),size(X,1),1)),perm_(X.',inv_(MT(findrow_(X(:,id)==repmat(X(1,:),size(X,1),1)),:)).' ).' % CHECK Qi
                     % mod_(squeeze(sym_apply_( Q{1}(:,:,s_ck), permute(diff_(xy(Q{2}(:,s_ck))),[1,3,2]) ))) % CHECK STABILIZERS
                     % mod_(squeeze(sym_apply_( Q{1}(:,:,g_ck), permute(diff_(xy(Q{2}(:,g_ck))),[1,3,2]) ))) % CHECK GENERATORS
                     % normc_( uc2ws(uc.bas*mod_(squeeze(sym_apply_( Q{1}(:,:,g_ck), permute(diff_(xy(Q{2}(:,g_ck))),[1,3,2]) ))),uc.bas)) % CHECK GENERATORS DISTANCES
@@ -752,7 +800,7 @@ classdef am_lib
             end
             
             % save map (Qi == identity corresponds to i2p, MECHANISM B)
-            p2i = Z(10,:); i2p = find(Z(end,:)==id);
+            p2i = abs(Z(10,:)); i2p = find(Z(end,:)==id);
 
             % save primitive pairs
             pp = pair_(pc,Q,Z);
@@ -930,6 +978,8 @@ classdef am_lib
 
                 % enforce intrinsic symmetry (immaterial order of differentiation: c == c.')
                 F=zeros(9,9); F(sub2ind([9,9],[1:9],[1,4,7,2,5,8,3,6,9]))=1; W = W + F - eye(9);
+                
+                % NOTE : F*kron_(pp.Q{1}(1:3,1:3,3),pp.Q{1}(1:3,1:3,2))*F.' - kron_(pp.Q{1}(1:3,1:3,2),pp.Q{1}(1:3,1:3,3))
 
                 % get nullspace and normalize to first nonzero element
                 W = null(W); for i = 1:size(W,2); W(:,i) = W(:,i)/W(find(W(:,i),1),i); end; W = rref(W.').';
