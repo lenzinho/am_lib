@@ -280,6 +280,7 @@ classdef am_lib
             end
         end
 
+        
         % symmetry
 
         function [P]     = get_translations(tau,species)
@@ -1014,10 +1015,7 @@ classdef am_lib
 
             % get irreducible rows (requires complete symmetry group and complete k-point basis!)
             [A,i2f,f2i]=unique(sort(PM,2),'rows'); i2f=i2f(:).'; f2i=f2i(:).'; A([false(size(A(:,1))),diff(A,1,2)==0])=0; w=sum(A~=0,2).';
-            if abs(sum(w)-prod(fbz.n))>tiny; error('mismatch: kpoint mesh and point group symmetry'); end 
-
-            % get stabilizer and star generator checklist
-            % s_ck = [PM(i2f,:)==i2f.'].'; % g_ck  = first occurance of each number in each row... to do later...
+            if abs(sum(w)-prod(fbz.n))>tiny; error('mismatch: kpoint mesh and point group symmetry'); end
 
             % get irreducible tetrahedra
             [tet,~,tet_f2i] = unique(sort(f2i(get_tetrahedra(fbz.recbas,fbz.n))).','rows'); tet=tet.'; tetw = hist(tet_f2i,[1:size(tet,2)].'-.5);
@@ -1052,6 +1050,9 @@ classdef am_lib
             % get force constants
             bvk = get_bvk_force_constants(bvk,pp,uc,fname);
 
+            % enforce asr
+            bvk = set_bvk_acoustic_sum_rules(bvk,pp,uc); 
+            
             % save everything generated
             save(sfile,'bvk','pp')
         end
@@ -1126,7 +1127,7 @@ classdef am_lib
                 end
                 
                 % simplify B a bit
-                B = simplify(rewrite(B,'cos'),'steps',50);
+                % B = simplify(rewrite(B,'cos'));
 
                 % update block matrix with masses
                 B = B ./ sqrt(prod(mass(pp.ij(:,p))));
@@ -1137,32 +1138,74 @@ classdef am_lib
                 D( mp,np ) = D( mp,np ) + B; 
             end
             
-            % IMPOSE ASR NUMERICALLY WHEN FC ARE DETERMINED RATHER THAN HERE
+            % % IMPOSE ASR WITH set_bvk_acoustic_sum_rules RATHER THAN HERE
             % % get acoustic sum rules (see Wooten p 646, very illuminating H2O example)
-            D_gamma = subs(subs(D,kvec,[0;0;0]), mass,ones(1,numel(mass))); asr = sym(zeros(3*pc.natoms,3));
-            for m = 1:pc.natoms; for n = 1:pc.natoms
-                mp = 3*(m-1)+[1:3]; 
-                np = 3*(n-1)+[1:3]; 
-                asr(mp,1:3) = asr(mp,1:3) + D_gamma(mp,np);
-            end; end; asr = unique(simplify(asr==0)); asr = asr(asr~=true);
-            
-            % impose acoustic sum rules on D (see NOTE #1)
-            c = [sav.c{:}]; self_ck = pp.xy(1,pp.i2p)==pp.xy(2,pp.i2p);
-            for j = 1:size(asr,1)
-                for i = find(self_ck)
-                    sol = solve(asr(j),c(i));
-                    if ~isempty(sol); D=subs(D,c(i),sol); end
-                end
-            end
+            % D_gamma = subs(subs(D,kvec,[0;0;0]), mass,ones(1,numel(mass))); asr = sym(zeros(3*pc.natoms,3));
+            % for m = 1:pc.natoms; for n = 1:pc.natoms
+            %     mp = 3*(m-1)+[1:3]; 
+            %     np = 3*(n-1)+[1:3]; 
+            %     asr(mp,1:3) = asr(mp,1:3) + D_gamma(mp,np);
+            % end; end; asr = unique(simplify(asr==0)); asr = asr(asr~=true);
+            % 
+            % % impose acoustic sum rules on D (see NOTE #1)
+            % c = [sav.c{:}]; self_ck = pp.xy(1,pp.i2p)==pp.xy(2,pp.i2p);
+            % for j = 1:size(asr,1)
+            %     for i = find(self_ck)
+            %         sol = solve(asr(j),c(i));
+            %         if ~isempty(sol); D=subs(D,c(i),sol); end
+            %     end
+            % end
 
             % create bvk structure
-            bvk_ = @(pc,sav,D,self_ck) struct('units','cart','latpar',pc.latpar,'bas',pc.bas,'recbas',pc.recbas, ...
+            bvk_ = @(pc,sav,D) struct('units','cart','latpar',pc.latpar,'bas',pc.bas,'recbas',pc.recbas, ...
                 'vol',pc.vol,'symb',{pc.symb},'mass',pc.mass,'species',pc.species,'natoms',pc.natoms, ...
-                'nshells',size(sav.W,2),'W',{sav.W},'shell',{sav.shell},'self_ck',self_ck,'nbands',3*pc.natoms,...
+                'nshells',size(sav.W,2),'W',{sav.W},'shell',{sav.shell},'nbands',3*pc.natoms,...
                 'D',matlabFunction(D));
-            bvk = bvk_(pc,sav,D,self_ck);
+            bvk = bvk_(pc,sav,D);
         end
 
+        function [bvk] = set_bvk_acoustic_sum_rules(bvk,pp,uc)
+
+            import am_lib.*
+
+            % get pair symmeteries [cart]
+            sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), ...
+                reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
+            Qc{1} =sym_rebase_(pp.bas,pp.Q{1}); Qc{2} = pp.Q{2};
+            % correct rounding errors in cart
+            for i = 1:numel(Qc{1}); for wdv = [0,1,0.5,sqrt(3)/2]
+                if abs(abs(Qc{1}(i))-wdv)<am_lib.tiny; Qc{1}(i)=wdv*sign(Qc{1}(i)); end
+            end;end
+
+            % index uc based on pairs
+            [c_id, o_id, i_id, q_id] = get_bvk_lookup_tables(pp,uc);
+
+            % build force constants
+            phi = zeros(3,3,bvk.nshells);
+            for i = 1:bvk.nshells; phi(:,:,i) = reshape(bvk.W{i}*bvk.fc{i}.',3,3); end
+
+            % enforce acoustic sum rule [POORLY CODED SECTION. REWRITE]
+            for i = 1:bvk.nshells
+                % check if it is a 0-th neighbor shell
+                if pp.xy(1,pp.i2p(i))==pp.xy(2,pp.i2p(i))
+                    % get index of primitive cell atom corresponding to this shell
+                    p = pp.mn(1,pp.i2p(i));
+                    % get self force, essentially asr(:,:,1) = -sum(asr(:,:,2:end),3);
+                    asr = zeros(3,3);
+                    for j = 2:size(o_id{p},1)
+                        % get irrep->orbit symmetry
+                        iq = pp.I(q_id{p}(j,1));
+                        % impose asr on force constant
+                        asr = asr - permute( Qc{1}(1:3,1:3,iq) * phi(:,:,i_id{p}(j)) * Qc{1}(1:3,1:3,iq).', pp.Q{2}(:,iq) );
+                    end
+                    % solve for symmetry-adapted force constants
+                    A = double(bvk.W{i}); B = reshape(asr(:,:,1),[],1);
+                    % get force constants as row vectors
+                    bvk.fc{i} = reshape( A \ B , 1, []); 
+                end
+            end
+        end
+        
         function [bvk] = get_bvk_force_constants(bvk,pp,uc,fname_force_position)
             % Extracts symmetry adapted force constants.
             % get_bvk_force_constants(bvk,ip,load_poscar('infile.supercell'),'infile.force_position.4.04-300')
@@ -1188,14 +1231,16 @@ classdef am_lib
             [c_id, o_id, i_id, q_id] = get_bvk_lookup_tables(pp,uc);
 
             % load force positions md( 1:3=positions, 4:6=forces , natoms , nsteps )
-            fprintf(' ... loading force vs positions\n');
-            tic; [fd] = load_force_position(uc.natoms,fname_force_position); nsteps = size(fd,3); toc
+            fprintf(' ... loading force vs positions '); tic; 
+            [fd] = load_force_position(uc.natoms,fname_force_position); nsteps = size(fd,3);
+            fprintf('(%.f secs)\n',toc);
 
             % convert atomic coordinates [cart,ang] into displacements [cart,ang] by first converting to frac [unitless] and taking modulo
             fd(1:3,:,:) = matmul_( uc.bas, mod_(matmul_(uc.recbas,fd(1:3,:,:))-uc.tau+0.5)-0.5 );
 
             % loop over primitive types
-            for m = 1:max(pp.mn(:))
+            phi=[]; fprintf(' ... solving for force constants '); tic;
+            for m = 1:numel(c_id)
                 % get number of central atoms
                 nprims = numel(c_id{m});
 
@@ -1203,75 +1248,34 @@ classdef am_lib
                 % get displacements : u [ (x,y,z)*orbits, (1:natoms)*nsteps ]
                 %  ... and solve for the generalized force constants: FC = f / u 
                 fc = - reshape(fd(4:6,c_id{m},:),3,nprims*nsteps) / reshape(fd(1:3,o_id{m},:),3*size(o_id{m},1),nprims*nsteps);
-
-                % reshape and enforce ASR
-                fc3x3 = reshape(fc,3,3,[]); fc3x3(:,:,1) = -sum(fc3x3(:,:,2:end),3);
-
-                % rotate to orbit rep bond orientation
-                for j = 1:size(fc3x3,3)
-                    fc3x3(:,:,j) = permute( Qc{1}(1:3,1:3,q_id{m}(j)) * fc3x3(:,:,j) * Qc{1}(1:3,1:3,q_id{m}(j)).', pp.Q{2}(:,q_id{m}(j)) );
-                end
-
-                % solve for the symmetry adapted force constants : A x = B
-                for i = 1:bvk.nshells
-                    mask = i_id{m}==i; osum_mask = sum(mask);
-                    if osum_mask>0
-                        A = repmat(double(bvk.W{i}),osum_mask,1);
-                        B = reshape(fc3x3(:,:,mask),[],1);
-                        % get force constants as row vectors
-                        bvk.fc{i} = reshape( A \ B , 1, []); 
-                    end
-                end
-
-                % print results
-                textwidth=64;
-                bar_    = @(x) repmat('-',[1,x]);
-                strpad_ = @(A,n) [A,repmat(' ',[1,n-length(A)])]; 
-                fprintc_= @(t,w) fprintf([strjust(strpad_(t,w),'center'),'\n']);
-
-                % header
-                fprintc_(sprintf('primitive atom %i',m),textwidth);
-                fprintc_(bar_(textwidth),textwidth);
-
-                % print table : sum of generalized force constants (should be close to zero)
-                fprintf('%-32s\n', ' generalized force constant sum'); 
-                fprintf('%-32s\n', bar_(32));
-                fprintf('%10.5f %10.5f %10.5f\n', sum(reshape(fc,3,3,[]),3).' );
-
-                % print table : rotated generalized and symmetry adapted force constants
-                fprintf('%-32s        %-32s    (%5s, %5s)\n','         generalized fc','          sym-adapted fc','shell','orbit');
-                for j = 1:size(fc3x3,3)
-                    fprintf('%-32s        %-32s    (%5i, %5i)\n',bar_(32),bar_(32),i_id{m}(j),j);
-                    fprintf('%10.5f %10.5f %10.5f        %10.5f %10.5f %10.5f\n', [fc3x3(:,:,j), reshape(  double(bvk.W{i_id{m}(j)}) * bvk.fc{i_id{m}(j)}.'  ,3,3) ].');
-                end
+                
+                % reshape % NOTE: imposing ASR here is pointless
+                % b/c the force 1-2 constants WILL change when the 2-1
+                % which comes later is considered. needs to simultaneously
+                % determine the fcs.
+                phi = cat(3,phi,reshape(fc,3,3,[]));
             end
-        end
+            fprintf('(%.f secs)\n',toc);
 
-        function [bvk] = get_bvk_interpolation(bvk_1,bvk_2,n)
-            % interpolates froce constants and masses from bvk_1 and bvk_2 on n points (includes end points)
+            % transform fc from orbit to irrep
+            q = cat(1,q_id{:}); iq = pp.I(q); phi = matmul_(matmul_(Qc{1}(1:3,1:3,q),phi),Qc{1}(1:3,1:3,iq));
+            for j = 1:size(phi,3); phi(:,:,j) = permute( phi(:,:,j), pp.Q{2}(:,q(j)) ); end
 
-            import am_lib.*
-            
-            bvk_ = @(bvk,mass,fc) struct('units','cart','bas',bvk.bas,'recbas',bvk.recbas,'natoms',bvk.natoms,'mass',mass, ...
-                'nshells',bvk.nshells,'W',{bvk.W},'shell',{bvk.shell},'nbands',bvk.nbands,'D',bvk.D,'fc',{fc});
-
-            fc_interp = nlinspace( [bvk_1.fc{:}] , [bvk_2.fc{:}] , n );
-            mu_interp = nlinspace( [bvk_1.mass]  , [bvk_2.mass]  , n );
-
-            % get dimensions
-            for i = 1:numel(bvk_1.fc); m(i) = numel(bvk_1.fc{i}); end; E = cumsum(m); S = E - m + 1;
-
-            % create bvks cells
-            for i = 1:n
-                for j = 1:numel(E); fc{j} = fc_interp(S(j):E(j),i).'; end
-                bvk(i) = bvk_(bvk_1,mu_interp(:,i).',fc);
+            % solve for symmetry adapted force constants : A x = B
+            for i = 1:bvk.nshells
+                ex_ = cat(1,i_id{:})==i;
+                if any(ex_)
+                    A = repmat(double(bvk.W{i}),sum(ex_),1);
+                    B = reshape(phi(:,:,ex_),[],1);
+                    % get force constants as row vectors
+                    bvk.fc{i} = reshape( A \ B , 1, []); 
+                end
             end
         end
 
         function [bz]  = get_bvk_dispersion(bvk,bz)
-            % enforce asr
-            ex_ = all([bvk.shell{:}]~=find(bvk.self_ck).',1);
-            fc = [bvk.fc{:}]; fc = fc(ex_);
+            % enforce asr (ENFORCING IT WITH set_bvk_acoustic_sum_rules INSTEAD)
+            fc = [bvk.fc{:}]; % ex_ = all([bvk.shell{:}]~=find(bvk.self_ck).',1); fc = fc(ex_);
 
             % get eigenvalues
             bz.hw = zeros(bvk.nbands,bz.nks); bz.U = zeros(bvk.nbands,bvk.nbands,bz.nks);
@@ -1284,38 +1288,43 @@ classdef am_lib
         end
 
         function [bz]  = get_bvk_dispersion_numerically(bvk,bz,pp,uc)
-
-            import am_lib.*
+            % there is generally no need to use this function as long as it
+            % agrees with get_bvk_dispersion.            
             
-            % build force constants
-            phi = zeros(3,3,bvk.nshells);
-            for i = 1:bvk.nshells; phi(:,:,i) = reshape(bvk.W{i}*bvk.fc{i}.',3,3); end
+            import am_lib.*
 
             % get pair symmeteries [cart]
             sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), ...
                 reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
             Qc{1} =sym_rebase_(pp.bas,pp.Q{1}); Qc{2} = pp.Q{2};
+            
+            % build force constants
+            phi = zeros(3,3,bvk.nshells);
+            for i = 1:bvk.nshells; phi(:,:,i) = reshape(bvk.W{i}*bvk.fc{i}.',3,3); end
 
             % build dynamical matrices
             [c_id,o_id,i_id,q_id] = get_bvk_lookup_tables(pp,uc); D = zeros(bvk.nbands,bvk.nbands,bz.nks);
             for p = 1:numel(c_id)
             for j = 1:numel(o_id{1}(:,1))
                 i = i_id{p}(j);
-                q = pp.I(q_id{p}(j,1)); % symmetry index
+                iq = pp.I(q_id{p}(j,1)); % symmetry index
                 x = c_id{p}(1); y = o_id{p}(j,1);
                 m = uc.u2p(x); mp = [1:3]+3*(m-1);
                 n = uc.u2p(y); np = [1:3]+3*(n-1);
 
                 % compute force constants and bond vector
-                xy = [x,y]; xy = xy(Qc{2}(:,q));
+                xy = [x,y]; xy = xy(Qc{2}(:,iq));
                 rij = uc.tau(:,xy(2))-uc.tau(:,xy(1)); rij = uc2ws(uc.bas*rij,uc.bas);
-                phi_p =  Qc{1}(1:3,1:3,q) * phi(:,:,i) * Qc{1}(1:3,1:3,q).';
-                
+                phi_p = permute( Qc{1}(1:3,1:3,iq)*phi(:,:,i)*Qc{1}(1:3,1:3,iq).' , pp.Q{2}(:,iq) );
+
                 for k = 1:bz.nks
                     D(mp,np,k) = D(mp,np,k) + phi_p .* exp( 2i*pi * (bz.recbas*bz.k(:,k)).'*rij );
                 end
             end
             end
+            
+            % multiply by 1/sqrt(mass)
+            mass = repelem(bvk.mass,1,3); mass = 1./sqrt(mass.' * mass); D = D .* mass;
             
             % get eigenvalues and eigenvectors
             bz.hw = zeros(bvk.nbands,bz.nks); bz.U = zeros(bvk.nbands,bvk.nbands,bz.nks);
@@ -1434,7 +1443,7 @@ classdef am_lib
             % semilogy( psd(1:end/2) ); axis tight
         end
 
-        function [dc]  = generate_bvk_displacement(bvk,ip,uc,nsteps,kpt,amplitude,mode)
+        function [dc]  = get_bvk_displacement(bvk,ip,uc,nsteps,kpt,amplitude,mode)
             % kpt = [0,0,1]; % must be commensurate with uc!!!
             % nsteps = 10;
             % amp = 1; % displacement amplitude
@@ -1541,6 +1550,27 @@ classdef am_lib
                 q2u = real( W ./ sqrt(M) ) ;
             end
 
+        end
+
+        function [bvk] = get_bvk_interpolation(bvk_1,bvk_2,n)
+            % interpolates froce constants and masses from bvk_1 and bvk_2 on n points (includes end points)
+
+            import am_lib.*
+            
+            bvk_ = @(bvk,mass,fc) struct('units','cart','bas',bvk.bas,'recbas',bvk.recbas,'natoms',bvk.natoms,'mass',mass, ...
+                'nshells',bvk.nshells,'W',{bvk.W},'shell',{bvk.shell},'nbands',bvk.nbands,'D',bvk.D,'fc',{fc});
+
+            fc_interp = nlinspace( [bvk_1.fc{:}] , [bvk_2.fc{:}] , n );
+            mu_interp = nlinspace( [bvk_1.mass]  , [bvk_2.mass]  , n );
+
+            % get dimensions
+            for i = 1:numel(bvk_1.fc); m(i) = numel(bvk_1.fc{i}); end; E = cumsum(m); S = E - m + 1;
+
+            % create bvks cells
+            for i = 1:n
+                for j = 1:numel(E); fc{j} = fc_interp(S(j):E(j),i).'; end
+                bvk(i) = bvk_(bvk_1,mu_interp(:,i).',fc);
+            end
         end
 
         function         plot_bvk_dispersion(bvk,bzp,pp,uc)
@@ -2233,6 +2263,7 @@ classdef am_lib
             daspect([1 1 1])
         end
 
+
         % aux brillouin zones
 
         function tet = get_tetrahedra(recbas,n)
@@ -2417,8 +2448,8 @@ classdef am_lib
             %
             % Goal: c_id{m}(:)      contains uc id for primitive cell atoms of type m
             %       o_id{m}(:,:)    contains uc id for orbits around c_id
-            %       i_id            the ip to which o_id belongs
-            %       q_id            the symmetry which takes o_id to the ip
+            %       i_id{m}(:)      the ip to which o_id belongs
+            %       q_id{m}(:)      the symmetry which takes o_id to the ip
             %
             
             import am_lib.*
