@@ -298,7 +298,7 @@ classdef am_lib
             P=[P(:,P_ck),eye(3)]; P=P(:,rankcol_(normc_(P))); 
         end
 
-        function [S,R]   = get_symmetries(uc)
+        function [S,R]   = get_symmetries(pc)
             
             import am_lib.*
 
@@ -307,11 +307,11 @@ classdef am_lib
             get_rotations_frac_ = @(M) L(:,:,check3_(matmul_(matmul_(permute(L,[2,1,3]),M'*M),L)-M'*M));
 
             % get seitz operators which leave the atomic basis invariant
-            X_= @(tau,species) sortcol_([species;mod_(tau)]); X = X_(uc.tau,uc.species); 
-            R = get_rotations_frac_(uc.bas); T = uniquecol_( osum_(uc.tau,-uc.tau) ); 
+            X_= @(tau,species) sortcol_([species;mod_(tau)]); X = X_(pc.tau,pc.species); 
+            R = get_rotations_frac_(pc.bas); T = uniquecol_( osum_(pc.tau,-pc.tau) ); 
             nRs = size(R,3); nTs = size(T,2); S = zeros(4,4,nRs*nTs); S(4,4,:)=1; k=0;
             for i = 1:nRs; for j = 1:nTs
-                if check3_( X_(R(:,:,i)*uc.tau+T(:,j),uc.species) - X ); k=k+1; S(1:3,1:4,k)=[ R(:,:,i), T(:,j) ]; end
+                if check3_( X_(R(:,:,i)*pc.tau+T(:,j),pc.species) - X ); k=k+1; S(1:3,1:4,k)=[ R(:,:,i), T(:,j) ]; end
             end; end
 
             % trim unused space, apply mod, and get point symmetries
@@ -320,63 +320,6 @@ classdef am_lib
             % put identity first
             id = member_(flatten_(eye(4)),reshape(S,4^2,[])); S(:,:,[1,id])=S(:,:,[id,1]);
             id = member_(flatten_(eye(3)),reshape(R,3^2,[])); R(:,:,[1,id])=R(:,:,[id,1]);
-        end
-
-        function [PM]    = get_permutation_matrix(S,tau,species,flags)
-            % build permutation reprensetation
-            % requires complete basis!
-
-            import am_lib.*
-
-            % set number of atoms and symmetries
-            natoms = size(tau,2); nSs = size(S,3);
-
-            if   strfind(flags,'closure')
-                % define unique ordering
-                if    strfind(flags,'pbc')
-                    order_ = @(tau,species) rankcol_([mod_(tau);species]);
-                else
-                    order_ = @(tau,species) rankcol_([     tau ;species]);
-                end
-                
-                % define forward order( reference)
-                fwd = order_(tau,species);
-
-                % build permutation matrix
-                if     size(S,1) == 3 % point symmetries
-                    PM=zeros(natoms,nSs); for i=[1:nSs]; PM( order_(S(1:3,1:3,i)*tau(:,:)           ,species) ,i) = fwd; end
-                elseif size(S,1) == 4 % space symmetries
-                    PM=zeros(natoms,nSs); for i=[1:nSs]; PM( order_(S(1:3,1:3,i)*tau(:,:)+S(1:3,4,i),species) ,i) = fwd; end
-                end
-            else
-                % define unique ordering
-                if    strfind(flags,'pbc')
-                    order_ = @(tau,species) [mod_(tau);species];
-                else
-                    order_ = @(tau,species) [     tau ;species];
-                end
-                
-                % get reference
-                ref = order_(tau,species);
-                
-                % build permutation matrix
-                if     size(S,1) == 3 % point symmetries
-                    PM=zeros(natoms,nSs); for i=[1:nSs]; PM(:,i) = member_(order_(S(1:3,1:3,i)*tau           ,species),ref); end
-                elseif size(S,1) == 4 % space symmetries
-                    PM=zeros(natoms,nSs); for i=[1:nSs]; PM(:,i) = member_(order_(S(1:3,1:3,i)*tau+S(1:3,4,i),species),ref); end
-                end
-            end
-            %
-            % CHECKS:
-            % % positions produced by rotation i
-            % for i = 1:size(PM,2)
-            % sum(sum(abs(tau(:,PM(:,i)) - matmul_(S(:,:,i),tau))))
-            % end
-            % 
-            % % orbits of atom i
-            % for i = 1:size(PM,1)
-            % sum(sum(abs(tau(:,PM(i,:)) - matmul_(S,tau(:,i) )),2),1)
-            % end
         end
 
         function [MT,E,I]= get_multiplication_table(S)
@@ -539,7 +482,7 @@ classdef am_lib
             else                            pg_code=0;
             end
         end
-            
+
         function pg_name = decode_pg(pg_code)
             % point group dataset
             pg={'c_1' ,'s_2' ,'c_2' ,'c_1h','c_2h','d_2' ,'c_2v','d_2h', ...
@@ -585,6 +528,9 @@ classdef am_lib
             uc.u2p = u2p; uc.p2u = p2u;
             uc.u2i = u2i; uc.i2u = i2u;
 
+            % save bas2pc and tau2pc to convert [uc-frac] to [pc-frac]
+            uc.bas2pc = pc.bas/uc.bas; uc.tau2pc = inv(uc.bas2pc);
+            
             % save
             save('am_cells.mat','uc','pc','ic');
         end
@@ -633,30 +579,22 @@ classdef am_lib
             bundle_ = @(ex_,PM,Sinds) deal(PM(:,ex_),Sinds(ex_));
             
             % get seitz matrices
-            [S,~] = get_symmetries(pc); nSs=size(S,3); Sinds=[1:nSs];
-            
-            % get permutation matrix
-            PM = get_permutation_matrix(S,pc.tau,pc.species,''); 
-            
-            % bundle to exclude symmetries in which an atom was mapped to (zero) out of the primitive cell
-            [PM,Sinds]=bundle_(~any(PM==0,1),PM,Sinds);
+            [S,~] = get_symmetries(pc);
 
-            % construct a sparse binary representation 
-            A = get_connectivity_chart(PM);
+            % define function to apply symmetries to position vectors
+            seitz_apply_ = @(S,tau) mod_(reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:));
+
+            % get permutation matrix and construct a sparse binary representation 
+            PM = member_(seitz_apply_(S,pc.tau),pc.tau); A = get_connectivity_chart(PM);
 
             % set identifiers
             i2p = round(findrow_(A)).'; p2i = round(([1:size(A,1)]*A));
-
-            % apply these space symmetries to generate the primitive cell from the irreducible cell
-            % ==> sym_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:); i=2; sym_apply_(S(:,:,ic.s_ck(:,i)),ic.tau(:,i))
-            nics = numel(i2p); s_ck = false(nSs,nics); for i = 1:nics; [~,a]=unique(PM(i2p(i),:)); s_ck(Sinds(a),i) = true; end
-
+            
             % define irreducible cell creation function and make structure
-            ic_ = @(uc,i2u,S,s_ck) struct('units','frac','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas, ...
-                'vol',uc.vol,'symb',{uc.symb},'mass',uc.mass,'nspecies',sum(unique(i2u).'==i2u,2).', ...
-                'natoms',numel(i2u),'tau',uc.tau(1:3,i2u),'species',uc.species(i2u),...
-                's_ck',s_ck,'nSs',size(S,3),'S',S);
-            ic = ic_(pc,i2p,S,s_ck);
+            ic_ = @(uc,i2p) struct('units','frac','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas, ...
+                'vol',uc.vol,'symb',{uc.symb},'mass',uc.mass,'nspecies',sum(unique(i2p).'==i2p,2).', ...
+                'natoms',numel(i2p),'tau',uc.tau(1:3,i2p),'species',uc.species(i2p));
+            ic = ic_(pc,i2p);
         end
 
         function [sc,s2u,u2s] = get_supercell(uc,B)
@@ -682,6 +620,110 @@ classdef am_lib
             sc = sc_(uc,X(2:4,:),B,s2u);
         end
 
+
+        % brillouin zones
+
+        function [fbz,ibz,bzp] = get_zones(pc,n,flags)
+            
+            import am_lib.*
+
+            % continue earlier calc?
+            sfile = sprintf('%s','am_zones.mat');
+            if and(strfind(flags,'continue'),exist(sfile,'file')); load(sfile); return; end 
+
+            % get full brillouin zone
+            [fbz] = get_fbz(pc,n);
+
+            % get irreducible zone
+            [ibz,i2f,f2i] = get_ibz(fbz,pc);
+
+            % get zone path
+            [bzp] = get_bz_path(pc,flags);
+
+            % save mapping to zones
+            fbz.f2i = f2i; fbz.i2f = i2f;
+            ibz.i2f = i2f; ibz.f2i = f2i;
+
+            % save
+            save(sfile,'fbz','ibz','bzp','i2f','f2i');
+        end
+
+        function [bzp]         = get_bz_path(pc,brav)
+
+            if strfind( lower(brav), 'fcc' )
+                % define kpoint path
+                G=[0;0;0]; X1=[0;1;1]/2; X2=[2;1;1]/2; L=[1;1;1]/2; K=[6;3;3]/8;
+                N = 50; ql={'G','X','K','G','L'}; qs=[G,X2,K,G]; qe=[X1,K,G,L]; nqs=size(qs,2); 
+            else
+                error('invalid bravais lattice');
+            end
+
+            % get path: convert to [cart-recp] to get x spacings right then convert back to [frac-recp]
+            [k,x,qt] = get_path(pc.recbas*qs,pc.recbas*qe,nqs,N); k=pc.bas*k;
+
+            % create path object
+            bzp_ = @(pc,ql,qt,nks,x,k) struct('units','frac-recp','latpar',pc.latpar,'bas',pc.bas,'recbas',pc.recbas,'vol',pc.vol,'ql',{{ql{:}}},'qt',qt,'nks',nks,'x',x,'k',k);
+            bzp = bzp_(pc,ql,qt,size(k,2),x,k);
+
+            function [k,x,qt] = get_path(qs,qe,nqs,N)
+              % define path (includes both boundaries)
+                path_ = @(k,q,N) cumsum([zeros(3,1),repmat((k-q)/(N-1),1,N-1)],2)+repmat(q,1,N);
+                x_    = @(k,q,N) [0, repmat(norm((k-q)/(N-1)),1,N-1) ];
+
+                % build path
+                nks = N*nqs; k = zeros(3,nks); x = zeros(1,nks);
+                for i = 1:nqs
+                    k(1:3,[1:N]+(i-1)*N) = path_(qe(:,i),qs(:,i),N);
+                    x(    [1:N]+(i-1)*N) =    x_(qe(:,i),qs(:,i),N);
+                end
+                x = cumsum(x); 
+
+                % set labels coordinates
+                qt = x([1,N*[1:nqs]]);
+            end
+        end
+
+        function [fbz]         = get_fbz(pc,n)
+
+            % check
+            if any(mod(n,1)~=0); error('n must be integers'); end
+            if numel(n)~=3; error('n must be three integers'); end
+                
+            % generate primitive lattice vectors
+            Q_ = @(i) [0:(n(i)-1)]/n(i); [Y{1:3}]=ndgrid(Q_(1),Q_(2),Q_(3)); k=reshape(cat(3+1,Y{:}),[],3).';
+
+            % define irreducible cell creation function and make structure
+            fbz_ = @(uc,n,k) struct('units','frac-recp','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,...
+                'n',n,'nks',size(k,2),'k',k,'w',ones([1,size(k,2)]));
+            fbz = fbz_(pc,n,k);
+
+        end
+
+        function [ibz,i2f,f2i] = get_ibz(fbz,pc)
+            
+            import am_lib.*
+            
+            tiny = am_lib.tiny;
+
+            % get point symmetries [real-frac --> rec-frac] by applying basis transformation twice
+            [~,R] = get_symmetries(pc); R = matmul_(pc.bas^2,matmul_(R,pc.recbas^2)); 
+
+            % build permutation matrix for kpoints related by point symmetries
+            PM = member_(mod_(matmul_(R,fbz.k)),fbz.k); A = get_connectivity_chart(PM);
+
+            % set identifiers
+            i2f = round(findrow_(A)).'; f2i = round(([1:size(A,1)]*A)); w=sum(A,2).';
+            if abs(sum(w)-prod(fbz.n))>tiny; error('mismatch: kpoint mesh and point group symmetry'); end
+
+            % get irreducible tetrahedra
+            [tet,~,tet_f2i] = unique(sort(f2i(get_tetrahedra(fbz.recbas,fbz.n))).','rows'); tet=tet.'; tetw = hist(tet_f2i,[1:size(tet,2)].'-.5);
+
+            % define irreducible cell creation function and make structure
+            ibz_ = @(fbz,uc,i2f,w,tet,tetw) struct('units','frac-recp','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,...
+                'n',fbz.n,'nks',numel(i2f),'k',fbz.k(:,i2f),'w',w,'ntets',size(tet,2),'tet',tet,'tetw',tetw);
+            ibz = ibz_(fbz,pc,i2f,w,tet,tetw);
+        end
+
         
         % pairs
 
@@ -689,8 +731,18 @@ classdef am_lib
             
             import am_lib.*
             
+            % get space symmetries in [primitive basis]
+            [S,~] = get_symmetries(pc); nSs = size(S,3); 
+
+            % save space symmetry combined with permutation of atomic positions as Q
+            M = [[1,2];[2,1]].'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); nQs = nSs*nMs;
+
+            % get multiplication table, list of inverse elements, and identity (MECHANISM B)
+            [MT,E,I]= get_multiplication_table(Q);
+            
+            
             % get irreducible shells
-            [ip] = get_irreducible_pairs(pc,uc,cutoff);
+            [ip] = get_irreducible_pairs(Q,uc,cutoff);
 
             % get primitive shells
             [pp,p2i,i2p] = get_primitive_pairs(pc,ip);
@@ -699,75 +751,53 @@ classdef am_lib
             pp.i2p = i2p; pp.p2i = p2i;
             ip.i2p = i2p; ip.p2i = p2i;
         end
-        
-        function [ip]         = get_irreducible_pairs(pc,uc,cutoff)
+
+        function [ip]         = get_irreducible_pairs(Q,uc,cutoff)
             % Cutoff needs to be small otherwise shells at large distances will be incomplete.
-            % MECHANISM A: pair symmetries involve rotations and
-            %              permutations of atomic positions. The symmetries
-            %              are represented as a cell Q. The first part
-            %              Q{1}(:,:,:) contains the seitz operation and the
-            %              second part Q{2}(:,:) the permutation indicies.
-            %              The action of Q is determined by building the
-            %              permutation matrix PM using the matrices P1s and
-            %              P2s which correspond to the atomic pair-forming
-            %              indicies.
-            % MECHANISM B: The irreducible pairs (i2p) are identified by
-            %              the symmetries for which the operation which
-            %              takes the irreducible pair to the primitive pair
-            %              is equal to the identity. In order for this to
-            %              happen properly, the algorithm below must be
-            %              given a chance to choose the identity symmetry
-            %              as Qi before any other symmetry. This is done by
-            %              sorting the symmetrying so as to put the
-            %              identity first. 
+            %
+            % IMPORTANT: 
+            %    clc; X=PM(A(3,:),:)
+            %    XRef=repmat(X(1,:),size(X,1),1); 
+            %    Qi=findrow_(XRef==X(:,E));
+            %    % These last two are equivalent:
+            %    perm_(X.',MT(:,I(Qi))).'-XRef %   Qi  takes orbits to prototype
+            %    perm_(XRef.',MT(:,Qi)).'-X    % I(Qi) takes prototype to orbit
+            %
             
             import am_lib.*
-            
+
             % readjust cutoff based on unitcell
-            cutoff = min([normc_(uc.bas)/2,cutoff]);
-
-            % get conversion from primitive to supercell basis
-            uc2pc = pc.bas/uc.bas;
-
-            % get space symmetries in [primitive basis]
-            [S,~] = get_symmetries(pc); nSs = size(S,3); 
-
-            % save space symmetry combined with permutation of atomic positions as Q
-            M = [[1,2];[2,1]].'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); nQs=nSs*nMs;
-
-            % get multiplication table, list of inverse elements, and identity (MECHANISM B)
-            [MT,E,I]= get_multiplication_table(Q);
+            cutoff = min([normc_(uc.bas)/2,cutoff]); 
             
-            % get pair symmeteries [uc-frac]
-            sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), ...
-                reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
-            Quc{1}=sym_rebase_(uc2pc ,Q{1}); Quc{2}=Q{2};
+            % get multiplication table, list of inverse elements, and identity (MECHANISM B)
+            [MT,E,I]= get_multiplication_table(Q); nQs= size(MT,1);
+            
+            % define function to apply symmetries to position vectors
+            seitz_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
+            
+            % get primitive lattice and atomic basis in primitive fractional
+            pc_tau = uc.tau2pc*mod_(uc.tau);
 
-            % determine primitive atoms shells which are connected
+            % determine action of space symmetries on pair positions
             P1s=[];P2s=[]; npcs=numel(uc.p2u); npairs=zeros(1,npcs);
             for i = 1:npcs
                 % identify primitive atom in unit cell
-                Delta = uc.tau(:,uc.p2u(i)); 
+                m = uc.p2u(i);
 
                 % compute cutoff distances, exclude atoms above cutoff, count pairs involving the i-th primitive atom
-                d = normc_(uc2ws(uc.bas*(uc.tau-Delta),uc.bas)); ex_ = [d<cutoff]; npairs(i) = sum(ex_);
-
-                % define function to apply symmetries to position vectors
-                seitz_apply_ = @(S,tau) mod_(reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:));
+                d = normc_(uc2ws(uc.bas*(uc.tau-uc.tau(:,m)),uc.bas)); ex_ = [d<cutoff]; npairs(i) = sum(ex_);
                 
-                % compute action of space symmetries on pair positions
-                tau=[];
-                tau(:,:,:,1) = repmat(seitz_apply_(Quc{1},Delta),[1,npairs(i),1]); 
-                tau(:,:,:,2) =        seitz_apply_(Quc{1},uc.tau(:,ex_));
-                for iq = 1:nQs; tau(:,:,iq,:) = tau(1:3,:,iq,Quc{2}(:,iq)); end
+                % [pc-frac] compute action of space symmetries on pair positions
+                tau=[]; mm_ = repmat(m,[1,npairs(i),1]);
+                tau(:,:,:,1) = seitz_apply_(Q{1},pc_tau(:,mm_)); 
+                tau(:,:,:,2) = seitz_apply_(Q{1},pc_tau(:,ex_));
+                for iq = 1:nQs; tau(:,:,iq,:) = tau(1:3,:,iq,Q{2}(:,iq)); end
 
-                % define function to get the closest primitive lattice vector in supercell basis
-                G_ = @(uc2pc,tau) tau - reshape(matmul_(uc2pc,mod_(matmul_(inv(uc2pc),tau))),size(tau));
-                
-                % shift reference atom to primitive cell and record uc index
-                tau = tau - G_(uc2pc,tau(:,:,:,1));
-                P1 = member_(mod_(tau(:,:,:,1)),uc.tau);
-                P2 = member_(mod_(tau(:,:,:,2)),uc.tau);
+                % [uc-frac] shift reference atom to primitive cell and record uc index
+                G_ = @(tau) tau - mod_(tau); 
+                tau = mod_(matmul_(uc.bas2pc, tau - G_(tau(:,:,:,1)) ));
+                P1 = member_(tau(:,:,:,1),uc.tau);
+                P2 = member_(tau(:,:,:,2),uc.tau);
 
                 % save results (P1s are always in the primitive cell)
                 P1s = [P1s;P1]; P2s = [P2s;P2];
@@ -777,22 +807,11 @@ classdef am_lib
             [V,~,p2i]=unique([P1s(:),P2s(:)],'rows'); V=V.';
 
             % get permutation representation (entries are unique pair indicies)
-            PM = reshape(p2i,size(P1s)); 
+            PM = reshape(p2i,size(P1s)); A = get_connectivity_chart(PM); 
 
-            % get connectivity, sortted based on pair distances [cart]
-            A = get_connectivity_chart(PM); 
-
-            % define function to get bond vector from unit cell atom pair indicies
+            % sort based on pair distances [cart] 
             diff_ = @(V) uc.tau(:,V(2,:))-uc.tau(:,V(1,:)); d_ = @(r) normc_(uc2ws(uc.bas*r,uc.bas));
             A = A( rankcol_( d_(diff_(V(:,findrow_(A)))) ),:);
-
-            % IMPORTANT: 
-            %    clc; X=PM(A(3,:),:)
-            %    XRef=repmat(X(1,:),size(X,1),1); 
-            %    Qi=findrow_(XRef==X(:,E));
-            %    % These last two are equivalent:
-            %    perm_(X.',MT(:,I(Qi))).'-XRef %   Qi  takes orbits to prototype
-            %    perm_(XRef.',MT(:,Qi)).'-X    % I(Qi) takes prototype to orbit
             
             % trim PM, keeping only irreducible pairs
             PM = PM(findrow_(A),:);
@@ -923,111 +942,6 @@ classdef am_lib
         end
 
 
-        % brillouin zones
-
-        function [fbz,ibz,bzp] = get_zones(pc,n,flags)
-            
-            import am_lib.*
-
-            % continue earlier calc?
-            sfile = sprintf('%s','am_zones.mat');
-            if and(strfind(flags,'continue'),exist(sfile,'file')); load(sfile); return; end 
-
-            % get full brillouin zone
-            [fbz] = get_fbz(pc,n);
-
-            % get irreducible zone
-            [ibz,i2f,f2i] = get_ibz(fbz,pc);
-
-            % get zone path
-            [bzp] = get_bz_path(pc,'fcc');
-
-            % save mapping to zones
-            fbz.f2i = f2i; fbz.i2f = i2f;
-            ibz.i2f = i2f; ibz.f2i = f2i;
-
-            % save
-            save(sfile,'fbz','ibz','bzp','i2f','f2i');
-        end
-
-        function [bzp]         = get_bz_path(pc,brav)
-
-            switch strtrim(lower(brav))
-                case 'fcc'
-                    % define kpoint path
-                    G=[0;0;0]; X1=[0;1;1]/2; X2=[2;1;1]/2; L=[1;1;1]/2; K=[6;3;3]/8;
-                    N = 50; ql={'G','X','K','G','L'}; qs=[G,X2,K,G]; qe=[X1,K,G,L]; nqs=size(qs,2); 
-                otherwise 
-                    error('invalid bravais lattice');
-            end
-
-            % get path: convert to [cart-recp] to get x spacings right then convert back to [frac-recp]
-            [k,x,qt] = get_path(pc.recbas*qs,pc.recbas*qe,nqs,N); k=pc.bas*k;
-
-            % create path object
-            bzp_ = @(pc,ql,qt,nks,x,k) struct('units','frac-recp','latpar',pc.latpar,'bas',pc.bas,'recbas',pc.recbas,'vol',pc.vol,'ql',{{ql{:}}},'qt',qt,'nks',nks,'x',x,'k',k);
-            bzp = bzp_(pc,ql,qt,size(k,2),x,k);
-
-            function [k,x,qt] = get_path(qs,qe,nqs,N)
-              % define path (includes both boundaries)
-                path_ = @(k,q,N) cumsum([zeros(3,1),repmat((k-q)/(N-1),1,N-1)],2)+repmat(q,1,N);
-                x_    = @(k,q,N) [0, repmat(norm((k-q)/(N-1)),1,N-1) ];
-
-                % build path
-                nks = N*nqs; k = zeros(3,nks); x = zeros(1,nks);
-                for i = 1:nqs
-                    k(1:3,[1:N]+(i-1)*N) = path_(qe(:,i),qs(:,i),N);
-                    x(    [1:N]+(i-1)*N) =    x_(qe(:,i),qs(:,i),N);
-                end
-                x = cumsum(x); 
-
-                % set labels coordinates
-                qt = x([1,N*[1:nqs]]);
-            end
-        end
-
-        function [fbz]         = get_fbz(pc,n)
-
-            % check
-            if any(mod(n,1)~=0); error('n must have integers'); end
-
-            % generate primitive lattice vectors
-            Q_ = @(i) [0:(n(i)-1)]/n(i); [Y{1:3}]=ndgrid(Q_(1),Q_(2),Q_(3)); k=reshape(cat(3+1,Y{:}),[],3).';
-
-            % define irreducible cell creation function and make structure
-            fbz_ = @(uc,n,k) struct('units','frac-recp','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,...
-                'n',n,'nks',size(k,2),'k',k,'w',ones([1,size(k,2)]));
-            fbz = fbz_(pc,n,k);
-
-        end
-
-        function [ibz,i2f,f2i] = get_ibz(fbz,pc)
-            
-            import am_lib.*
-            
-            tiny = am_lib.tiny;
-
-            % get point symmetries [real-frac --> rec-frac] by applying basis transformation twice
-            [~,R] = get_symmetries(pc); nRs = size(R,3); R=matmul_(pc.bas^2,matmul_(R,pc.recbas^2)); 
-
-            % build permutation matrix for kpoints related by point symmetries
-            PM=zeros(fbz.nks,nRs); for i=[1:nRs]; PM(:,i)=rankcol_(mod_(R(:,:,i)*fbz.k)); end
-
-            % get irreducible rows (requires complete symmetry group and complete k-point basis!)
-            [A,i2f,f2i]=unique(sort(PM,2),'rows'); i2f=i2f(:).'; f2i=f2i(:).'; A([false(size(A(:,1))),diff(A,1,2)==0])=0; w=sum(A~=0,2).';
-            if abs(sum(w)-prod(fbz.n))>tiny; error('mismatch: kpoint mesh and point group symmetry'); end
-
-            % get irreducible tetrahedra
-            [tet,~,tet_f2i] = unique(sort(f2i(get_tetrahedra(fbz.recbas,fbz.n))).','rows'); tet=tet.'; tetw = hist(tet_f2i,[1:size(tet,2)].'-.5);
-
-            % define irreducible cell creation function and make structure
-            ibz_ = @(fbz,uc,i2f,w,R,tet,tetw) struct('units','frac-recp','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,...
-                'n',fbz.n,'nks',numel(i2f),'k',fbz.k(:,i2f),'w',w,'ntets',size(tet,2),'tet',tet,'tetw',tetw,...
-                'nRs',size(R,3),'R',R);
-            ibz = ibz_(fbz,pc,i2f,w,R,tet,tetw);
-        end
-
-
         % phonons
 
         function [bvk,pp] = get_bvk(cutoff,pc,uc,fname,flags)
@@ -1125,41 +1039,20 @@ classdef am_lib
                     r_cart = Qc{1}(1:3,1:3,m) * uc2ws(pp.bas*vec_(pp.xy(pp.Q{2}(:,m),p)),pp.bas); r_cart(abs(r_cart)<am_lib.tiny)=0;
                     B = B + Qc{1}(1:3,1:3,m) * phi * Qc{1}(1:3,1:3,m).' .* exp( i2pi * dot(sym(r_cart,'d') , kvec) ); 
                 end
-                
-                % simplify B a bit
-                % B = simplify(rewrite(B,'cos'));
-
-                % update block matrix with masses
-                B = B ./ sqrt(prod(mass(pp.ij(:,p))));
 
                 % augment dynamical matrix 
                 mp = 3*(pp.mn(1,p)-1)+[1:3]; 
                 np = 3*(pp.mn(2,p)-1)+[1:3];
                 D( mp,np ) = D( mp,np ) + B; 
             end
-            
-            % % IMPOSE ASR WITH set_bvk_acoustic_sum_rules RATHER THAN HERE
-            % % get acoustic sum rules (see Wooten p 646, very illuminating H2O example)
-            % D_gamma = subs(subs(D,kvec,[0;0;0]), mass,ones(1,numel(mass))); asr = sym(zeros(3*pc.natoms,3));
-            % for m = 1:pc.natoms; for n = 1:pc.natoms
-            %     mp = 3*(m-1)+[1:3]; 
-            %     np = 3*(n-1)+[1:3]; 
-            %     asr(mp,1:3) = asr(mp,1:3) + D_gamma(mp,np);
-            % end; end; asr = unique(simplify(asr==0)); asr = asr(asr~=true);
-            % 
-            % % impose acoustic sum rules on D (see NOTE #1)
-            % c = [sav.c{:}]; self_ck = pp.xy(1,pp.i2p)==pp.xy(2,pp.i2p);
-            % for j = 1:size(asr,1)
-            %     for i = find(self_ck)
-            %         sol = solve(asr(j),c(i));
-            %         if ~isempty(sol); D=subs(D,c(i),sol); end
-            %     end
-            % end
+
+            % multiply by 1/sqrt(mass)
+            mass = repelem(pc.mass(pc.species),1,3); mass = 1./sqrt(mass.' * mass); D = D .* mass;
 
             % create bvk structure
             bvk_ = @(pc,sav,D) struct('units','cart','latpar',pc.latpar,'bas',pc.bas,'recbas',pc.recbas, ...
-                'vol',pc.vol,'symb',{pc.symb},'mass',pc.mass,'species',pc.species,'natoms',pc.natoms, ...
-                'nshells',size(sav.W,2),'W',{sav.W},'shell',{sav.shell},'nbands',3*pc.natoms,...
+                'vol',pc.vol,'symb',{pc.symb},'mass',pc.mass,'species',pc.species,'natoms',pc.natoms,...
+                'nbands',3*pc.natoms,'nshells',size(sav.W,2),'W',{sav.W},'shell',{sav.shell},...
                 'D',matlabFunction(D));
             bvk = bvk_(pc,sav,D);
         end
@@ -1178,13 +1071,13 @@ classdef am_lib
             end;end
 
             % index uc based on pairs
-            [c_id, o_id, i_id, q_id] = get_bvk_lookup_tables(pp,uc);
+            [ ~ , o_id, i_id, q_id] = get_bvk_lookup_tables(pp,uc);
 
             % build force constants
             phi = zeros(3,3,bvk.nshells);
             for i = 1:bvk.nshells; phi(:,:,i) = reshape(bvk.W{i}*bvk.fc{i}.',3,3); end
 
-            % enforce acoustic sum rule [POORLY CODED SECTION. REWRITE]
+            % enforce acoustic sum rule
             for i = 1:bvk.nshells
                 % check if it is a 0-th neighbor shell
                 if pp.xy(1,pp.i2p(i))==pp.xy(2,pp.i2p(i))
@@ -1205,7 +1098,7 @@ classdef am_lib
                 end
             end
         end
-        
+
         function [bvk] = get_bvk_force_constants(bvk,pp,uc,fname_force_position)
             % Extracts symmetry adapted force constants.
             % get_bvk_force_constants(bvk,ip,load_poscar('infile.supercell'),'infile.force_position.4.04-300')
@@ -1324,7 +1217,7 @@ classdef am_lib
             end
             
             % multiply by 1/sqrt(mass)
-            mass = repelem(bvk.mass,1,3); mass = 1./sqrt(mass.' * mass); D = D .* mass;
+            mass = repelem(bvk.mass(bkv.species),1,3); mass = 1./sqrt(mass.' * mass); D = D .* mass;
             
             % get eigenvalues and eigenvectors
             bz.hw = zeros(bvk.nbands,bz.nks); bz.U = zeros(bvk.nbands,bvk.nbands,bz.nks);
@@ -2412,8 +2305,8 @@ classdef am_lib
                 t_(0,m) .* - sqrt( 1/2) .* ( (-1).^m.*d_(m, mp) + d_(m,-mp) );
 
             % batch convert to wigner
-            nRs = size(R,3); Wtes = sym(zeros(2*j+1,2*j+1,nRs));
-            for i = [1:nRs]; Wtes(:,:,i) = get_wigner_engine(J,T,j,sym(R(:,:,i))); end
+            nRs = size(R,3); Wtes = zeros(2*j+1,2*j+1,nRs);
+            for i = [1:nRs]; Wtes(:,:,i) = get_wigner_engine(J,T,j,R(:,:,i)); end
         end
         
         function [Wtes] = get_wigner_engine(J,T,j,R)
@@ -2426,14 +2319,14 @@ classdef am_lib
             d = det(R); dR = R*d;
 
             % get rotation axis and angle
-            an = R_angle_(dR); ax = circshift(R_axis_(double(dR)),1);
+            an = R_angle_(dR); ax = circshift(R_axis_(dR),1);
 
             % define spin-vector dot products [Eq. 1.37 Blundell]
             dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
 
-            if isa(R,'sym') % faster for symbolic and squares matrices with dimensions > 9
-                Wsph = expm( -sqrt(-1)*dotV_(sym(J),ax)*sym(an) ) * d^j;
-                Wtes = simplify( sym(T') * Wsph * sym(T) );
+            if size(R,1)>9 % faster for symbolic and square matrices with dimensions > 9
+                Wsph = expm( -sqrt(-1)*dotV_(J,ax)*an ) * d^j;
+                Wtes = T' * Wsph * T;
             else % faster for numerical square matrices with dimensions < 9
                 [V,D] = eig( -sqrt(-1) * dotV_(J,ax) * an); 
                 Wsph = V*diag(exp(diag(D)))/V * d^j;
@@ -2444,6 +2337,7 @@ classdef am_lib
 
         % aux phonons
 
+        % GOAL GET TO LOOK-UP TABLE ASAP. FORGET IP
         function [c_id,o_id,i_id,q_id] = get_bvk_lookup_tables(pp,uc)
             %
             % Goal: c_id{m}(:)      contains uc id for primitive cell atoms of type m
