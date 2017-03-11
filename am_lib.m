@@ -269,8 +269,7 @@ classdef am_lib
             nlines = count_lines(fname); if mod(nlines,natoms)~=0; error('lines appear to be missing.'); end;
 
             % open file and parse
-            
-            fid = fopen(fname); x = fscanf(fid,'%f'); fd = reshape(x,6,natoms,nlines/natoms); fclose(fid);
+            fid = fopen(fname); fd = reshape(fscanf(fid,'%f'),6,natoms,nlines/natoms); fclose(fid);
 
             function [nlines] = count_lines(fname)
                 if ispc
@@ -905,7 +904,7 @@ classdef am_lib
             fprintf('(%.f secs)\n',toc);
 
             % transform fc from orbit to irrep
-            q = cat(1,pp.q{:}); phi = matmul_(matmul_(pp.Q{1}(1:3,1:3,q),phi),pp.Q{1}(1:3,1:3,q));
+            q = cat(1,pp.q{:}); phi = matmul_(matmul_(pp.Q{1}(1:3,1:3,q),phi),permute(pp.Q{1}(1:3,1:3,q),[2,1,3]));
             for j = 1:size(phi,3); phi(:,:,j) = permute( phi(:,:,j), pp.Q{2}(:,q(j)) ); end
             
             % solve for symmetry adapted force constants : A x = B
@@ -915,7 +914,7 @@ classdef am_lib
                     A = repmat(double(bvk.W{i}),sum(ex_),1);
                     B = reshape(phi(:,:,ex_),[],1);
                     % get force constants as row vectors
-                    bvk.fc{i} = reshape( A \ B , 1, []); 
+                    bvk.fc{i} = reshape( A \ B , 1, []);
                 end
             end
         end
