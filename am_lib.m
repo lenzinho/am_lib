@@ -67,7 +67,8 @@ classdef am_lib
     % 
     
     properties (Constant)
-        tiny = 1E-4;
+        tiny = 1E-4; % precision of atomic coordinates
+        eps = 1E-10; % numerical precision
         units_eV = 0.06465555; % sqrt( [eV/Ang^2] * [1/amu] ) --> 0.06465555 [eV]
         units_THz = 98.22906;  % sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz=1/ps]
     end
@@ -268,7 +269,8 @@ classdef am_lib
             nlines = count_lines(fname); if mod(nlines,natoms)~=0; error('lines appear to be missing.'); end;
 
             % open file and parse
-            fid = fopen(fname); fd = reshape(fscanf(fid,'%f'),6,natoms,nlines/natoms); fclose(fid);
+            
+            fid = fopen(fname); x = fscanf(fid,'%f'); fd = reshape(x,6,natoms,nlines/natoms); fclose(fid);
 
             function [nlines] = count_lines(fname)
                 if ispc
@@ -280,12 +282,15 @@ classdef am_lib
             end
         end
 
-        
+
         % symmetry
 
         function [P]     = get_translations(tau,species)
             
             import am_lib.*
+            
+            % define function to check first two dimensions
+            check3_ = @(A) all(all(abs(A)<am_lib.tiny,1),2);
 
             % sort atoms and species into a unique order (reference)
             X_ = @(tau,species) sortcol_([species;mod_(tau)]); X = X_(tau,species);
@@ -301,6 +306,9 @@ classdef am_lib
         function [S,R]   = get_symmetries(pc)
             
             import am_lib.*
+            
+            % define function to check first two dimensions
+            check3_ = @(A) all(all(abs(A)<am_lib.tiny,1),2);
 
             % define function to check for arithmetic holodries (symmetries for which R'*g*R = g; g = bas'*bas)
             N=9; Q=[-1:1]; nQs=numel(Q);[Y{N:-1:1}]=ndgrid(1:nQs); L=reshape(Q(reshape(cat(N+1,Y{:}),[],N)).',3,3,[]);
@@ -723,159 +731,7 @@ classdef am_lib
                 'n',fbz.n,'nks',numel(i2f),'k',fbz.k(:,i2f),'w',w,'ntets',size(tet,2),'tet',tet,'tetw',tetw);
             ibz = ibz_(fbz,pc,i2f,w,tet,tetw);
         end
-
         
-        % pairs
-
-        function [pp]         = get_pairs(pc,uc,cutoff)
-            %
-            % IMPORTANT: 
-            %    clc; X=PM(A(3,:),:)
-            %    XRef=repmat(X(1,:),size(X,1),1); 
-            %    Qi=findrow_(XRef==X(:,E));
-            %    % These last two are equivalent:
-            %    perm_(X.',MT(:,I(Qi))).'-XRef %   Qi  takes orbits to prototype
-            %    perm_(XRef.',MT(:,Qi)).'-X    % I(Qi) takes prototype to orbit
-            %
-            
-            import am_lib.*
-            
-            % readjust cutoff based on unitcell
-            cutoff = min([normc_(uc.bas)/2,cutoff]); 
-            
-            % step 1: get pair symmetries symmetries [pc-frac]
-                % get space symmetries
-                [S,~] = get_symmetries(pc); nSs = size(S,3); 
-
-                % save space symmetry combined with permutation of atomic positions as Q
-                M = [[1,2];[2,1]].'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); nQs = nSs*nMs;
-
-                % get multiplication table, list of inverse elements, and identity
-                [MT,E,I]= get_multiplication_table(Q); nQs = size(MT,1);
-            
-            % step 2: get PM, V, ip2pp, and pp2ip
-                % define function to apply symmetries to position vectors
-                seitz_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
-
-                % get primitive lattice and atomic basis in primitive fractional
-                pc_tau = uc.tau2pc*mod_(uc.tau);
-
-                % determine action of space symmetries on pair positions
-                P1s=[];P2s=[]; npcs=numel(uc.p2u); npairs=zeros(1,npcs);
-                for i = 1:npcs
-                    % identify primitive atom in unit cell
-                    m = uc.p2u(i);
-
-                    % compute cutoff distances, exclude atoms above cutoff, count pairs involving the i-th primitive atom
-                    ex_ = normc_(uc2ws(uc.bas*(uc.tau-uc.tau(:,m)),uc.bas))<cutoff; npairs(i) = sum(ex_);
-
-                    % [pc-frac] compute action of space symmetries on pair positions
-                    tau=[]; mm_ = repmat(m,[1,npairs(i),1]);
-                    tau(:,:,:,1) = seitz_apply_(Q{1},pc_tau(:,mm_)); 
-                    tau(:,:,:,2) = seitz_apply_(Q{1},pc_tau(:,ex_));
-                    for iq = 1:nQs; tau(:,:,iq,:) = tau(1:3,:,iq,Q{2}(:,iq)); end
-
-                    % [uc-frac] shift reference atom to primitive cell and record uc index
-                    G_ = @(tau) tau - mod_(tau); 
-                    tau = mod_(matmul_(uc.bas2pc, tau - G_(tau(:,:,:,1)) ));
-                    P1 = member_(tau(:,:,:,1),uc.tau);
-                    P2 = member_(tau(:,:,:,2),uc.tau);
-
-                    % save results (P1s are always in the primitive cell)
-                    P1s = [P1s;P1]; P2s = [P2s;P2];
-                end
-
-                % create a unique pair label
-                [V,~,V_p2i]=unique([P1s(:),P2s(:)],'rows'); V=V.';
-
-                % get permutation representation (entries are unique pair indicies)
-                PM = reshape(V_p2i,size(P1s)); A = get_connectivity_chart(PM); 
-
-                % get map
-                ip2pp = findrow_(A); pp2ip = [1:size(A,1)]*A;
-                
-                % get stabilizers of bond prototypes
-                s_ck = PM(ip2pp,:)==PM(ip2pp,E);
-            
-            % step 3: get c_id,o_id,i_id,q_id
-                % get symmetry which takes irrep to orbit
-                qi = findrow_(PM==PM(ip2pp(pp2ip),E)); % i=2; X=perm_(PM(p2i==i,:).',MT(:,qi(p2i==i))).'
-                
-                xy = V(:,PM(:,E)); mn = uc.u2p(V); pc_natoms = numel(uc.p2u);
-                for m = 1:pc_natoms
-                    % record unit cell atoms of primitive type m
-                    c_id{m} = find(uc.u2p==m); ncenters = numel(c_id{m});
-                    % count number of orbits involving primitive cell atom m
-                    npairs = sum(mn(1,:)==m);
-                    % allocate space
-                    o_id{m} = zeros(npairs,ncenters);
-                    i_id{m} = zeros(npairs,1);
-                    q_id{m} = zeros(npairs,1);
-                   iq_id{m} = zeros(npairs,1);
-                    % loop over centers
-                    for n = 1:ncenters
-                        % [uc-frac] find the closest primitive lattice vector to atom n
-                        G = uc.tau(:,c_id{m}(n))-uc.tau(:,uc.p2u(m));
-                        % [uc-frac] shift atom n to the primitive cell
-                        tau = mod_(uc.tau - G); 
-                        % find orbits around c_id{m}(n)
-                        ex_ = member_(uc.tau(:,xy(1,:)),tau).'==c_id{m}(n);
-                        % record uc id for the pairing atom for each orbit
-                        o_id{m}(:,n) = member_(uc.tau(:,xy(2,ex_)),tau).';
-                    end
-                    % irreducible pair index (independent of n)
-                    i_id{m}(:) = pp2ip(ex_);
-                    % symmetry which takes bond to irrep (independent of n)
-                    q_id{m}(:) = qi(ex_);
-                   iq_id{m}(:) = I(qi(ex_));
-                end
-
-            % define pair saving function
-            %   a shell represents a set of pairs connected through symmetry operations
-            pair_ = @(uc,c_id,o_id,i_id,q_id,iq_id) struct(...
-                'units','frac','latpar',uc.latpar,...
-                'bas',uc.bas,'recbas',uc.recbas,'bas2pc',uc.bas2pc,'tau2pc',uc.tau2pc, ...
-                'symb',{uc.symb},'mass',uc.mass,'natoms',uc.natoms,'tau',uc.tau,'species',uc.species,...
-                'u2p',uc.u2p,'u2i',uc.u2i,'p2u',uc.p2u,'i2u',uc.i2u, ...
-                'pc_natoms',numel(uc.p2u),...
-                'npairs',cellfun(@(x)size(x,1),o_id),...
-                'ncenters',cellfun(@(x)size(x,2),o_id), ...
-                'c',{c_id},'o',{o_id},'i',{i_id},'q',{q_id},'iq',{iq_id},...
-                'nshells',max(cellfun(@max,i_id)),'nQs',nQs,'Q',{Q},'s_ck',s_ck,'ip2pp',ip2pp,'pp2ip',pp2ip);
-            
-            pp = pair_(uc,c_id,o_id,i_id,q_id,iq_id);
-        
-            % print results
-            bar_ = @(x) repmat('-',[1,x]); Z=[]; 
-            fprintf('%s primitive shells %s\n', bar_(30), bar_(30) );
-            for m = 1:pp.pc_natoms
-                Y=[]; ex_ = uniquemask_(pp.i{m}); 
-                fprintf('atom %i: %i shells\n', m, sum(ex_));
-                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
-                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
-            for i = 1:pp.npairs(m)
-                if ex_(i)
-                    % record basic info
-                    xy  = [pp.o{m}(i,1);pp.c{m}(1)]; % uc indicies
-                    mn  = uc.u2p(xy).'; % pc indicies
-                    ij  = uc.u2i(mn).'; % ic indicies
-                    v   = pp.tau(:,xy(1))-pp.tau(:,xy(2));
-                    v   = uc2ws(pp.bas*v,pp.bas); d = normc_(v);
-                    ir  = pp.i{m}(i); % irreducible index 
-                    w   = sum(pp.i{m}==ir); % number of points in orbit
-                    % save stuff [ d(1), r(2,3,4), w(5), ij(6,7), mn(8,9), irres(10)]
-                    Y = [Y,[d;v;w;ij;mn;ir]];
-                end
-            end
-                fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Y(:,rankcol_(Y(1,:))) ); fprintf('\n');
-                Z=[Z,Y];
-            end
-            w = accumarray(Z(end,:).',Z(5,:).',[],@sum); Z = Z(:,uniquemask_(Z(end,:).')); Z(5,:) = w; 
-            fprintf('%s irreducible shells %s\n', bar_(29), bar_(29) );
-            fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
-            fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
-            fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Z(:,rankcol_(Z(1,:))) );
-        end
 
         % phonons
 
@@ -891,22 +747,22 @@ classdef am_lib
             if and(strfind(flags,'continue'),exist(sfile,'file')); load(sfile); return; end 
 
             % get irreducible shells
-            [~,pp] = get_pairs(pc,uc,cutoff); 
+            [ip,pp] = get_pairs(pc,uc,cutoff);
 
             % force constant model
-            bvk = get_bvk_model(pc,pp);
+            bvk = get_bvk_model(ip,pp);
 
             % get force constants
-            bvk = get_bvk_force_constants(bvk,pp,uc,fname);
+            bvk = get_bvk_force_constants(bvk,pp,fname);
 
             % enforce asr
-            bvk = set_bvk_acoustic_sum_rules(bvk,pp,uc); 
+            bvk = set_bvk_acoustic_sum_rules(bvk,pp);
             
-            % save everything generated
+            % save outputs
             save(sfile,'bvk','pp')
         end
 
-        function [bvk] = get_bvk_model(pc,pp)
+        function [bvk] = get_bvk_model(ip,pp)
             %
             % NOTE #1: sum rules are enforced again in the extraction of
             % symmetry-adapted force constants and the implementation here is
@@ -917,33 +773,20 @@ classdef am_lib
             import am_lib.*
 
             % set sym digits
-            digits(5);
-
-            % get pair symmeteries [cart]
-            sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), ...
-                reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
-            Qc{1} =sym_rebase_(pp.bas,pp.Q{1}); Qc{2} = pp.Q{2};
-            % correct rounding errors in cart
-            for i = 1:numel(Qc{1}); for wdv = [0,1,0.5,sqrt(3)/2]
-                if abs(abs(Qc{1}(i))-wdv)<am_lib.tiny; Qc{1}(i)=wdv*sign(Qc{1}(i)); end
-            end;end
-
-            % define function to get bond vector
-            vec_ = @(xy) pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:));
+            digits(10);
 
             % get form of force constants for irreducible prototypical bonds
-            for i = 1:max(pp.p2i)
-                % primitive index
-                p = pp.i2p(i);
-
+            fprintf(' ... solving for symbolic force constants '); tic;
+            for i = 1:ip.nshells
                 % use stabilzer group to determine crystallographic symmetry relations; A*B*C' equals kron(C,A)*B(:)
-                W = sum(kron_( Qc{1}(1:3,1:3,pp.s_ck(:,p)) , Qc{1}(1:3,1:3,pp.s_ck(:,p)))-eye(9),3);
+                W = sum(kron_( pp.Q{1}(1:3,1:3,ip.s_ck(:,i)) , pp.Q{1}(1:3,1:3,ip.s_ck(:,i)))-eye(9),3);
 
                 % enforce intrinsic symmetry (immaterial order of differentiation: c == c.')
                 F = zeros(9,9); F(sub2ind([9,9],[1:9],[1,4,7,2,5,8,3,6,9])) = 1; W = W + F-eye(9);
 
                 % get linearly-independent nullspace and normalize to first nonzero element
-                W = null(W); W = frref_(W.').'; for j = 1:size(W,2); W(:,j) = W(:,j)./W(find(W(:,j),1),j); end; 
+                W = null(W); W = frref_(W.').'; W(abs(W)<1E-10)=0; W(abs(W-1)<1E-10)=1;
+                for j = 1:size(W,2); W(:,j)=W(:,j)./W(find(W(:,j),1),j); end
 
                 % define parameters
                 c = sym(sprintf('c%02i_%%d%%d',i),[3,3],'real'); c = c(findrow_(double(W).'));
@@ -951,62 +794,51 @@ classdef am_lib
                 % get symmetry adapted force constants
                 phi = reshape( sym(W,'d')*c(:), [3,3]);
 
-                % clean up zeros and ones in phi, sym-adapted FC 
-                for j = 1:numel(phi); [C,T]=coeffs(phi(j)); C(C<1E-8)=0; C(abs(C-1)<1E-8)=1; phi(j) = sum(C.*T); end
-
-                % print sym-adapted force constants
-                fprintf('v = [%10f,%10f,%10f] \n', uc2ws(pp.bas*vec_(pp.xy(:,p)),pp.bas) ); disp(phi), fprintf('\n');
-
                 % save important stuff (sort W to be in line with c, matlabFunction sorts D variables)
-                [sav.c{i},n] = sort(c(:).'); sav.W{i} = W(:,n); sav.shell{i} = ones(1,numel(c))*i; sav.phi(:,:,i) = phi;
+                [sav.c{i},n] = sort(c(:).'); sav.W{i} = W(:,n); sav.phi{i} = phi;
             end
-
-            % construct the dynamical matrix
-            i2pi=sym(2i*pi); D=sym(zeros(3*pc.natoms)); kvec=sym('k%d',[3,1],'real'); mass=sym('m%d',[1,max(pp.ij(:))],'positive');
-            for p = 1:pp.nshells
-                
-                % take phi from irrep to rep
-                phi = permute( pp.Q{1}(1:3,1:3,pp.Qi(p)) * sav.phi(:,:,pp.p2i(p)) * pp.Q{1}(1:3,1:3,pp.Qi(p)).' , pp.Q{2}(:,pp.Qi(p)) );
-
-                % get block of dynamical matrix by taking phi from rep to orbit
-                B = zeros(3,3); 
-                for m = find(pp.g_ck(:,p).')
-                    r_cart = Qc{1}(1:3,1:3,m) * uc2ws(pp.bas*vec_(pp.xy(pp.Q{2}(:,m),p)),pp.bas); r_cart(abs(r_cart)<am_lib.tiny)=0;
-                    B = B + Qc{1}(1:3,1:3,m) * phi * Qc{1}(1:3,1:3,m).' .* exp( i2pi * dot(sym(r_cart,'d') , kvec) ); 
-                end
-
-                % augment dynamical matrix 
-                mp = 3*(pp.mn(1,p)-1)+[1:3]; 
-                np = 3*(pp.mn(2,p)-1)+[1:3];
-                D( mp,np ) = D( mp,np ) + B; 
-            end
-
-            % multiply by 1/sqrt(mass)
-            mass = repelem(pc.mass(pc.species),1,3); mass = 1./sqrt(mass.' * mass); D = D .* mass;
+            fprintf('(%.f secs)\n',toc);
 
             % create bvk structure
-            bvk_ = @(pc,sav,D) struct('units','cart','latpar',pc.latpar,'bas',pc.bas,'recbas',pc.recbas, ...
-                'vol',pc.vol,'symb',{pc.symb},'mass',pc.mass,'species',pc.species,'natoms',pc.natoms,...
-                'nbands',3*pc.natoms,'nshells',size(sav.W,2),'W',{sav.W},'shell',{sav.shell},...
-                'D',matlabFunction(D));
-            bvk = bvk_(pc,sav,D);
+            bvk_ = @(pp,ip,sav) struct('units','cart','latpar',pp.latpar,'bas',pp.bas2pc*pp.bas,'recbas',inv(pp.bas2pc*pp.bas), ...
+                'vol',abs(det(pp.bas2pc*pp.bas)),'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
+                'nbands',3*pp.pc_natoms,'nshells',size(sav.W,2),'W',{sav.W},'phi',{sav.phi},'d',{ip.d},'xy',ip.xy);
+            bvk = bvk_(pp,ip,sav);
+
+            % define function to get bond vector
+            vec_ = @(xy) uc2ws(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)),pp.bas);
+            
+            % construct symbolic dynamical matrix
+            fprintf(' ... solving for symbolic dynamical matrix '); tic;
+            D=sym(zeros(bvk.nbands)); kvec=sym('k%d',[3,1],'real'); mass=sym('m%d',[1,numel(pp.i2u)],'positive');
+            for p = 1:pp.pc_natoms
+            for j = 1:pp.npairs(p)
+                % get indicies
+                i = pp.i{p}(j);iq = pp.iq{p}(j);
+                x = pp.c{p}(1); y = pp.o{p}(j,1);
+                m = pp.u2p(x); mp = [1:3]+3*(m-1);
+                n = pp.u2p(y); np = [1:3]+3*(n-1);
+
+                % rotate force constants and bond vector
+                xy = [x;y]; rij = vec_(xy(pp.Q{2}(:,iq))); rij(abs(rij)<1E-8) = 0;
+                phi = sym(pp.Q{1}(1:3,1:3,iq)) * permute(bvk.phi{i},pp.Q{2}(:,iq)) * sym(pp.Q{1}(1:3,1:3,iq)).';
+                
+                % build dynamical matrix
+                D(mp,np) = D(mp,np) + phi .* exp(sym(2i*pi * rij(:).','d') * kvec(:) );
+            end
+            end
+            fprintf('(%.f secs)\n',toc);
+
+            % multiply by 1/sqrt(mass)
+            mass = repelem(mass(pp.species(pp.p2u)),1,3); mass = 1./sqrt(mass.' * mass); D = D .* mass;
+
+            % attach symbolic dynamical matrix to bvk
+            bvk.D = matlabFunction(D);
         end
 
-        function [bvk] = set_bvk_acoustic_sum_rules(bvk,pp,uc)
+        function [bvk] = set_bvk_acoustic_sum_rules(bvk,pp)
 
             import am_lib.*
-
-            % get pair symmeteries [cart]
-            sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), ...
-                reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
-            Qc{1} =sym_rebase_(pp.bas,pp.Q{1}); Qc{2} = pp.Q{2};
-            % correct rounding errors in cart
-            for i = 1:numel(Qc{1}); for wdv = [0,1,0.5,sqrt(3)/2]
-                if abs(abs(Qc{1}(i))-wdv)<am_lib.tiny; Qc{1}(i)=wdv*sign(Qc{1}(i)); end
-            end;end
-
-            % index uc based on pairs
-            [ ~ , o_id, i_id, q_id] = get_bvk_lookup_tables(pp,uc);
 
             % build force constants
             phi = zeros(3,3,bvk.nshells);
@@ -1015,26 +847,28 @@ classdef am_lib
             % enforce acoustic sum rule
             for i = 1:bvk.nshells
                 % check if it is a 0-th neighbor shell
-                if pp.xy(1,pp.i2p(i))==pp.xy(2,pp.i2p(i))
+                if bvk.xy(1,i)==bvk.xy(2,i)
                     % get index of primitive cell atom corresponding to this shell
-                    p = pp.mn(1,pp.i2p(i));
-                    % get self force, essentially asr(:,:,1) = -sum(asr(:,:,2:end),3);
-                    asr = zeros(3,3);
-                    for j = 2:size(o_id{p},1)
+                    m = pp.u2p(bvk.xy(1,i));
+                    % get self forces
+                    asr = zeros(3,3,pp.npairs(m));
+                    for j = 1:pp.npairs(m)
                         % get irrep->orbit symmetry
-                        iq = pp.I(q_id{p}(j,1));
-                        % impose asr on force constant
-                        asr = asr - permute( Qc{1}(1:3,1:3,iq) * phi(:,:,i_id{p}(j)) * Qc{1}(1:3,1:3,iq).', pp.Q{2}(:,iq) );
+                        iq = pp.iq{m}(j,1);
+                        % rotate force constants from irrep to orbit
+                        asr(:,:,j) = permute( pp.Q{1}(1:3,1:3,iq) * phi(:,:,pp.i{m}(j)) * pp.Q{1}(1:3,1:3,iq).', pp.Q{2}(:,iq) );
                     end
+                    % impose asr on self-forces
+                    asr = -sum(asr(:,:,pp.o{m}(:,1)~=pp.c{m}(1)),3);
                     % solve for symmetry-adapted force constants
-                    A = double(bvk.W{i}); B = reshape(asr(:,:,1),[],1);
+                    A = double(bvk.W{i}); B = reshape(asr,[],1);
                     % get force constants as row vectors
                     bvk.fc{i} = reshape( A \ B , 1, []); 
                 end
             end
         end
 
-        function [bvk] = get_bvk_force_constants(bvk,pp,uc,fname_force_position)
+        function [bvk] = get_bvk_force_constants(bvk,pp,fname_force_position)
             % Extracts symmetry adapted force constants.
             % get_bvk_force_constants(bvk,ip,load_poscar('infile.supercell'),'infile.force_position.4.04-300')
             % reference supercell : [sc] = load_poscar('infile.supercell');
@@ -1046,36 +880,21 @@ classdef am_lib
 
             import am_lib.*
 
-            % get pair symmeteries [cart]
-            sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), ...
-                reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
-            Qc{1} =sym_rebase_(pp.bas,pp.Q{1}); Qc{2} = pp.Q{2};
-            % correct rounding errors in cart
-            for i = 1:numel(Qc{1}); for wdv = [0,1,0.5,sqrt(3)/2]
-                if abs(abs(Qc{1}(i))-wdv)<am_lib.tiny; Qc{1}(i)=wdv*sign(Qc{1}(i)); end
-            end;end
-
-            % index uc based on pairs
-            [c_id, o_id, i_id, q_id] = get_bvk_lookup_tables(pp,uc);
-
             % load force positions md( 1:3=positions, 4:6=forces , natoms , nsteps )
             fprintf(' ... loading force vs positions '); tic; 
-            [fd] = load_force_position(uc.natoms,fname_force_position); nsteps = size(fd,3);
+            [fd] = load_force_position(pp.natoms,fname_force_position); nsteps = size(fd,3);
             fprintf('(%.f secs)\n',toc);
 
             % convert atomic coordinates [cart,ang] into displacements [cart,ang] by first converting to frac [unitless] and taking modulo
-            fd(1:3,:,:) = matmul_( uc.bas, mod_(matmul_(uc.recbas,fd(1:3,:,:))-uc.tau+0.5)-0.5 );
+            fd(1:3,:,:) = matmul_( pp.bas, mod_(matmul_(pp.recbas,fd(1:3,:,:)-pp.tau) +0.5)-0.5);
 
             % loop over primitive types
             phi=[]; fprintf(' ... solving for force constants '); tic;
-            for m = 1:numel(c_id)
-                % get number of central atoms
-                nprims = numel(c_id{m});
-
+            for m = 1:pp.pc_natoms
                 % get forces : f = [ (x,y,z), (1:natoms)*nsteps ] 
                 % get displacements : u [ (x,y,z)*orbits, (1:natoms)*nsteps ]
                 %  ... and solve for the generalized force constants: FC = f / u 
-                fc = - reshape(fd(4:6,c_id{m},:),3,nprims*nsteps) / reshape(fd(1:3,o_id{m},:),3*size(o_id{m},1),nprims*nsteps);
+                fc = - reshape(fd(4:6,pp.c{m},:),3,pp.ncenters(m)*nsteps) / reshape(fd(1:3,pp.o{m},:),3*pp.npairs(m),pp.ncenters(m)*nsteps);
                 
                 % reshape % NOTE: imposing ASR here is pointless
                 % b/c the force 1-2 constants WILL change when the 2-1
@@ -1086,12 +905,12 @@ classdef am_lib
             fprintf('(%.f secs)\n',toc);
 
             % transform fc from orbit to irrep
-            q = cat(1,q_id{:}); iq = pp.I(q); phi = matmul_(matmul_(Qc{1}(1:3,1:3,q),phi),Qc{1}(1:3,1:3,iq));
+            q = cat(1,pp.q{:}); phi = matmul_(matmul_(pp.Q{1}(1:3,1:3,q),phi),pp.Q{1}(1:3,1:3,q));
             for j = 1:size(phi,3); phi(:,:,j) = permute( phi(:,:,j), pp.Q{2}(:,q(j)) ); end
-
+            
             % solve for symmetry adapted force constants : A x = B
             for i = 1:bvk.nshells
-                ex_ = cat(1,i_id{:})==i;
+                ex_ = cat(1,pp.i{:})==i;
                 if any(ex_)
                     A = repmat(double(bvk.W{i}),sum(ex_),1);
                     B = reshape(phi(:,:,ex_),[],1);
@@ -1102,98 +921,39 @@ classdef am_lib
         end
 
         function [bz]  = get_bvk_dispersion(bvk,bz)
-            % enforce asr (ENFORCING IT WITH set_bvk_acoustic_sum_rules INSTEAD)
-            fc = [bvk.fc{:}]; % ex_ = all([bvk.shell{:}]~=find(bvk.self_ck).',1); fc = fc(ex_);
-
             % get eigenvalues
             bz.hw = zeros(bvk.nbands,bz.nks); bz.U = zeros(bvk.nbands,bvk.nbands,bz.nks);
             for i = 1:bz.nks
                 % define input ...
-                input = num2cell([fc,[bz.recbas*bz.k(:,i)].',bvk.mass(bvk.species)]);
+                input = num2cell([bvk.fc{:},[bz.recbas*bz.k(:,i)].',bvk.mass(bvk.species)]);
                 % ... and evaluate (U are column vectors)
                 [bz.U(:,:,i),bz.hw(:,i)] = eig(bvk.D(input{:}),'vector'); bz.hw(:,i) = sqrt(real(bz.hw(:,i))) * am_lib.units_eV;
             end
         end
 
-        function [bz]  = get_bvk_dispersion_numerically(bvk,bz,pp,uc)
-            % there is generally no need to use this function as long as it
-            % agrees with get_bvk_dispersion.            
-            
-            import am_lib.*
-
-            % get pair symmeteries [cart]
-            sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), ...
-                reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
-            Qc{1} =sym_rebase_(pp.bas,pp.Q{1}); Qc{2} = pp.Q{2};
-            
-            % build force constants
-            phi = zeros(3,3,bvk.nshells);
-            for i = 1:bvk.nshells; phi(:,:,i) = reshape(bvk.W{i}*bvk.fc{i}.',3,3); end
-
-            % build dynamical matrices
-            [c_id,o_id,i_id,q_id] = get_bvk_lookup_tables(pp,uc); D = zeros(bvk.nbands,bvk.nbands,bz.nks);
-            for p = 1:numel(c_id)
-            for j = 1:numel(o_id{1}(:,1))
-                i = i_id{p}(j);
-                iq = pp.I(q_id{p}(j,1)); % symmetry index
-                x = c_id{p}(1); y = o_id{p}(j,1);
-                m = uc.u2p(x); mp = [1:3]+3*(m-1);
-                n = uc.u2p(y); np = [1:3]+3*(n-1);
-
-                % compute force constants and bond vector
-                xy = [x,y]; xy = xy(Qc{2}(:,iq));
-                rij = uc.tau(:,xy(2))-uc.tau(:,xy(1)); rij = uc2ws(uc.bas*rij,uc.bas);
-                phi_p = permute( Qc{1}(1:3,1:3,iq)*phi(:,:,i)*Qc{1}(1:3,1:3,iq).' , pp.Q{2}(:,iq) );
-
-                for k = 1:bz.nks
-                    D(mp,np,k) = D(mp,np,k) + phi_p .* exp( 2i*pi * (bz.recbas*bz.k(:,k)).'*rij );
-                end
-            end
-            end
-            
-            % multiply by 1/sqrt(mass)
-            mass = repelem(bvk.mass(bkv.species),1,3); mass = 1./sqrt(mass.' * mass); D = D .* mass;
-            
-            % get eigenvalues and eigenvectors
-            bz.hw = zeros(bvk.nbands,bz.nks); bz.U = zeros(bvk.nbands,bvk.nbands,bz.nks);
-            for k = 1:bz.nks
-                [bz.U(:,:,k),bz.hw(:,k)] = eig(D(:,:,k),'vector');
-                bz.hw(:,k) = sqrt(real(bz.hw(:,k))) * am_lib.units_eV;
-            end
-        end
-        
-        function [md]  = run_bvk_md(bvk,ip,uc,dt,nsteps,Q,T)    
+        function [md]  = run_bvk_md(bvk,pp,uc,dt,nsteps,Q,T)
             % set time step [ps ~ 0.1], number of MDs steps, Nose-Hoover "mass" Q, and temperature T [K]
             % dt = 0.1; nsteps = 10000; Q = 1; T = 300;
             %
-            % Uses a verlet algorithm. at present the velocities increase rapidly
+            % Uses a verlet algorithm. At present the velocities increase rapidly
             % after a couple time steps. I tried reducing the time step size to see
             % if that was related to a diff.eq. stability issue, but it didn't seem
             % to help. I am suspecting the need to implement a thermostat to keep
-            % the temperature in check, i.e. Nose-Hoover.
-            %
-            % NOTE #1: matching to an irreducible atom may not work if this
-            % instance of the irreducible atom has an orbit which is rotated, i.e.
-            % this irreducible atom is related through a space symmetry which is
-            % not pure translational. I will fix it when this case arises.
-            %
+            % the temperature in check, i.e. Nose-Hoover. Update: Nose-Hoover was
+            % implemented. That, however, did not help. Noticed that ASR were not 
+            % enforced in the force constants. 
 
             import am_lib.*
-
-            % loop over irreducible shells to get central atom and orbit supercell
-            % indices (but organize it by the irreducible type of the center atom)
-            [c_id,o_id,k2ijoy] = get_bvk_lookup_tables(ip,uc);
-
+            
             % build force constants
-            for i = unique(ip.i)
-                nshells = size(k2ijoy{i},1); fc3x3 = zeros(3,3,nshells);
-                for k = 1:nshells
-                    fc3x3(:,:,k) = ip.R(:,:,k2ijoy{i}(k,4)) * reshape(double(bvk.W{k2ijoy{i}(k,2)})*bvk.fc{k2ijoy{i}(k,2)}(:),3,3) * ip.R(:,:,k2ijoy{i}(k,4))';
-                end
-                % reinforce ASR
-                fc3x3(:,:,1) = -sum(fc3x3(:,:,2:end),3);
-                % reshape and flip sign of forces
-                fc{i} = -reshape(fc3x3,3,[]);
+            for m = 1:pp.pc_natoms
+                phi{m} = zeros(3,3*pp.npairs(m));
+            for j = 1:pp.npairs(m)
+                % get indicies
+                i = pp.i{m}(j); iq = pp.iq{m}(j);
+                % rotate force constants and bond vector
+                phi{m}(1:3,[1:3]+3*(j-1)) = permute( pp.Q{1}(1:3,1:3,iq) * reshape(bvk.W{i}*bvk.fc{i}.',3,3) * pp.Q{1}(1:3,1:3,iq).' , pp.Q{2}(:,iq) );
+            end
             end
 
             % allocate position and velocity arrays
@@ -1210,19 +970,19 @@ classdef am_lib
                 u = uc.bas * mod_( tau(:,:,j-1)-uc.tau +.5)-.5;
 
                 % 2) compute force [eV/Ang]
-                for i = 1:numel(c_id); force(:,c_id{i}) = fc{i} * reshape(u(:,o_id{i}), size(o_id{i}).*[3,1]); end
+                for m = 1:pp.pc_natoms; force(:,pp.c{m}) = phi{m} * reshape(u(:,pp.o{m}), size(pp.o{m}).*[3,1]); end
 
                 % 3) compute potential energy [eV/Ang * Ang -> eV]
                 PE(j) = - u(:).'*force(:);
 
                 % 4) compute kinetic energy [ need a change of units here? amu * (Ang/ps)^2 -> 1.036382E-4 eV ]
-                KE(j) = sum(uc.mass.*normc_(uc.bas*vel(:,:,j-1))/2); 
+                KE(j) = sum(uc.mass(uc.species).*normc_(uc.bas*vel(:,:,j-1))/2); 
 
                 % 5) compute Nose-Hoover drag: p_eta = KE - TE; degrees of freedom = 3 (1/2 PE + 1/2 KE per direction)
                 nosehoover = vel(:,:,j-1)/Q * ( KE(j) - 3*uc.natoms*k_boltz*T );
 
                 % 6) get acceleration in [frac]
-                accel = uc.recbas * force ./ repmat(uc.mass,3,1);
+                accel = uc.recbas * force ./ repmat(uc.mass(uc.species),3,1);
 
                 % update md [frac]: x' = x + v * dt; v' = v + a * dt; Nose-Hoover dv/dt becomes a - p_eta / Q * v;
                 tau(:,:,j) = mod_( tau(:,:,j-1) + dt * vel(:,:,j-1) );
@@ -1381,7 +1141,7 @@ classdef am_lib
         end
 
         function [bvk] = get_bvk_interpolation(bvk_1,bvk_2,n)
-            % interpolates froce constants and masses from bvk_1 and bvk_2 on n points (includes end points)
+            % interpolates force constants and masses from bvk_1 and bvk_2 on n points (includes end points)
 
             import am_lib.*
             
@@ -1401,17 +1161,13 @@ classdef am_lib
             end
         end
 
-        function         plot_bvk_dispersion(bvk,bzp,pp,uc)
+        function         plot_bvk_dispersion(bvk,bzp)
             % pp and uc are optional: numerical vs symbolic evaluation.
             
             import am_lib.*
             
             % get phonon band structure along path
-            if nargin == 2
-                bzp = get_bvk_dispersion(bvk,bzp);
-            else
-                bzp = get_bvk_dispersion_numerically(bvk,bzp,pp,uc);
-            end
+            bzp = get_bvk_dispersion(bvk,bzp);
 
             % and plot the results
             fig_ = @(h)       set(h,'color','white');
@@ -1422,22 +1178,25 @@ classdef am_lib
             axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [meV]'); xlabel('Wavevector k');
         end
 
+        
         % electrons
 
-        function [tb,ip] = get_tb(cutoff,pc,spdf,nskips,Ef,fname,flags)
+        function [tb,pp] = get_tb(pc,uc,cutoff,spdf,nskips,Ef,fname,flags)
             % for paper:
             % cutoff = 3; % Angstroms 
             % fname = 'EIGENVAL'
 
+            import am_lib.*
+            
             % continue earlier calc?
             sfile = sprintf('am_tb.mat');
             if and(strfind(flags,'continue'),exist(sfile,'file')); load(sfile); return; end 
 
-            % get shells
-            ip = get_irreducible_shells(pc,cutoff);
-
+            % get irreducible shells
+            [ip,pp] = get_pairs(pc,uc,cutoff);
+            
             % get tb model
-            tb = get_tb_model(ip,spdf);
+            [tb] = get_tb_model(ip,pp,uc,spdf);
 
             % get force constants
             tb = get_tb_matrix_elements(tb,nskips,Ef,fname);
@@ -1446,71 +1205,80 @@ classdef am_lib
             save(sfile,'tb','ip');
         end
 
-        function [tb] = get_tb_model(ip,spdf)
-            % set oribtals per irreducible atom: spdf = {'d','p'};
-            %
-            % NOTE #1: kpoints are in fractional reciprocal units but force
-            % constants are in cartesian units.
+        function [tb] = get_tb_model(ip,pp,uc,spdf)
+            % set oribtals per species: spdf = {'d','p'};
 
             import am_lib.*
+            
+            % set sym digits
+            digits(10);
 
-            % initialize atoms: J = azimuthals, D = symmetry reps, F = flip super-operator
-            [J,D,F] = get_tb_model_initialize_atoms(spdf,ip.R);
+            % initialize irreducible atom properties: D = symmetry reps, F = flip super-operator
+            % set symmetries D{:}, and parity-transpose F{:} for each species 
+            [J,D,F] = get_tb_model_initialize_atoms(spdf,pp.Q{1}(1:3,1:3,:));
 
             % primitive cell atoms define hamiltonian blocks dimensions and start/end sections
-            p2i([ip.m{:}])=ip.i; p2i([ip.n{:}])=ip.j; pc_atoms=unique([ip.m{:},ip.n{:}]); d(pc_atoms)=0; 
-            for p=pc_atoms; d(p)=sum(J{p2i(p)}*2+1); end; E=cumsum(d); S=E-(d)+1; nbands=E(end);
+            p2i=uc.u2i(uc.p2u); for p=[1:pp.pc_natoms]; d(p)=sum(J{p2i(p)}*2+1); end; E=cumsum(d); S=E-d+1; nbands=E(end);
 
-            % initialize dynamical matrix and kvector
-            H = sym(zeros(nbands)); kvec=sym('k%d',[3,1],'real'); [~,~,shell]=unique(rnd_(normc_(ip.v))); shell=shell(:).';
-            alloc_ = @(cel) struct('W',cel,'shell',cel); sav = alloc_({cell(1,ip.nshells)});
+            % get form of force constants for irreducible prototypical bonds
+            fprintf(' ... solving for symbolic force constants '); tic;
             for p = 1:ip.nshells
-                % set abbreviations
-                dij=d(ip.i(p))*d(ip.j(p));
+                % get indicies
+                x = ip.xy(1,p); i = uc.u2i(x); m = uc.u2p(x); mp = S(m):E(m); dm = d(m);
+                y = ip.xy(2,p); j = uc.u2i(y); n = pp.u2p(y); np = S(n):E(n); dn = d(n);
 
                 % use stabilzer group to determine crystallographic symmetry relations; A*B*C' equals kron(C,A)*B(:)
-                W = sym(zeros(dij)); for i = find(ip.s_ck(:,p)).'; W = W + kron( D{ip.j(p)}(:,:,i),D{ip.i(p)}(:,:,i)) - eye(dij); end
+                W = sum(kron_( D{j}(:,:,ip.s_ck(:,p)) , D{i}(:,:,ip.s_ck(:,p)) ) - eye(dm*dn),3);
 
                 % partity transpose 
-                if (ip.i(p)==ip.j(p)); W = W + F{ip.i(p)} - eye(dij); end
+                if (i==j); W = W + F{i}-eye(dm*dn); end
 
-                % get nullspace and normalize to first nonzero element
-                W = null(W); for i = 1:size(W,2); W(:,i) = W(:,i)/W(find(W(:,i),1),i); end; W = rref(W.').';
+                % get linearly-independent nullspace and normalize to first nonzero element
+                W=real(null(W)); W=frref_(W.').'; W(abs(W)<am_lib.eps)=0; W(abs(W-1)<am_lib.eps)=1; W=W./perm_(W,findrow_(W.').');
 
                 % define parameters
-                c = sym(sprintf('c%02i_%%d%%d',p),[d(ip.i(p)),d(ip.j(p))],'real'); c = c(findrow_(double(W).'));
+                c = sym(sprintf('c%02i_%%d%%d',p),[dm,dn],'real'); c = c(findrow_(W.'));
 
-                % print symmetry adapted matrix elements
-                fprintf('v = [%10f,%10f,%10f] \n', ip.v(:,p)); vsk = reshape(W*c(:),d([ip.i(p),ip.j(p)])); disp( vsk )
+                % get symmetry adapted force constants
+                vsk = reshape( sym(W)*c(:), [dm,dn]);
 
-                % get block of dynamical matrix (see NOTE #1)
-                B = zeros( d( ip.i(p) ) , d( ip.j(p) ) ); 
-                for i = find(ip.g_ck(:,p)).'
-                    B = B + D{ip.i(p)}(:,:,i) * vsk * D{ip.j(p)}(:,:,i)' ....
-                        .* exp( sym(2i*pi) * dot(rnd_(ip.recbas*ip.R(:,:,i)*ip.v(:,p)),kvec) ); 
-                end
-
-                % augment hamiltonian
-                for i = 1:numel(ip.m{p})
-                    mp = S(ip.m{p}(i)):E(ip.m{p}(i)); np = S(ip.n{p}(i)):E(ip.n{p}(i));
-                    if (ip.m{p}(i)<0) 
-                        D( np,mp ) = D( np,mp ) + B';
-                    else
-                        D( mp,np ) = D( mp,np ) + B;  
-                    end
-                end
-
-                % save important stuff
-                [~,n] = sort(c); sav.W{p} = W(:,n); sav.shell{p} = ones(size(c))*shell(p); 
+                % save important stuff (sort W to be in line with c, matlabFunction sorts D variables)
+                [sav.c{p},n] = sort(c(:).'); sav.W{p} = W(:,n); sav.shell{p} = ones(1,numel(c))*p; sav.vsk{p} = vsk;
             end
+            fprintf('(%.f secs)\n',toc);
 
-            % simplify the dynamical matrix
-            H = simplify(H,'steps',500);
+            % create bvk structure
+            tb_ = @(pp,ip,sav,nbands) struct('units','cart','latpar',pp.latpar,'bas',pp.bas2pc*pp.bas,'recbas',inv(pp.bas2pc*pp.bas), ...
+                'vol',abs(det(pp.bas2pc*pp.bas)),'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
+                'nbands',nbands,'nshells',size(sav.W,2),'W',{sav.W},'vsk',{sav.vsk},'shell',{sav.shell},'xy',ip.xy);
+            tb = tb_(pp,ip,sav,nbands);
 
-            % build tb structure
-            tb_ = @(ip,sav,H,spdf,nbands) struct('units','cart,frac-recp','bas',ip.bas,'recbas',ip.recbas,'natoms',numel(unique(ip.m)),'spdf',{spdf}, ...
-                'nshells',size(sav.W,2),'W',{sav.W},'shell',{sav.shell},'nbands',nbands,'H',matlabFunction(H));
-            tb = tb_(ip,sav,H,spdf,nbands);
+            % define function to get bond vector
+            vec_ = @(xy) uc2ws(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)),pp.bas);
+            
+            % construct symbolic dynamical matrix
+            fprintf(' ... solving for symbolic tight binding hamiltonian '); tic;
+            H=sym(zeros(tb.nbands)); kvec=sym('k%d',[3,1],'real');
+            for p = 1:pp.pc_natoms
+            for u = 1:pp.npairs(p)
+                % get indicies
+                ir= pp.i{p}(u); iq = pp.iq{p}(u);
+                x = pp.c{p}(1); y = pp.o{p}(u,1); xy = [x;y];
+                i = uc.u2i(x); m = uc.u2p(x); mp = S(m):E(m); dm = d(m);
+                j = uc.u2i(y); n = pp.u2p(y); np = S(n):E(n); dn = d(n);
+
+                % rotate force constants and bond vector
+                rij = vec_(xy(pp.Q{2}(:,iq))); rij(abs(rij)<am_lib.eps) = 0;
+                vsk =  sym(D{i}(:,:,iq)) * permute(tb.vsk{ir},pp.Q{2}(:,iq)) * sym(D{j}(:,:,iq)).';
+                
+                % build dynamical matrix
+                H(mp,np) = H(mp,np) + vsk .* exp(sym(2i*pi * rij(:).','d') * kvec(:) );
+            end
+            end
+            fprintf('(%.f secs)\n',toc);
+            
+            % attach symbolic dynamical matrix to bvk
+            tb.H = matlabFunction(H);
         end
 
         function [tb] = get_tb_matrix_elements(tb,nskips,Ef,fname)
@@ -1622,7 +1390,7 @@ classdef am_lib
             bz.E = zeros(tb.nbands,bz.nks); bz.V = zeros(tb.nbands,tb.nbands,bz.nks);
             for i = 1:bz.nks
                 % define input ...
-                input = num2cell([tb.vsk{:},bz.k(:,i).']);
+                input = num2cell([tb.vsk{:},[bz.recbas*bz.k(:,i)].']);
                 % ... and evaluate (V are column vectors)
                 [bz.V(:,:,i),bz.E(:,i)] = eig(tb.H(input{:}),'vector'); 
             end
@@ -1766,6 +1534,179 @@ classdef am_lib
             set(gcf,'PaperPosition',[0,0,1.6180,1]*3); print(gcf,'-djpeg','-r600','nesting_vs_Ef.jpeg');
         end
 
+        
+        % pairs
+
+        function [ip,pp] = get_pairs(pc,uc,cutoff)
+            %
+            % IMPORTANT: 
+            %    clc; X=PM(A(3,:),:)
+            %    XRef=repmat(X(1,:),size(X,1),1); 
+            %    Qi=findrow_(XRef==X(:,E));
+            %    % These last two are equivalent:
+            %    perm_(X.',MT(:,I(Qi))).'-XRef %   Qi  takes orbits to prototype
+            %    perm_(XRef.',MT(:,Qi)).'-X    % I(Qi) takes prototype to orbit
+            %
+
+            import am_lib.*
+
+            % readjust cutoff based on unitcell
+            cutoff = min([normc_(uc.bas)/2,cutoff]); 
+            
+            % step 1: get pair symmetries symmetries [pc-frac]
+            
+                % get space symmetries
+                [S,~] = get_symmetries(pc); nSs = size(S,3); 
+
+                % save space symmetry combined with permutation of atomic positions as Q
+                M = [[1,2];[2,1]].'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); nQs = nSs*nMs;
+
+                % get multiplication table, list of inverse elements, and identity
+                [MT,E,I]= get_multiplication_table(Q); nQs = size(MT,1);
+            
+            % step 2: [PM, V, ip2pp, and pp2ip]
+            
+                % define function to apply symmetries to position vectors
+                seitz_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
+
+                % get primitive lattice and atomic basis in primitive fractional
+                pc_tau = uc.tau2pc*mod_(uc.tau);
+
+                % determine action of space symmetries on pair positions
+                P1s=[];P2s=[]; npcs=numel(uc.p2u); npairs=zeros(1,npcs);
+                for i = 1:npcs
+                    % identify primitive atom in unit cell
+                    m = uc.p2u(i);
+
+                    % compute cutoff distances, exclude atoms above cutoff, count pairs involving the i-th primitive atom
+                    ex_ = normc_(uc2ws(uc.bas*(uc.tau-uc.tau(:,m)),uc.bas))<cutoff; npairs(i) = sum(ex_);
+
+                    % [pc-frac] compute action of space symmetries on pair positions
+                    tau=[]; mm_ = repmat(m,[1,npairs(i),1]);
+                    tau(:,:,:,1) = seitz_apply_(Q{1},pc_tau(:,mm_)); 
+                    tau(:,:,:,2) = seitz_apply_(Q{1},pc_tau(:,ex_));
+                    for iq = 1:nQs; tau(:,:,iq,:) = tau(1:3,:,iq,Q{2}(:,iq)); end
+
+                    % [uc-frac] shift reference atom to primitive cell and record uc index
+                    G_ = @(tau) tau - mod_(tau); 
+                    tau = mod_(matmul_(uc.bas2pc, tau - G_(tau(:,:,:,1)) ));
+                    P1 = member_(tau(:,:,:,1),uc.tau);
+                    P2 = member_(tau(:,:,:,2),uc.tau);
+
+                    % save results (P1s are always in the primitive cell)
+                    P1s = [P1s;P1]; P2s = [P2s;P2];
+                end
+
+                % create a unique pair label
+                [V,~,V_p2i]=unique([P1s(:),P2s(:)],'rows'); V=V.';
+
+                % get permutation representation (entries are unique pair indicies)
+                PM = reshape(V_p2i,size(P1s)); A = get_connectivity_chart(PM); 
+
+                % get map
+                ip2pp = findrow_(A); pp2ip = [1:size(A,1)]*A;
+            
+            % step 3: [xy, qi, iqi]
+                
+                % get symmetry which takes irrep to orbit
+                qi = findrow_(PM==PM(ip2pp(pp2ip),E)); iqi = I(qi); % i=2; X=perm_(PM(p2i==i,:).',MT(:,qi(p2i==i))).'
+
+                % get uc indicies, vectors, and stabilizers
+                xy = V(:,PM(:,E)); v = uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),uc.bas); s_ck = [PM==PM(:,E)].';
+                
+                % create "irreducible" structure
+                ip_ = @(uc,s_ck,xy,d,v) struct('units','cart','latpar',uc.latpar,'bas',uc.bas2pc*uc.bas,'recbas',inv(uc.bas2pc*uc.bas), ...
+                    'vol',abs(det(uc.bas2pc*uc.bas)),'symb',{uc.symb},'mass',uc.mass,'natoms',numel(uc.p2u),'species',uc.species(uc.p2u),...
+                    'nshells',size(xy,2),'s_ck',s_ck,'xy',xy,'d',d,'v',v);
+                ip = ip_(uc,s_ck(:,ip2pp),xy(:,ip2pp),normc_(v(:,ip2pp)),v(:,ip2pp));
+            
+            % step 4: [c_id, o_id, i_id, q_id]
+            
+                mn = uc.u2p(xy); pc_natoms = numel(uc.p2u);
+                for m = 1:pc_natoms
+                    % record unit cell atoms of primitive type m
+                    c_id{m} = find(uc.u2p==m); ncenters = numel(c_id{m});
+                    % count number of orbits involving primitive cell atom m
+                    npairs = sum(mn(1,:)==m);
+                    % allocate space
+                    o_id{m} = zeros(npairs,ncenters);
+                    i_id{m} = zeros(npairs,1);
+                    q_id{m} = zeros(npairs,1);
+                   iq_id{m} = zeros(npairs,1);
+                    % loop over centers
+                    for n = 1:ncenters
+                        % [uc-frac] find the closest primitive lattice vector to atom n
+                        G = uc.tau(:,c_id{m}(n))-uc.tau(:,uc.p2u(m));
+                        % [uc-frac] shift atom n to the primitive cell
+                        tau = mod_(uc.tau - G); 
+                        % find orbits around c_id{m}(n)
+                        ex_ = member_(uc.tau(:,xy(1,:)),tau).'==c_id{m}(n);
+                        % record uc id for the pairing atom for each orbit
+                        o_id{m}(:,n) = member_(uc.tau(:,xy(2,ex_)),tau).';
+                    end
+                    % irreducible pair index (independent of n)
+                    i_id{m}(:) = pp2ip(ex_);
+                    % symmetry which takes bond to irrep (independent of n)
+                    q_id{m}(:) =  qi(ex_);
+                   iq_id{m}(:) = iqi(ex_);
+                end
+
+            % define primitive pair saving function
+            pp_ = @(uc,c_id,o_id,i_id,q_id,iq_id,Q) struct(...
+                'units','cart',...
+                'latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas,'bas2pc',uc.bas2pc,'tau2pc',uc.tau2pc,...
+                'symb',{uc.symb},'mass',uc.mass,'natoms',uc.natoms,'tau',uc.bas*uc.tau,'species',uc.species,...
+                'u2p',uc.u2p,'u2i',uc.u2i,'p2u',uc.p2u,'i2u',uc.i2u, ...
+                'pc_natoms',numel(uc.p2u),...
+                'npairs',cellfun(@(x)size(x,1),o_id),...
+                'ncenters',cellfun(@(x)size(x,2),o_id), ...
+                'c',{c_id},'o',{o_id},'i',{i_id},'q',{q_id},'iq',{iq_id},...
+                'nQs',size(Q{1},3),'Q',{Q});
+            
+            % covert symmetries [pc-frac] -> [cart]
+            sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), ...
+                reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
+            Q{1} = sym_rebase_(uc.bas2pc*uc.bas,Q{1});
+            % correct rounding errors in cart
+            for i = 1:numel(Q{1}); for wdv = [0,1,.5,sqrt(3)/2]
+                if abs(abs(Q{1}(i))-wdv)<am_lib.tiny; Q{1}(i)=wdv*sign(Q{1}(i)); end
+            end;end
+        
+            % save "primitive" pairs
+            pp = pp_(uc,c_id,o_id,i_id,q_id,iq_id,Q);
+            
+        
+            % print results
+            vec_ = @(xy) uc2ws(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)),pp.bas); Z=[]; 
+            bar_ = @(x) repmat('-',[1,x]); fprintf('%s primitive shells %s\n', bar_(30), bar_(30) );
+            for m = 1:pp.pc_natoms
+                Y=[]; ex_ = uniquemask_(pp.i{m});
+                fprintf('atom %i: %i shells\n', m, sum(ex_));
+                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
+                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
+            for i = 1:pp.npairs(m)
+                if ex_(i)
+                    % record basic info
+                    xyp = [pp.c{m}(1);pp.o{m}(i,1)]; % uc indicies
+                    mn  = uc.u2p(xyp).'; % pc indicies
+                    ij  = uc.u2i(mn).'; % ic indicies
+                    v   = vec_(xyp); d = normc_(v);
+                    ir  = pp.i{m}(i); % irreducible index 
+                    w   = sum(pp.i{m}==ir); % number of points in orbit
+                    % save stuff [ d(1), r(2,3,4), w(5), ij(6,7), mn(8,9), irres(10)]
+                    Y = [Y,[d;v;w;ij;mn;ir]];
+                end
+            end
+                fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Y(:,rankcol_(Y(1,:))) ); fprintf('\n');
+                Z=[Z,Y];
+            end
+            w = accumarray(Z(end,:).',Z(5,:).',[],@sum); Z = Z(:,uniquemask_(Z(end,:).')); Z(5,:) = w; 
+            fprintf('%s irreducible shells %s\n', bar_(29), bar_(29) );
+            fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
+            fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
+            fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Z(:,rankcol_(Z(1,:))) );
+        end
+
     end
     
     % auxiliary functions
@@ -1832,16 +1773,6 @@ classdef am_lib
             C = reshape(repmat(A,[1,size(B,2)]),size(A,1),[]) + reshape(repmat(B,[size(A,2),1]),size(B,1),[]);
         end
 
-        function [C] = check2_(A)
-            % check second dimension
-            C = all(abs(A)<am_lib.tiny,1);
-        end
-
-        function [C] = check3_(A)
-            % define function to compare first two dimensons
-            C = all(all(abs(A)<am_lib.tiny,1),2);
-        end
-
         function [C] = normc_(A)
             % get length of each column vector
             C = sqrt(sum(A.^2,1));
@@ -1878,17 +1809,7 @@ classdef am_lib
             C = (sum(cumsum(A~=0,2)==0,2)+1);
             C = C .* ~all(A==0,2);
         end
-
-        function [C] = findrowrev_(A)
-            % define function to find the last nonzero value in each row of matrix A
-            % returns 0 for rows containing all zeros
-            
-            import am_lib.findrow_
-            
-            C = 1+size(A,2)-findrow_(fliplr(A));
-            C = C .* ~all(A==0,2);
-        end
-
+       
         function [C] = pad_(A,n)
             % pad with zeros
             C = [A,zeros(1,n(2)-size(A,2));zeros(n(1)-size(A,1),n(2))];
@@ -1909,7 +1830,7 @@ classdef am_lib
             C = logical(abs(A)<am_lib.tiny); 
         end
 
-        function [C] = theta_(A)
+        function [C] = heaviside_(A)
             C = logical(A>0);
         end
 
@@ -2177,10 +2098,13 @@ classdef am_lib
         
         % aux electrons
 
-        function [J,D,F] = get_tb_model_initialize_atoms(spdf_list,R)
+        function [J,D,F] = get_tb_model_initialize_atoms(spdf,R)
+            % set symmetries D{:}, and parity-transpose F{:} for each
+            % irreducible atom given a list of orbitals for each
+            % irreducible atom, spdf = {'sp','d'}
 
             import am_lib.*
-            
+
             % get symmetries
             nRs=size(R,3);
 
@@ -2188,16 +2112,16 @@ classdef am_lib
             W=cell(1,3); for j=[1:3]; W{j} = get_wigner(j,R); end
 
             % set orbitals J{:}, symmetries D{:}, and parity-transpose T{:} for each irreducible atom
-            natoms=numel(spdf_list); F=cell(1,natoms);  D=cell(1,natoms);
+            natoms=numel(spdf); F=cell(1,natoms);  D=cell(1,natoms);
             for i = 1:natoms
                 % set orbitals
-                J{i} = spdf2J(spdf_list{i});
+                J{i} = findrow_('spdf'==spdf{i}(:)).'-1;
 
                 % set start and end points for J
                 E=cumsum(J{i}*2+1); S=E-(J{i}*2+1)+1;
 
                 % construct D matrix and lay the ground work construction of parity super-operator
-                d = max(E); P = zeros(1,d); D{i} = sym(zeros(d,d,nRs));
+                d = max(E); P = zeros(1,d); D{i} = zeros(d,d,nRs);
                 for j = 1:length(J{i})
                     if J{i}(j)==0 % s orbital
                         D{i}(S(j):E(j),S(j):E(j),:) = 1;
@@ -2211,13 +2135,11 @@ classdef am_lib
                 f_ = @(x) x(:); A=(P.'*P).*reshape([1:d^2],[d,d]); 
                 F{i}=zeros(d^2,d^2); F{i}(sub2ind([d^2,d^2],abs(f_(A')),abs(f_(A))))=sign(f_(A'));
             end
-        end
-        
-        function [J]     = spdf2J(spdf)
-            o = lower(strtrim(spdf)); norbitals=length(o); J=zeros(1,norbitals);
-            for l = 1:norbitals
-                J(l) = find(strcmp(o(l),{'s','p','d','f'}))-1;
-            end
+            
+            % correct rounding errors in sym (non-exauhstive)
+            for i = 1:numel(D); for j = 1:numel(D{i}); for wdv = [0,1,.5,sqrt(3)/2]
+                if abs(abs(D{i}(j))-wdv)<am_lib.eps; D{i}(j)=wdv*sign(real(D{i}(j))); end
+            end;end;end
         end
         
         function [Wtes] = get_wigner(j,R)
@@ -2268,7 +2190,6 @@ classdef am_lib
                 Wtes = T' * Wsph * T ;
             end
         end
-
 
 
         % aux functions
