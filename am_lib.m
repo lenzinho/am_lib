@@ -801,7 +801,7 @@ classdef am_lib
             % create bvk structure
             bvk_ = @(pp,ip,sav) struct('units','cart','latpar',pp.latpar,'bas',pp.bas2pc*pp.bas,'recbas',inv(pp.bas2pc*pp.bas), ...
                 'vol',abs(det(pp.bas2pc*pp.bas)),'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
-                'nbands',3*pp.pc_natoms,'nshells',size(sav.W,2),'W',{sav.W},'phi',{sav.phi},'d',{ip.d},'xy',ip.xy);
+                'nbands',3*pp.pc_natoms,'nshells',size(sav.W,2),'W',{sav.W},'phi',{sav.phi},'d',ip.d,'v',ip.v,'xy',ip.xy);
             bvk = bvk_(pp,ip,sav);
 
             % define function to get bond vector
@@ -930,235 +930,235 @@ classdef am_lib
             end
         end
 
-        function [md]  = run_bvk_md(bvk,pp,uc,dt,nsteps,Q,T)
-            % set time step [ps ~ 0.1], number of MDs steps, Nose-Hoover "mass" Q, and temperature T [K]
-            % dt = 0.1; nsteps = 10000; Q = 1; T = 300;
-            %
-            % Uses a verlet algorithm. At present the velocities increase rapidly
-            % after a couple time steps. I tried reducing the time step size to see
-            % if that was related to a diff.eq. stability issue, but it didn't seem
-            % to help. I am suspecting the need to implement a thermostat to keep
-            % the temperature in check, i.e. Nose-Hoover. Update: Nose-Hoover was
-            % implemented. That, however, did not help. Noticed that ASR were not 
-            % enforced in the force constants. 
+%         function [md]  = run_bvk_md(bvk,pp,uc,dt,nsteps,Q,T)
+%             % set time step [ps ~ 0.1], number of MDs steps, Nose-Hoover "mass" Q, and temperature T [K]
+%             % dt = 0.1; nsteps = 10000; Q = 1; T = 300;
+%             %
+%             % Uses a verlet algorithm. At present the velocities increase rapidly
+%             % after a couple time steps. I tried reducing the time step size to see
+%             % if that was related to a diff.eq. stability issue, but it didn't seem
+%             % to help. I am suspecting the need to implement a thermostat to keep
+%             % the temperature in check, i.e. Nose-Hoover. Update: Nose-Hoover was
+%             % implemented. That, however, did not help. Noticed that ASR were not 
+%             % enforced in the force constants. 
+% 
+%             import am_lib.*
+%             
+%             % build force constants
+%             for m = 1:pp.pc_natoms
+%                 phi{m} = zeros(3,3*pp.npairs(m));
+%             for j = 1:pp.npairs(m)
+%                 % get indicies
+%                 i = pp.i{m}(j); iq = pp.iq{m}(j);
+%                 % rotate force constants and bond vector
+%                 phi{m}(1:3,[1:3]+3*(j-1)) = permute( pp.Q{1}(1:3,1:3,iq) * reshape(bvk.W{i}*bvk.fc{i}.',3,3) * pp.Q{1}(1:3,1:3,iq).' , pp.Q{2}(:,iq) );
+%             end
+%             end
+% 
+%             % allocate position and velocity arrays
+%             tau = zeros(3,uc.natoms,nsteps); vel = zeros(3,uc.natoms,nsteps); force = zeros(3,uc.natoms);
+% 
+%             % set initial value conditions: random displacement between +/- 0.001 [frac]
+%             tau(:,:,1) = uc.tau + (.5-rand(3,uc.natoms))*0.001;
+%             vel(:,:,1) = zeros(3,uc.natoms); 
+% 
+%             % run md using verlet algorithm
+%             KE=zeros(1,nsteps); PE=zeros(1,nsteps); k_boltz = 0.000086173303; % [eV/K]
+%             for j = 2:nsteps
+%                 % 1) get displacements [frac->cart:Ang]
+%                 u = uc.bas * mod_( tau(:,:,j-1)-uc.tau +.5)-.5;
+% 
+%                 % 2) compute force [eV/Ang]
+%                 for m = 1:pp.pc_natoms; force(:,pp.c{m}) = phi{m} * reshape(u(:,pp.o{m}), size(pp.o{m}).*[3,1]); end
+% 
+%                 % 3) compute potential energy [eV/Ang * Ang -> eV]
+%                 PE(j) = - u(:).'*force(:);
+% 
+%                 % 4) compute kinetic energy [ need a change of units here? amu * (Ang/ps)^2 -> 1.036382E-4 eV ]
+%                 KE(j) = sum(uc.mass(uc.species).*normc_(uc.bas*vel(:,:,j-1))/2); 
+% 
+%                 % 5) compute Nose-Hoover drag: p_eta = KE - TE; degrees of freedom = 3 (1/2 PE + 1/2 KE per direction)
+%                 nosehoover = vel(:,:,j-1)/Q * ( KE(j) - 3*uc.natoms*k_boltz*T );
+% 
+%                 % 6) get acceleration in [frac]
+%                 accel = uc.recbas * force ./ repmat(uc.mass(uc.species),3,1);
+% 
+%                 % update md [frac]: x' = x + v * dt; v' = v + a * dt; Nose-Hoover dv/dt becomes a - p_eta / Q * v;
+%                 tau(:,:,j) = mod_( tau(:,:,j-1) + dt * vel(:,:,j-1) );
+%                 vel(:,:,j) =       vel(:,:,j-1) + dt * ( accel  - nosehoover );
+% 
+%                 if  j==2
+%                     fprintf('%10s   %10s     %10s   %10s   %10s \n','step','temp','PE','KE','PE+KE');
+%                 elseif mod(j,50)==0
+%                     fprintf('%10i   %10f K   %10f   %10f   %10f \n',j, KE(j)/(3*uc.natoms)/k_boltz,PE(j),KE(j),PE(j)+KE(j));
+%                     %
+%                     figure(1); set(gcf,'color','white'); 
+%                     plot([1:nsteps],[KE;PE;KE+PE].');legend('KE','PE','KE+PE')
+%                     xlabel('step'); ylabel('energy [eV]'); xlim([0,nsteps]); drawnow;
+%                 end
+%             end
+% 
+%             % define md creation function
+%             md_ = @(uc,tau,vel,dt,KE,PE) struct('header','md simulation','latpar',uc.latpar,...
+%                 'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,'symb',{{uc.symb{:}}},...
+%                 'nspecies',uc.nspecies,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
+%                 'species',uc.species,'mass',uc.mass,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE);
+%             md = md_(uc,tau,vel,dt,KE,PE);
+% 
+% 
+%             % 
+%             % plot positions, position and velocity histograms
+%             hist_v = zeros(uc.natoms,nsteps); hist_u = zeros(uc.natoms,nsteps);
+%             for i = 1:nsteps; hist_v(:,i) = normc_(md.vel(:,:,i)); hist_u(:,i) = normc_(mod_(md.tau(:,:,i)-uc.tau+.5)-.5); end
+%             for i = 1:50:nsteps 
+%                 subplot(2,1,1); plot3(tau(1,:,i), tau(2,:,i), tau(3,:,i),'.', 'markersize', 20); view([0 0 1]); daspect([1 1 1]); drawnow; title(num2str(i));
+%                 subplot(2,2,3); histogram(hist_v(:,i),linspace(0,max(hist_v(:)),100)); ylim([0 uc.natoms/10]); drawnow; 
+%                 subplot(2,2,4); histogram(hist_u(:,i),linspace(0,max(hist_u(:)),100)); ylim([0 uc.natoms/10]); drawnow; 
+%             end
+% 
+%             % units = 4.1356; % [1/ps = THz -> meV]
+%             % 
+%             % psd_ = @(x) abs(fft(x)).^2;
+%             % 
+%             % psd = 0;
+%             % for j = 1:3
+%             % for i = 1:uc.natoms
+%             %     psd = psd + psd_(squeeze(vel(j,i,3000:end)));
+%             % end
+%             % end
+%             % 
+%             % semilogy( psd(1:end/2) ); axis tight
+%         end
 
-            import am_lib.*
-            
-            % build force constants
-            for m = 1:pp.pc_natoms
-                phi{m} = zeros(3,3*pp.npairs(m));
-            for j = 1:pp.npairs(m)
-                % get indicies
-                i = pp.i{m}(j); iq = pp.iq{m}(j);
-                % rotate force constants and bond vector
-                phi{m}(1:3,[1:3]+3*(j-1)) = permute( pp.Q{1}(1:3,1:3,iq) * reshape(bvk.W{i}*bvk.fc{i}.',3,3) * pp.Q{1}(1:3,1:3,iq).' , pp.Q{2}(:,iq) );
-            end
-            end
-
-            % allocate position and velocity arrays
-            tau = zeros(3,uc.natoms,nsteps); vel = zeros(3,uc.natoms,nsteps); force = zeros(3,uc.natoms);
-
-            % set initial value conditions: random displacement between +/- 0.001 [frac]
-            tau(:,:,1) = uc.tau + (.5-rand(3,uc.natoms))*0.001;
-            vel(:,:,1) = zeros(3,uc.natoms); 
-
-            % run md using verlet algorithm
-            KE=zeros(1,nsteps); PE=zeros(1,nsteps); k_boltz = 0.000086173303; % [eV/K]
-            for j = 2:nsteps
-                % 1) get displacements [frac->cart:Ang]
-                u = uc.bas * mod_( tau(:,:,j-1)-uc.tau +.5)-.5;
-
-                % 2) compute force [eV/Ang]
-                for m = 1:pp.pc_natoms; force(:,pp.c{m}) = phi{m} * reshape(u(:,pp.o{m}), size(pp.o{m}).*[3,1]); end
-
-                % 3) compute potential energy [eV/Ang * Ang -> eV]
-                PE(j) = - u(:).'*force(:);
-
-                % 4) compute kinetic energy [ need a change of units here? amu * (Ang/ps)^2 -> 1.036382E-4 eV ]
-                KE(j) = sum(uc.mass(uc.species).*normc_(uc.bas*vel(:,:,j-1))/2); 
-
-                % 5) compute Nose-Hoover drag: p_eta = KE - TE; degrees of freedom = 3 (1/2 PE + 1/2 KE per direction)
-                nosehoover = vel(:,:,j-1)/Q * ( KE(j) - 3*uc.natoms*k_boltz*T );
-
-                % 6) get acceleration in [frac]
-                accel = uc.recbas * force ./ repmat(uc.mass(uc.species),3,1);
-
-                % update md [frac]: x' = x + v * dt; v' = v + a * dt; Nose-Hoover dv/dt becomes a - p_eta / Q * v;
-                tau(:,:,j) = mod_( tau(:,:,j-1) + dt * vel(:,:,j-1) );
-                vel(:,:,j) =       vel(:,:,j-1) + dt * ( accel  - nosehoover );
-
-                if  j==2
-                    fprintf('%10s   %10s     %10s   %10s   %10s \n','step','temp','PE','KE','PE+KE');
-                elseif mod(j,50)==0
-                    fprintf('%10i   %10f K   %10f   %10f   %10f \n',j, KE(j)/(3*uc.natoms)/k_boltz,PE(j),KE(j),PE(j)+KE(j));
-                    %
-                    figure(1); set(gcf,'color','white'); 
-                    plot([1:nsteps],[KE;PE;KE+PE].');legend('KE','PE','KE+PE')
-                    xlabel('step'); ylabel('energy [eV]'); xlim([0,nsteps]); drawnow;
-                end
-            end
-
-            % define md creation function
-            md_ = @(uc,tau,vel,dt,KE,PE) struct('header','md simulation','latpar',uc.latpar,...
-                'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,'symb',{{uc.symb{:}}},...
-                'nspecies',uc.nspecies,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
-                'species',uc.species,'mass',uc.mass,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE);
-            md = md_(uc,tau,vel,dt,KE,PE);
-
-
-            % 
-            % plot positions, position and velocity histograms
-            hist_v = zeros(uc.natoms,nsteps); hist_u = zeros(uc.natoms,nsteps);
-            for i = 1:nsteps; hist_v(:,i) = normc_(md.vel(:,:,i)); hist_u(:,i) = normc_(mod_(md.tau(:,:,i)-uc.tau+.5)-.5); end
-            for i = 1:50:nsteps 
-                subplot(2,1,1); plot3(tau(1,:,i), tau(2,:,i), tau(3,:,i),'.', 'markersize', 20); view([0 0 1]); daspect([1 1 1]); drawnow; title(num2str(i));
-                subplot(2,2,3); histogram(hist_v(:,i),linspace(0,max(hist_v(:)),100)); ylim([0 uc.natoms/10]); drawnow; 
-                subplot(2,2,4); histogram(hist_u(:,i),linspace(0,max(hist_u(:)),100)); ylim([0 uc.natoms/10]); drawnow; 
-            end
-
-            % units = 4.1356; % [1/ps = THz -> meV]
-            % 
-            % psd_ = @(x) abs(fft(x)).^2;
-            % 
-            % psd = 0;
-            % for j = 1:3
-            % for i = 1:uc.natoms
-            %     psd = psd + psd_(squeeze(vel(j,i,3000:end)));
-            % end
-            % end
-            % 
-            % semilogy( psd(1:end/2) ); axis tight
-        end
-
-        function [dc]  = get_bvk_displacement(bvk,ip,uc,nsteps,kpt,amplitude,mode)
-            % kpt = [0,0,1]; % must be commensurate with uc!!!
-            % nsteps = 10;
-            % amp = 1; % displacement amplitude
-            % mode = 1
-           
-            % load force constants (ignoring self-forces) and define input
-            fc = [bvk.fc{:}]; fc = fc([bvk.shell{:}]~=1);
-            input = num2cell([fc,kpt(:).',bvk.mass]); [U,hw]=eig(bvk.D(input{:})); 
-            hw=sqrt(real(diag(hw)))*am_lib.units_eV; [hw,inds]=sort(hw); U=U(:,inds);
-
-            % select a mode
-            fprintf('Energies [meV]\n');fprintf('%5.2f \n',hw*1E3);
-            fprintf('Mode selected: %i \n',mode);
-
-            % get transformation from normal coordinates to displacement + velocity
-            q2u = get_bvk_normal_transform(bvk,uc,U,kpt);
-
-            % get central atom and orbit supercell indices
-            [c_id,o_id,k2ijoy] = get_bvk_lookup_tables(ip,uc);
-
-            % build force constants
-            fc = get_fc_matrix(bvk,ip,k2ijoy);
-
-            % convert phonon energies back from eV into crazy frequency units [eV/Ang^2-amu]
-            hw = hw./am_lib.units_eV;
-
-            % initialize all arrays 
-            PEr=zeros(1,nsteps); KEr=zeros(1,nsteps); PE=zeros(1,nsteps); KE=zeros(1,nsteps);
-            tau=zeros(3,uc.natoms,nsteps);vel=zeros(3,uc.natoms,nsteps);F=zeros(3,uc.natoms);
-
-            % displace according to the phonon mode
-            t=[0:(nsteps-1)]/(nsteps-1); shape_ = @(A) reshape(A,3,uc.natoms); 
-            for i = 1:nsteps
-                % build q_sk vector
-                q_sk = zeros(bvk.nbands,1); q_sk(mode,1) = amplitude * exp(2i*pi*t(i));
-
-                % get displacement and velocities in [cart]
-                u = shape_(real( q2u*(q_sk(:)       ) ));
-                v = shape_(imag( q2u*(q_sk(:).*hw(:)) ));
-
-                % save positions and velocities in [frac]
-                tau(:,:,i) = uc.tau + bvk.recbas * u;
-                vel(:,:,i) =          bvk.recbas * v;
-
-                % evaluate forces F on each atom : fc [eV/Ang^2] * u [Ang]
-                for j = 1:numel(c_id); F(:,c_id{j}) = fc{j} * reshape(u(:,o_id{j}),size(o_id{j}).*[3,1]); end
-
-                % get potential energy :: sqrt( D [Hz] = fc [eV/Ang^2] * 1/(amu) ) * hbar / eV
-                PEr(i) = - u(:).'*F(:);
-                % get kinetic energy [eV]
-                KEr(i)= sum(v.^2,1)*uc.mass(:)/2;
-
-                % get potential energy (Ziman Eq. 1.6.17)
-                PE(i) = real( real(   q_sk(:)).'*hw(:) )^2/2;
-                % get kinetic energy (Ziman Eq. 1.6.17)
-                KE(i) = real( real(1i*q_sk(:)).'*hw(:) )^2/4;
-            end
-
-            % set time step :  sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz = 1/ps]
-            dt=(nsteps-1)/(hw(:) * am_lib.units_THz);
-
-            % create displaced structure
-            md_ = @(uc,tau,vel,dt,KE,PE) struct('units','frac','latpar',uc.latpar,...
-                'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,'symb',{{uc.symb{:}}},...
-                'nspecies',uc.nspecies,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
-                'species',uc.species,'mass',uc.mass,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE);
-            dc = md_(uc,tau,vel,dt,KE,PE);
-
-            figure(1); 
-            subplot(2,1,1); plot([1:nsteps],KEr,'-',[1:nsteps],KE,'.'); legend('Ref. KE','KE');
-            subplot(2,1,2); plot([1:nsteps],PEr,'-',[1:nsteps],PE,'.'); legend('Ref. PE','PE');
-
-            function fc = get_fc_matrix(bvk,ip,k2ijoy)
-                % build force constants
-                fc(unique(ip.i))=cell(1);
-                for ii = unique(ip.i)
-                    nshells = size(k2ijoy{ii},1); fc3x3 = zeros(3,3,nshells);
-                    for ki = 1:nshells
-                        fc3x3(:,:,ki) = ip.R(:,:,k2ijoy{ii}(ki,4)) * reshape(double(bvk.W{k2ijoy{ii}(ki,2)})*bvk.fc{k2ijoy{ii}(ki,2)}(:),3,3) * ip.R(:,:,k2ijoy{ii}(ki,4))';
-                    end
-                    % enforce ASR
-                    fc3x3(:,:,1) = -sum(fc3x3(:,:,2:end),3);
-                    % reshape and flip sign of forces
-                    fc{ii} = -reshape(fc3x3,3,[]);
-                end
-            end
-
-            function q2u = get_bvk_normal_transform(bvk,uc,U,kpt)
-                % get q2u linear operator to convert normal phonon coordinates to
-                % displacements and velocities (vectorized Wallace Eq. 10.41, p. 113): 
-                % U = q2u [ 1:3 * uc.natoms , bvk.nbands * ibz.nks ]  * q_ks
-
-                % define vector normal function
-                normc_ = @(A) sqrt(sum(abs(A).^2,1));
-                % get number of kpoints
-                nkpts = size(kpt,2);
-                % get mass vector [3 natoms * 1]
-                M = repelem( uc.mass(:) ,3,1);
-                % get expoential factor [ 3 natoms * nks nbands ]
-                E = repelem( (uc.bas*uc.tau).'*(bvk.recbas*kpt) ,3, bvk.nbands );
-                % get eigenvectors in supercell basis [ 3 natoms * nks nbands ]; W should be orthonormal: spy(abs(W'*W)>1E-5) = identity
-                W = reshape( U(reshape([1:3].'+3*(uc.u2p-1),1,[]),:,:), 3*uc.natoms, bvk.nbands*nkpts) .* exp(+2i.*pi.*E); W = W./normc_(W);
-                % construct linear operator (multiply by q_sk to get displacements)
-                q2u = real( W ./ sqrt(M) ) ;
-            end
-
-        end
-
-        function [bvk] = get_bvk_interpolation(bvk_1,bvk_2,n)
-            % interpolates force constants and masses from bvk_1 and bvk_2 on n points (includes end points)
-
-            import am_lib.*
-            
-            bvk_ = @(bvk,mass,fc) struct('units','cart','bas',bvk.bas,'recbas',bvk.recbas,'natoms',bvk.natoms,'mass',mass, ...
-                'nshells',bvk.nshells,'W',{bvk.W},'shell',{bvk.shell},'nbands',bvk.nbands,'D',bvk.D,'fc',{fc});
-
-            fc_interp = nlinspace( [bvk_1.fc{:}] , [bvk_2.fc{:}] , n );
-            mu_interp = nlinspace( [bvk_1.mass]  , [bvk_2.mass]  , n );
-
-            % get dimensions
-            for i = 1:numel(bvk_1.fc); m(i) = numel(bvk_1.fc{i}); end; E = cumsum(m); S = E - m + 1;
-
-            % create bvks cells
-            for i = 1:n
-                for j = 1:numel(E); fc{j} = fc_interp(S(j):E(j),i).'; end
-                bvk(i) = bvk_(bvk_1,mu_interp(:,i).',fc);
-            end
-        end
+%         function [dc]  = get_bvk_displacement(bvk,ip,uc,nsteps,kpt,amplitude,mode)
+%             % kpt = [0,0,1]; % must be commensurate with uc!!!
+%             % nsteps = 10;
+%             % amp = 1; % displacement amplitude
+%             % mode = 1
+%            
+%             % load force constants (ignoring self-forces) and define input
+%             fc = [bvk.fc{:}]; fc = fc([bvk.shell{:}]~=1);
+%             input = num2cell([fc,kpt(:).',bvk.mass]); [U,hw]=eig(bvk.D(input{:})); 
+%             hw=sqrt(real(diag(hw)))*am_lib.units_eV; [hw,inds]=sort(hw); U=U(:,inds);
+% 
+%             % select a mode
+%             fprintf('Energies [meV]\n');fprintf('%5.2f \n',hw*1E3);
+%             fprintf('Mode selected: %i \n',mode);
+% 
+%             % get transformation from normal coordinates to displacement + velocity
+%             q2u = get_bvk_normal_transform(bvk,uc,U,kpt);
+% 
+%             % get central atom and orbit supercell indices
+%             [c_id,o_id,k2ijoy] = get_bvk_lookup_tables(ip,uc);
+% 
+%             % build force constants
+%             fc = get_fc_matrix(bvk,ip,k2ijoy);
+% 
+%             % convert phonon energies back from eV into crazy frequency units [eV/Ang^2-amu]
+%             hw = hw./am_lib.units_eV;
+% 
+%             % initialize all arrays 
+%             PEr=zeros(1,nsteps); KEr=zeros(1,nsteps); PE=zeros(1,nsteps); KE=zeros(1,nsteps);
+%             tau=zeros(3,uc.natoms,nsteps);vel=zeros(3,uc.natoms,nsteps);F=zeros(3,uc.natoms);
+% 
+%             % displace according to the phonon mode
+%             t=[0:(nsteps-1)]/(nsteps-1); shape_ = @(A) reshape(A,3,uc.natoms); 
+%             for i = 1:nsteps
+%                 % build q_sk vector
+%                 q_sk = zeros(bvk.nbands,1); q_sk(mode,1) = amplitude * exp(2i*pi*t(i));
+% 
+%                 % get displacement and velocities in [cart]
+%                 u = shape_(real( q2u*(q_sk(:)       ) ));
+%                 v = shape_(imag( q2u*(q_sk(:).*hw(:)) ));
+% 
+%                 % save positions and velocities in [frac]
+%                 tau(:,:,i) = uc.tau + bvk.recbas * u;
+%                 vel(:,:,i) =          bvk.recbas * v;
+% 
+%                 % evaluate forces F on each atom : fc [eV/Ang^2] * u [Ang]
+%                 for j = 1:numel(c_id); F(:,c_id{j}) = fc{j} * reshape(u(:,o_id{j}),size(o_id{j}).*[3,1]); end
+% 
+%                 % get potential energy :: sqrt( D [Hz] = fc [eV/Ang^2] * 1/(amu) ) * hbar / eV
+%                 PEr(i) = - u(:).'*F(:);
+%                 % get kinetic energy [eV]
+%                 KEr(i)= sum(v.^2,1)*uc.mass(:)/2;
+% 
+%                 % get potential energy (Ziman Eq. 1.6.17)
+%                 PE(i) = real( real(   q_sk(:)).'*hw(:) )^2/2;
+%                 % get kinetic energy (Ziman Eq. 1.6.17)
+%                 KE(i) = real( real(1i*q_sk(:)).'*hw(:) )^2/4;
+%             end
+% 
+%             % set time step :  sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz = 1/ps]
+%             dt=(nsteps-1)/(hw(:) * am_lib.units_THz);
+% 
+%             % create displaced structure
+%             md_ = @(uc,tau,vel,dt,KE,PE) struct('units','frac','latpar',uc.latpar,...
+%                 'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,'symb',{{uc.symb{:}}},...
+%                 'nspecies',uc.nspecies,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
+%                 'species',uc.species,'mass',uc.mass,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE);
+%             dc = md_(uc,tau,vel,dt,KE,PE);
+% 
+%             figure(1); 
+%             subplot(2,1,1); plot([1:nsteps],KEr,'-',[1:nsteps],KE,'.'); legend('Ref. KE','KE');
+%             subplot(2,1,2); plot([1:nsteps],PEr,'-',[1:nsteps],PE,'.'); legend('Ref. PE','PE');
+% 
+%             function fc = get_fc_matrix(bvk,ip,k2ijoy)
+%                 % build force constants
+%                 fc(unique(ip.i))=cell(1);
+%                 for ii = unique(ip.i)
+%                     nshells = size(k2ijoy{ii},1); fc3x3 = zeros(3,3,nshells);
+%                     for ki = 1:nshells
+%                         fc3x3(:,:,ki) = ip.R(:,:,k2ijoy{ii}(ki,4)) * reshape(double(bvk.W{k2ijoy{ii}(ki,2)})*bvk.fc{k2ijoy{ii}(ki,2)}(:),3,3) * ip.R(:,:,k2ijoy{ii}(ki,4))';
+%                     end
+%                     % enforce ASR
+%                     fc3x3(:,:,1) = -sum(fc3x3(:,:,2:end),3);
+%                     % reshape and flip sign of forces
+%                     fc{ii} = -reshape(fc3x3,3,[]);
+%                 end
+%             end
+% 
+%             function q2u = get_bvk_normal_transform(bvk,uc,U,kpt)
+%                 % get q2u linear operator to convert normal phonon coordinates to
+%                 % displacements and velocities (vectorized Wallace Eq. 10.41, p. 113): 
+%                 % U = q2u [ 1:3 * uc.natoms , bvk.nbands * ibz.nks ]  * q_ks
+% 
+%                 % define vector normal function
+%                 normc_ = @(A) sqrt(sum(abs(A).^2,1));
+%                 % get number of kpoints
+%                 nkpts = size(kpt,2);
+%                 % get mass vector [3 natoms * 1]
+%                 M = repelem( uc.mass(:) ,3,1);
+%                 % get expoential factor [ 3 natoms * nks nbands ]
+%                 E = repelem( (uc.bas*uc.tau).'*(bvk.recbas*kpt) ,3, bvk.nbands );
+%                 % get eigenvectors in supercell basis [ 3 natoms * nks nbands ]; W should be orthonormal: spy(abs(W'*W)>1E-5) = identity
+%                 W = reshape( U(reshape([1:3].'+3*(uc.u2p-1),1,[]),:,:), 3*uc.natoms, bvk.nbands*nkpts) .* exp(+2i.*pi.*E); W = W./normc_(W);
+%                 % construct linear operator (multiply by q_sk to get displacements)
+%                 q2u = real( W ./ sqrt(M) ) ;
+%             end
+% 
+%         end
+% 
+%         function [bvk] = get_bvk_interpolation(bvk_1,bvk_2,n)
+%             % interpolates force constants and masses from bvk_1 and bvk_2 on n points (includes end points)
+% 
+%             import am_lib.*
+%             
+%             bvk_ = @(bvk,mass,fc) struct('units','cart','bas',bvk.bas,'recbas',bvk.recbas,'natoms',bvk.natoms,'mass',mass, ...
+%                 'nshells',bvk.nshells,'W',{bvk.W},'shell',{bvk.shell},'nbands',bvk.nbands,'D',bvk.D,'fc',{fc});
+% 
+%             fc_interp = nlinspace( [bvk_1.fc{:}] , [bvk_2.fc{:}] , n );
+%             mu_interp = nlinspace( [bvk_1.mass]  , [bvk_2.mass]  , n );
+% 
+%             % get dimensions
+%             for i = 1:numel(bvk_1.fc); m(i) = numel(bvk_1.fc{i}); end; E = cumsum(m); S = E - m + 1;
+% 
+%             % create bvks cells
+%             for i = 1:n
+%                 for j = 1:numel(E); fc{j} = fc_interp(S(j):E(j),i).'; end
+%                 bvk(i) = bvk_(bvk_1,mu_interp(:,i).',fc);
+%             end
+%         end
 
         function         plot_bvk_dispersion(bvk,bzp)
             % pp and uc are optional: numerical vs symbolic evaluation.
@@ -1242,14 +1242,14 @@ classdef am_lib
                 vsk = reshape( sym(W)*c(:), [dm,dn]);
 
                 % save important stuff (sort W to be in line with c, matlabFunction sorts D variables)
-                [sav.c{p},n] = sort(c(:).'); sav.W{p} = W(:,n); sav.shell{p} = ones(1,numel(c))*p; sav.vsk{p} = vsk;
+                [sav.c{p},n] = sort(c(:).'); sav.W{p} = W(:,n); sav.vsk{p} = vsk;
             end
             fprintf('(%.f secs)\n',toc);
 
             % create bvk structure
             tb_ = @(pp,ip,sav,nbands) struct('units','cart','latpar',pp.latpar,'bas',pp.bas2pc*pp.bas,'recbas',inv(pp.bas2pc*pp.bas), ...
                 'vol',abs(det(pp.bas2pc*pp.bas)),'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
-                'nbands',nbands,'nshells',size(sav.W,2),'W',{sav.W},'vsk',{sav.vsk},'shell',{sav.shell},'xy',ip.xy);
+                'nbands',nbands,'nshells',size(sav.W,2),'W',{sav.W},'vsk',{sav.vsk},'xy',ip.xy,'d',ip.d,'v',ip.v);
             tb = tb_(pp,ip,sav,nbands);
 
             % define function to get bond vector
@@ -1285,6 +1285,8 @@ classdef am_lib
             % nskips : number of dft bands to skip (e.g. 5)
             % fname  : eigenval file (e.g. 'EIGENVAL')
 
+            import am_lib.*
+            
             % load dispersion [frac-recp] and shift Fermi energy to zero
             [dft,bz]=load_vasp_eigenval(fname); dft.E = dft.E - Ef; 
 
@@ -1294,16 +1296,12 @@ classdef am_lib
             % set array parameter size calculator for selected shells
             nxs_ = @(selector_shell) sum(any([tb.shell{:}]==selector_shell(:),1));
 
-            % fit gamma point band energies to zero-th neighbor shell parameters
-            selector_shell = [1]; selector_kpoint = 1; x=zeros(1,nxs_(selector_shell));
-            x_best = optimize_and_plot(tb,bz,dft,x,selector_kpoint,selector_shell,nskips);
-
             % fit neighbor parameter at high symmetry points using poor man's simulated anneal
-            shells=unique([tb.shell{:}]);
-            for j = shells(2:end)
+            [~,~,shells]=unique(rnd_(tb.d)); shells=repelem(shells.',cellfun(@(x)size(x,2),tb.W));
+            for j = 1:max(shells)
 
                 % select shells and kpoints
-                selector_shell=[selector_shell,j]; selector_kpoint = round(linspace(1,bz.nks,10)); kT = 20;
+                selector_shell=[1:j]; selector_kpoint = round(linspace(1,bz.nks,10)); kT = 20;
 
                 for i = 1:20
                     if i == 1 % initialize
@@ -1321,7 +1319,7 @@ classdef am_lib
             end
 
             % five final last pass with all parameters and all kpoints
-            selector_shell=shells; selector_kpoint=[1:bz.nks]; kT = 5;
+            selector_shell=[1:max(shells)]; selector_kpoint=[1:bz.nks]; kT = 5;
             [x,r] = optimize_and_plot(tb,bz,dft,x,selector_kpoint,selector_shell,nskips);
 
             % save r_best parameter
