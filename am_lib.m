@@ -746,10 +746,10 @@ classdef am_lib
             if and(strfind(flags,'continue'),exist(sfile,'file')); load(sfile); return; end 
 
             % get irreducible shells
-            [ip,pp] = get_pairs(pc,uc,cutoff);
+            [bvk,pp] = get_pairs(pc,uc,cutoff);
 
             % force constant model
-            bvk = get_bvk_model(ip,pp);
+            bvk = get_bvk_model(bvk,pp);
 
             % get force constants
             bvk = get_bvk_force_constants(bvk,pp,fname);
@@ -1177,7 +1177,7 @@ classdef am_lib
             axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [meV]'); xlabel('Wavevector k');
         end
 
-        
+
         % electrons
 
         function [tb,pp] = get_tb(pc,uc,cutoff,spdf,nskips,Ef,fname,flags)
@@ -1192,28 +1192,28 @@ classdef am_lib
             if and(strfind(flags,'continue'),exist(sfile,'file')); load(sfile); return; end 
 
             % get irreducible shells
-            [ip,pp] = get_pairs(pc,uc,cutoff);
+            [tb,pp] = get_pairs(pc,uc,cutoff);
             
             % get tb model
-            [tb] = get_tb_model(ip,pp,uc,spdf);
+            [tb] = get_tb_model(tb,pp,uc,spdf);
 
             % get force constants
             tb = get_tb_matrix_elements(tb,nskips,Ef,fname);
 
             % save everything generated
-            save(sfile,'tb','ip');
+            save(sfile,'tb','pp');
         end
 
         function [tb] = get_tb_model(ip,pp,uc,spdf)
-            % set oribtals per species: spdf = {'d','p'};
-
+            % set oribtals per irreducible atom: spdf = {'d','p'};
+            % may wish to do this to set it per species: x={'p','d'}; spdf={x{ic.species}};
             import am_lib.*
-            
+
             % set sym digits
             digits(10);
 
-            % initialize irreducible atom properties: D = symmetry reps, F = flip super-operator
-            % set symmetries D{:}, and parity-transpose F{:} for each species 
+            % initialize irreducible atom properties: for each irreducible atom,
+            % set azimuthal quantum numbers J{:}, symmetries D{:}, and parity-transpose F{:} 
             [J,D,F] = get_tb_model_initialize_atoms(spdf,pp.Q{1}(1:3,1:3,:));
 
             % primitive cell atoms define hamiltonian blocks dimensions and start/end sections
@@ -1223,8 +1223,8 @@ classdef am_lib
             fprintf(' ... solving for symbolic force constants '); tic;
             for p = 1:ip.nshells
                 % get indicies
-                x = ip.xy(1,p); i = uc.u2i(x); m = uc.u2p(x); mp = S(m):E(m); dm = d(m);
-                y = ip.xy(2,p); j = uc.u2i(y); n = pp.u2p(y); np = S(n):E(n); dn = d(n);
+                x = ip.xy(1,p); i = uc.u2i(x); m = uc.u2p(x); dm = d(m);
+                y = ip.xy(2,p); j = uc.u2i(y); n = pp.u2p(y); dn = d(n);
 
                 % use stabilzer group to determine crystallographic symmetry relations; A*B*C' equals kron(C,A)*B(:)
                 W = sum(kron_( D{j}(:,:,ip.s_ck(:,p)) , D{i}(:,:,ip.s_ck(:,p)) ) - eye(dm*dn),3);
@@ -1260,11 +1260,18 @@ classdef am_lib
             H=sym(zeros(tb.nbands)); kvec=sym('k%d',[3,1],'real');
             for p = 1:pp.pc_natoms
             for u = 1:pp.npairs(p)
-                % get indicies
+                % get indicies:
+                %    ir = irreducible shell index
+                %    iq = symmetry which takes ir -> orbit
+                %    x,y=        unit cell atomic indicies
+                %    i,j= irreducible cell atomic indicies
+                %    m,n=   primitive cell atomic indicies
+                %  mp,np= vector spanning the part of the hamiltonian
+                %         corresponding to primitive atoms m and n
                 ir= pp.i{p}(u); iq = pp.iq{p}(u);
                 x = pp.c{p}(1); y = pp.o{p}(u,1); xy = [x;y];
-                i = uc.u2i(x); m = uc.u2p(x); mp = S(m):E(m); dm = d(m);
-                j = uc.u2i(y); n = pp.u2p(y); np = S(n):E(n); dn = d(n);
+                i = uc.u2i(x); m = uc.u2p(x); mp = S(m):E(m);
+                j = uc.u2i(y); n = pp.u2p(y); np = S(n):E(n);
 
                 % rotate force constants and bond vector
                 rij = vec_(xy(pp.Q{2}(:,iq))); rij(abs(rij)<am_lib.eps) = 0;
@@ -1556,49 +1563,37 @@ classdef am_lib
                 [S,~] = get_symmetries(pc); nSs = size(S,3); 
 
                 % save space symmetry combined with permutation of atomic positions as Q
-                M = [[1,2];[2,1]].'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); nQs = nSs*nMs;
+                M = perms([1:2]).'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); nQs = nSs*nMs;
 
                 % get multiplication table, list of inverse elements, and identity
                 [MT,E,I]= get_multiplication_table(Q); nQs = size(MT,1);
             
             % step 2: [PM, V, ip2pp, and pp2ip]
-            
-                % define function to apply symmetries to position vectors
-                seitz_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
 
                 % get primitive lattice and atomic basis in primitive fractional
                 pc_tau = uc.tau2pc*mod_(uc.tau);
 
-                % determine action of space symmetries on pair positions
-                P1s=[];P2s=[]; npcs=numel(uc.p2u); npairs=zeros(1,npcs);
-                for i = 1:npcs
-                    % identify primitive atom in unit cell
-                    m = uc.p2u(i);
+                % get all possible pairs, keeping pairs in which atom 1 is
+                % in the primitive cell and which have bond lengths below the cutoff
+                [Y{1:2}]=ndgrid(1:uc.natoms,uc.p2u); x=[Y{2}(:),Y{1}(:)].';
+                ex_ = normc_(uc2ws(uc.bas*(uc.tau(:,x(2,:))-uc.tau(:,x(1,:))),uc.bas))<cutoff;
 
-                    % compute cutoff distances, exclude atoms above cutoff, count pairs involving the i-th primitive atom
-                    ex_ = normc_(uc2ws(uc.bas*(uc.tau-uc.tau(:,m)),uc.bas))<cutoff; npairs(i) = sum(ex_);
+                % [pc-frac] compute action of space symmetries on pair positions
+                seitz_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
+                tau(:,:,:,1) = seitz_apply_(Q{1},pc_tau(:,x(1,ex_)));
+                tau(:,:,:,2) = seitz_apply_(Q{1},pc_tau(:,x(2,ex_)));
+                for iq = 1:nQs; tau(:,:,iq,:) = tau(1:3,:,iq,Q{2}(:,iq)); end
 
-                    % [pc-frac] compute action of space symmetries on pair positions
-                    tau=[]; mm_ = repmat(m,[1,npairs(i),1]);
-                    tau(:,:,:,1) = seitz_apply_(Q{1},pc_tau(:,mm_)); 
-                    tau(:,:,:,2) = seitz_apply_(Q{1},pc_tau(:,ex_));
-                    for iq = 1:nQs; tau(:,:,iq,:) = tau(1:3,:,iq,Q{2}(:,iq)); end
-
-                    % [uc-frac] shift reference atom to primitive cell and record uc index
-                    G_ = @(tau) tau - mod_(tau); 
-                    tau = mod_(matmul_(uc.bas2pc, tau - G_(tau(:,:,:,1)) ));
-                    P1 = member_(tau(:,:,:,1),uc.tau);
-                    P2 = member_(tau(:,:,:,2),uc.tau);
-
-                    % save results (P1s are always in the primitive cell)
-                    P1s = [P1s;P1]; P2s = [P2s;P2];
-                end
+                % [uc-frac] shift reference atom to primitive cell and record uc index
+                G_ = @(tau) tau - mod_(tau); tau = mod_(matmul_(uc.bas2pc, tau - G_(tau(:,:,:,1)) ));
+                P1 = member_(tau(:,:,:,1),uc.tau);
+                P2 = member_(tau(:,:,:,2),uc.tau);
 
                 % create a unique pair label
-                [V,~,V_p2i]=unique([P1s(:),P2s(:)],'rows'); V=V.';
+                [V,~,V_p2i]=unique([P1(:),P2(:)],'rows'); V=V.';
 
                 % get permutation representation (entries are unique pair indicies)
-                PM = reshape(V_p2i,size(P1s)); A = get_connectivity_chart(PM); 
+                PM = reshape(V_p2i,size(P1)); A = get_connectivity_chart(PM); 
 
                 % get map
                 ip2pp = findrow_(A); pp2ip = [1:size(A,1)]*A;
@@ -2007,8 +2002,141 @@ classdef am_lib
             ylim([0 size(A,1)+1]); xlim([0 size(A,2)+1]); 
             set(gca,'XTick',[]); set(gca,'YTick',[]);
             daspect([1 1 1])
+        end       
+
+        function [x] = nchoosek_(n,k)
+            % much faster than matlab's nchoosek
+            kk=min(k,n-k);
+            if kk<2
+               if kk<1
+                  if k==n
+                     x=1:n;
+                  else
+                     x=[];
+                  end
+               else
+                  if k==1
+                     x=(1:n)';
+                  else
+                     x=1:n;
+                     x=reshape(x(ones(n-1,1),:),n,n-1);
+                  end
+               end   
+            else
+               n1=n+1;
+               m=prod(n1-kk:n)/prod(1:kk);
+               x=zeros(m,k);
+               f=n1-k;
+               x(1:f,k)=(k:n)';
+               for a=k-1:-1:1
+                  d=f;
+                  h=f;
+                  x(1:f,a)=a;
+                  for b=a+1:a+n-k
+                     d=d*(n1+a-b-k)/(n1-b);
+                     e=f+1;
+                     f=e+d-1;
+                     x(e:f,a)=b;
+                     x(e:f,a+1:k)=x(h-d+1:h,a+1:k);
+                  end
+               end
+            end
+            x=x.';
+        end
+        
+        function [x] = nchoosrk_(n,k)
+            % with duplications allowed
+            
+            import am_lib.nchoosek_
+            
+            x=nchoosek_(n+k-1,k).';
+            x=x-repmat(0:k-1,size(x,1),1);
+            x=x.';
         end
 
+        function [M, I] = permn_(V, N, K)
+            % PERMN - permutations with repetition
+            %   Using two input variables V and N, M = PERMN(V,N) returns all
+            %   permutations of N elements taken from the vector V, with repetitions.
+            %   V can be any type of array (numbers, cells etc.) and M will be of the
+            %   same type as V.  If V is empty or N is 0, M will be empty.  M has the
+            %   size numel(V).^N-by-N. 
+            %
+            %   When only a subset of these permutations is needed, you can call PERMN
+            %   with 3 input variables: M = PERMN(V,N,K) returns only the K-ths
+            %   permutations.  The output is the same as M = PERMN(V,N) ; M = M(K,:),
+            %   but it avoids memory issues that may occur when there are too many
+            %   combinations.  This is particulary useful when you only need a few
+            %   permutations at a given time. If V or K is empty, or N is zero, M will
+            %   be empty. M has the size numel(K)-by-N. 
+            %
+            %   [M, I] = PERMN(...) also returns an index matrix I so that M = V(I).
+            %
+            %   Examples:
+            %     M = permn([1 2 3],2) % returns the 9-by-2 matrix:
+            %              1     1
+            %              1     2
+            %              1     3
+            %              2     1
+            %              2     2
+            %              2     3
+            %              3     1
+            %              3     2
+            %              3     3
+            
+            narginchk(2,3) ;
+
+            if fix(N) ~= N || N < 0 || numel(N) ~= 1 ;
+                error('permn:negativeN','Second argument should be a positive integer') ;
+            end
+            nV = numel(V) ;
+
+            if nargin==2 % PERMN(V,N) - return all permutations
+
+                if nV==0 || N == 0
+                    M = zeros(nV,N) ;
+                    I = zeros(nV,N) ;
+
+                elseif N == 1
+                    % return column vectors
+                    M = V(:) ;
+                    I = (1:nV).' ;
+                else
+                    % this is faster than the math trick used for the call with three
+                    % arguments.
+                    [Y{N:-1:1}] = ndgrid(1:nV) ;
+                    I = reshape(cat(N+1,Y{:}),[],N) ;
+                    M = V(I) ;
+                end
+            else % PERMN(V,N,K) - return a subset of all permutations
+                nK = numel(K) ;
+                if nV == 0 || N == 0 || nK == 0
+                    M = zeros(numel(K), N) ;
+                    I = zeros(numel(K), N) ;
+                elseif nK < 1 || any(K<1) || any(K ~= fix(K))
+                    error('permn:InvalidIndex','Third argument should contain positive integers.') ;
+                else
+
+                    V = reshape(V,1,[]) ; % v1.1 make input a row vector
+                    nV = numel(V) ;
+                    Npos = nV^N ;
+                    if any(K > Npos)
+                        warning('permn:IndexOverflow', ...
+                            'Values of K exceeding the total number of combinations are saturated.')
+                        K = min(K, Npos) ;
+                    end
+
+                    % The engine is based on version 3.2 with the correction
+                    % suggested by Roger Stafford. This approach uses a single matrix
+                    % multiplication.
+                    B = nV.^(1-N:0) ;
+                    I = ((K(:)-.5) * B) ; % matrix multiplication
+                    I = rem(floor(I),nV) + 1 ;
+                    M = V(I) ;
+                end
+            end
+        end
+        
 
         % aux brillouin zones
 
