@@ -280,8 +280,104 @@ classdef am_lib
                 nlines = sscanf(a,'%i');
             end
         end
+        
+        function [en]    = load_band_energies(nbands,fname)
+            %
+            % First, preprocess the outcar using the bash function below. Then,
+            % call load_force_position on the file produced.
+            %
+            % #!/bin/bash
+            % # Preprocess outcar to remove the last run, which may not have finished
+            % # Antonio Mei Nov/2014
+            % # Antonio Mei Jan/2017
+            % usage_ () {
+            %     echo "Creates infile.electron_energies based on supplied outcar files."
+            %     echo ""
+            %     echo "Usage: $0 [-h] [-t] [-f] -o <outcar_list> -n <nbands> [-c <compress_name>]"
+            %     echo ""
+            %     echo "Example: $0 -f -t -o \"\$(find . -name OUTCAR | grep 4.00-300)\" -n 751"
+            %     echo ""
+            %     echo "-h : prints this message"
+            %     echo "-n : [REQUIRED] number of bands"
+            %     echo "-o : [REQUIRED] list of outcar files to parse"
+            %     echo "-t : trims the last md run (useful for removing runs which have not completed)"
+            %     echo "-f : overwrites existing infile.electron_energies"
+            %     echo "-c : compresses infile.electron_energies to a tar.gz file"
+            %     echo ""
+            %     echo "infile.electron_energies file contents:"
+            %     echo "   n index    En energy    fn occupation"
+            %     exit 1
+            % }
+            % main_ () {
+            %     # trim the last md run which may not have completed
+            %     trim_ () { tac $1 | awk '!found && /POSITION/{found=1;next}1' | tac ; }
+            %     # get energies
+            %     get_  () { cat $2 | grep -h -A ${1} occupation  ; }
+            %     # cut header lines
+            %     cut_  () { cat $1 | sed '/^--$/d' | sed '/--/d' | sed '/occupation/d' ; }
+            %     # compress produced infile.electron_energies
+            %     compress_ () { tar -zcvf infile.electron_energies.tar.gz infile.electron_energies ; }
+            %     #
+            %     if ${ISFORCE}; then
+            %         if [ -f "./infile.electron_energies" ]; then
+            %             rm ./infile.electron_energies
+            %             printf " ... ./infile.electron_energies overwritten\n"
+            %         fi
+            %     fi
+            %     # 
+            %     if ${ISTRIM}; then
+            %         printf " ... trim:\n"
+            %         for F in "${FLIST}"; do
+            %             printf " ...     %-100s\n" "${F}"
+            %             trim_ ${F} | get_ ${NBANDS} | cut_ >> infile.electron_energies
+            %         done
+            %     else
+            %         printf " ... batch parsing without trim\n"
+            %         get_ ${NBANDS} "${FLIST}" | cut_ >> infile.electron_energies
+            %     fi
+            %     #
+            %     awk '{ print $2 }' infile.electron_energies > infile.electron_energies.tmp && mv electron_energies.tmp electron_energies
+            %     #
+            %     printf " ... infile.electron_energies created\n"
+            %     #
+            %     if ${ISCOMPRESS}; then
+            %         printf " ... infile.electron_energies.tar.gz compressed\n"
+            %         compress_ 
+            %     fi
+            % }
+            % ISCOMPRESS=false; ISTRIM=false; ISFORCE=false;
+            % if (($# == 0)); then usage_; exit 1; fi
+            % while getopts "n:o:htfc" o; do
+            %     case "${o}" in
+            %         o)  FLIST=${OPTARG} ;;
+            %         n)  NBANDS=${OPTARG} ;;
+            %         c)  ISCOMPRESS=true ;;
+            %         t)  ISTRIM=true ;;
+            %         f)  ISFORCE=true ;;
+            %         h)  usage_; exit 0 ;;
+            %         *)  usage_; exit 1 ;;
+            %     esac
+            % done
+            % main_
+            %
+            
+            % count number of lines in file and check that all runs completed properly
+            nlines = count_lines(fname); if mod(nlines,nbands)~=0; error('lines appear to be missing.'); end;
 
+            % open file and parse
+            nsteps=nlines/nbands; fid=fopen(fname); en=reshape(fscanf(fid,'%f'),nbands,nsteps); fclose(fid);
 
+            function [nlines] = count_lines(fname)
+                if ispc
+                    [~,a] = system(sprintf('type %s | find /c /v ""',fname));
+                elseif or(ismac,isunix)
+                    [~,a] = system(sprintf('wc -l %s',fname));
+                end
+                nlines = sscanf(a,'%i');
+            end
+        end
+        
+        
         % symmetry
 
         function [P]     = get_translations(tau,species)
@@ -730,7 +826,7 @@ classdef am_lib
                 'n',fbz.n,'nks',numel(i2f),'k',fbz.k(:,i2f),'w',w,'ntets',size(tet,2),'tet',tet,'tetw',tetw);
             ibz = ibz_(fbz,pc,i2f,w,tet,tetw);
         end
-        
+
 
         % phonons
 
@@ -1008,14 +1104,15 @@ classdef am_lib
             end
         end
 
-        function [dc]  = get_bvk_displacement(bvk,pp,uc,nsteps,kpt,amp,mode)
+        function [dc]  = get_bvk_displacement(bvk,pp,uc,pc,nsteps,kpt,amp,mode)
             % kpt = [0,0,1]; % must be commensurate with uc!!!
             % nsteps = 10; amp = 1; mode = 1
            
             import am_lib.*
             
             % get phonon energies and eigenvectors at k-point
-            [q2u,hw] = get_bvk_normal_transform(bvk,uc,kpt);
+            bz=get_fbz(pc,[1,1,1]); bz.k=kpt; bz=get_bvk_dispersion(bvk,bz);
+            [q2u,hw] = get_bvk_normal_transform(bvk,uc,bz);
 
             % select a mode
             fprintf('Energies [meV]\n');fprintf('%5.2f \n',hw*1E3);
@@ -1125,28 +1222,21 @@ classdef am_lib
             axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [meV]'); xlabel('Wavevector k');
         end
 
-        function [q2u,hw] = get_bvk_normal_transform(bvk,uc,kpt)
+        function [q2u] = get_bvk_normal_transform(bvk,uc,bz)
             % get q2u linear operator to convert normal phonon coordinates to
             % displacements and velocities (vectorized Wallace Eq. 10.41, p. 113): 
             % U = q2u [ 1:3 * uc.natoms , bvk.nbands * ibz.nks ]  * q_ks
             
-            % get phonon energies and eigenvectors at k-point
-            input = num2cell([bvk.fc{:},(bvk.recbas*kpt(:)).',bvk.mass(bvk.species)]); 
-            [U,hw]=eig(bvk.D(input{:})); hw=sqrt(real(diag(hw))); [hw,inds]=sort(hw); U=U(:,inds);
-            
-            % covert phonon energies to eV
-            hw = hw.*am_lib.units_eV;
-            
+            import am_lib.*
+
             % define vector normal function
             normc_ = @(A) sqrt(sum(abs(A).^2,1));
-            % get number of kpoints
-            nkpts = size(kpt,2);
             % get mass vector [3 natoms * 1]
             M = repelem( uc.mass(uc.species).' ,3,1);
             % get expoential factor [ 3 natoms * nks nbands ]
-            E = repelem( (uc.bas*uc.tau).'*(bvk.recbas*kpt) ,3, bvk.nbands );
+            E = repelem( (uc.bas*uc.tau).'*(bvk.recbas*bz.k) ,3, bvk.nbands );
             % get eigenvectors in supercell basis [ 3 natoms * nks nbands ]; W should be orthonormal: spy(abs(W'*W)>1E-5) = identity
-            W = reshape( U(reshape([1:3].'+3*(uc.u2p-1),1,[]),:,:), 3*uc.natoms, bvk.nbands*nkpts) .* exp(+2i.*pi.*E); W = W./normc_(W);
+            W = reshape( bz.U(reshape([1:3].'+3*(uc.u2p-1),1,[]),:,:), 3*uc.natoms, bvk.nbands*bz.nks) .* exp(+2i.*pi.*E); W = W./normc_(W);
             % construct linear operator (multiply by q_sk to get displacements)
             q2u = real( W ./ sqrt(M) ) ;
         end
@@ -2955,79 +3045,6 @@ end
 
 
 
-
-% GET BANDS
-% #!/bin/bash
-% # Preprocess outcar to remove the last run, which may not have finished
-% # Antonio Mei Nov/2014
-% # Antonio Mei Jan/2017
-% usage_ () {
-%     echo "Creates infile.electron_energies based on supplied outcar files."
-%     echo ""
-%     echo "Usage: $0 [-h] [-t] [-f] -o <outcar_list> -n <nbands> [-c <compress_name>]"
-%     echo ""
-%     echo "Example: $0 -f -t -o \"\$(find . -name OUTCAR | grep 4.00-300)\" -n 751"
-%     echo ""
-%     echo "-h : prints this message"
-%     echo "-n : [REQUIRED] number of bands"
-%     echo "-o : [REQUIRED] list of outcar files to parse"
-%     echo "-t : trims the last md run (useful for removing runs which have not completed)"
-%     echo "-f : overwrites existing infile.electron_energies"
-%     echo "-c : compresses infile.electron_energies to a tar.gz file"
-%     echo ""
-%     echo "infile.electron_energies file contents:"
-%     echo "   n index    En energy    fn occupation"
-%     exit 1
-% }
-% main_ () {
-%     # trim the last md run which may not have completed
-%     trim_ () { tac $1 | awk '!found && /POSITION/{found=1;next}1' | tac ; }
-%     # get position and forces
-%     get_  () { cat $2 | grep -h -A ${1} occupation  ; }
-%     # cut header lines
-%     cut_  () { cat $1 | sed '/^--$/d' | sed '/--/d' | sed '/occupation/d' ; }
-%     # compress produced infile.electron_energies
-%     compress_ () { tar -zcvf infile.electron_energies.tar.gz infile.electron_energies ; }
-%     #
-%     if ${ISFORCE}; then
-%         if [ -f "./infile.electron_energies" ]; then
-%             rm ./infile.electron_energies
-%             printf " ... ./infile.electron_energies overwritten\n"
-%         fi
-%     fi
-%     # 
-%     if ${ISTRIM}; then
-%         printf " ... trim:\n"
-%         for F in "${FLIST}"; do
-%             printf " ...     %-100s\n" "${F}"
-%             trim_ ${F} | get_ ${NBANDS} | cut_ >> infile.electron_energies
-%         done
-%     else
-%         printf " ... batch parsing without trim\n"
-%         get_ ${NBANDS} "${FLIST}" | cut_ >> infile.electron_energies
-%     fi
-%     #
-%     printf " ... infile.electron_energies created\n"
-%     #
-%     if ${ISCOMPRESS}; then
-%         printf " ... infile.electron_energies.tar.gz compressed\n"
-%         compress_ 
-%     fi
-% }
-% ISCOMPRESS=false; ISTRIM=false; ISFORCE=false;
-% if (($# == 0)); then usage_; exit 1; fi
-% while getopts "n:o:htfc" o; do
-%     case "${o}" in
-%         o)  FLIST=${OPTARG} ;;
-%         n)  NBANDS=${OPTARG} ;;
-%         c)  ISCOMPRESS=true ;;
-%         t)  ISTRIM=true ;;
-%         f)  ISFORCE=true ;;
-%         h)  usage_; exit 0 ;;
-%         *)  usage_; exit 1 ;;
-%     esac
-% done
-% main_
 
 
 
