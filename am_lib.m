@@ -93,6 +93,7 @@ classdef am_lib
         end
 
         function [uc]    = load_poscar(fname)
+            import am_lib.*
             fid=fopen(fname,'r');                 % open file
             fgetl(fid); uc.units='frac';          % skip header but write units instead
             uc.latpar=sscanf(fgetl(fid),'%f');    % read lattice parameter
@@ -100,7 +101,7 @@ classdef am_lib
             a2=sscanf(fgetl(fid),'%f %f %f');     % second basis vector
             a3=sscanf(fgetl(fid),'%f %f %f');     % third basis vector
             uc.bas=uc.latpar*[a1,a2,a3];          % construct the basis (column vectors)
-            uc.recbas=inv(uc.bas);
+            uc.recbas=get_recbas(uc.bas);
             uc.vol=abs(det(uc.bas));
             uc.symb=regexp(fgetl(fid), '([^ \s][^\s]*)', 'match');
             uc.nspecies=sscanf(fgetl(fid),repmat('%f' ,1,length(uc.symb)))';
@@ -114,7 +115,7 @@ classdef am_lib
                     uc.species(l)=i;
                 end
             end
-            if ~strcmp(coordtype(1),'d'); uc.tau=uc.recbas*uc.tau; end
+            if ~strcmp(coordtype(1),'d'); uc.tau=uc.bas\uc.tau; end
             fclose(fid);
             %
             function [Z] = symb2Z(symb)
@@ -193,13 +194,12 @@ classdef am_lib
             % # Preprocess outcar to remove the last run, which may not have finished
             % # Antonio Mei Nov/2014
             % # Antonio Mei Jan/2017
-            %
             % usage_ () {
             %     echo "Creates infile.force_position based on supplied outcar files."
             %     echo ""
             %     echo "Usage: $0 [-h] [-t] [-f] -o <outcar_list> -n <natoms> [-c <compress_name>]"
             %     echo ""
-            %     echo "Example: $0 -f -t -o \"\$(find . -name OUTCAR | grep 4.00-300)\" -n 250"
+            %     echo "Example: $0 -f -t -o \"\$(find . -name "OUTCAR*" | grep 4.00-300)\" -n 250"
             %     echo ""
             %     echo "-h : prints this message"
             %     echo "-n : [REQUIRED] number of atoms in the simulation cell"
@@ -262,9 +262,8 @@ classdef am_lib
             %         *)  usage_; exit 1 ;;
             %     esac
             % done
-            %
             % main_
-            %
+
             % count number of lines in file and check that all runs completed properly
             nlines = count_lines(fname); if mod(nlines,natoms)~=0; error('lines appear to be missing.'); end;
 
@@ -295,7 +294,7 @@ classdef am_lib
             %     echo ""
             %     echo "Usage: $0 [-h] [-t] [-f] -o <outcar_list> -n <nbands> [-c <compress_name>]"
             %     echo ""
-            %     echo "Example: $0 -f -t -o \"\$(find . -name OUTCAR | grep 4.00-300)\" -n 751"
+            %     echo "Example: $0 -f -t -o \"\$(find . -name "OUTCAR*" | grep 4.00-300)\" -n 751"
             %     echo ""
             %     echo "-h : prints this message"
             %     echo "-n : [REQUIRED] number of bands"
@@ -336,7 +335,7 @@ classdef am_lib
             %         get_ ${NBANDS} "${FLIST}" | cut_ >> infile.electron_energies
             %     fi
             %     #
-            %     awk '{ print $2 }' infile.electron_energies > infile.electron_energies.tmp && mv electron_energies.tmp electron_energies
+            %     awk '{ print $2 }' infile.electron_energies > infile.electron_energies.tmp && mv infile.electron_energies.tmp infile.electron_energies
             %     #
             %     printf " ... infile.electron_energies created\n"
             %     #
@@ -717,7 +716,7 @@ classdef am_lib
             s2u = X(1,:); [~,u2s]=unique(s2u); u2s=u2s(:).';
 
             % define irreducible cell creation function and make structure
-            sc_ = @(uc,tau,B,s2u) struct('units','frac','latpar',uc.latpar,'bas',uc.bas*B,'recbas',uc.recbas/B, ...
+            sc_ = @(uc,tau,B,s2u) struct('units','frac','latpar',uc.latpar,'bas',uc.bas*B,'recbas',uc.recbas/B,'bas2pc',inv(B),'tau2pc',B,...
                 'vol',det(uc.bas*B),'symb',{{uc.symb{unique(uc.species(s2u))}}},'nspecies',sum(unique(uc.species(s2u)).'==uc.species(s2u),2).', ...
                 'natoms',numel(s2u),'tau',tau,'species',uc.species(s2u),'mass',uc.mass(s2u));
             sc = sc_(uc,X(2:4,:),B,s2u);
@@ -753,19 +752,35 @@ classdef am_lib
 
         function [bzp]         = get_bz_path(pc,brav)
 
-            if strfind( lower(brav), 'fcc' )
-                % define kpoint path
+            % define kpoint path
+            if     strfind( lower(brav), 'fcc' )
                 G=[0;0;0]; X1=[0;1;1]/2; X2=[2;1;1]/2; L=[1;1;1]/2; K=[6;3;3]/8;
-                N = 50; ql={'G','X','K','G','L'}; qs=[G,X2,K,G]; qe=[X1,K,G,L]; nqs=size(qs,2); 
+                ql={'G','X','K','G','L'}; 
+                qs=[G,X2,K,G]; 
+                qe=[X1,K,G,L];
+            elseif strfind( lower(brav), 'hex' )
+                % for a pc.bas ordered like so:
+                %     3.0531   -1.5266         0
+                %          0    2.6441         0
+                %          0         0    3.4526
+                G=[0;0;0];   K=[1/3;1/3;0];   M=[1/2;0;0]; 
+                A=[0;0;1/2]; H=[1/3;1/3;1/2]; L=[1/2;0;1/2];
+                ql={'G','K','M','G','A','H','L','A'}; 
+                qs=[G,K,M,G,A,H,L]; 
+                qe=[K,M,G,A,H,L,A]; 
             else
                 error('invalid bravais lattice');
             end
+            
+            % get number of kpoints
+            N=101; nqs=size(qs,2); 
 
             % get path: convert to [cart-recp] to get x spacings right then convert back to [frac-recp]
-            [k,x,qt] = get_path(pc.recbas*qs,pc.recbas*qe,nqs,N); k=pc.bas*k;
+            [k,x,qt] = get_path(pc.recbas*qs,pc.recbas*qe,nqs,N); k=pc.recbas\k;
 
             % create path object
-            bzp_ = @(pc,ql,qt,nks,x,k) struct('units','frac-recp','latpar',pc.latpar,'bas',pc.bas,'recbas',pc.recbas,'vol',pc.vol,'ql',{{ql{:}}},'qt',qt,'nks',nks,'x',x,'k',k);
+            bzp_ = @(pc,ql,qt,nks,x,k) struct('units','frac-recp','latpar',pc.latpar,...
+                'bas',pc.bas,'recbas',pc.recbas,'vol',pc.vol,'ql',{{ql{:}}},'qt',qt,'nks',nks,'x',x,'k',k);
             bzp = bzp_(pc,ql,qt,size(k,2),x,k);
 
             function [k,x,qt] = get_path(qs,qe,nqs,N)
@@ -809,7 +824,7 @@ classdef am_lib
             tiny = am_lib.tiny;
 
             % get point symmetries [real-frac --> rec-frac] by applying basis transformation twice
-            [~,R] = get_symmetries(pc); R = matmul_(pc.bas^2,matmul_(R,pc.recbas^2)); 
+            [~,R] = get_symmetries(pc); R = matmul_(pc.bas^2,matmul_(R,inv(pc.bas)^2)); 
 
             % build permutation matrix for kpoints related by point symmetries
             PM = member_(mod_(matmul_(R,fbz.k)),fbz.k); A = get_connectivity_chart(PM);
@@ -895,7 +910,7 @@ classdef am_lib
             fprintf('(%.f secs)\n',toc);
 
             % create bvk structure
-            bvk_ = @(pp,ip,sav) struct('units','cart','latpar',pp.latpar,'bas',pp.bas2pc*pp.bas,'recbas',inv(pp.bas2pc*pp.bas), ...
+            bvk_ = @(pp,ip,sav) struct('units','cart','latpar',pp.latpar,'bas',pp.bas2pc*pp.bas,'recbas',get_recbas(pp.bas2pc*pp.bas), ...
                 'vol',abs(det(pp.bas2pc*pp.bas)),'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
                 'nbands',3*pp.pc_natoms,'nshells',size(sav.W,2),'W',{sav.W},'phi',{sav.phi},'d',ip.d,'v',ip.v,'xy',ip.xy);
             bvk = bvk_(pp,ip,sav);
@@ -981,7 +996,7 @@ classdef am_lib
             fprintf('(%.f secs)\n',toc);
 
             % convert atomic coordinates [cart,ang] into displacements [cart,ang] by first converting to frac [unitless] and taking modulo
-            fd(1:3,:,:) = matmul_( pp.bas, mod_(matmul_(pp.recbas,fd(1:3,:,:)-pp.tau) +0.5)-0.5);
+            fd(1:3,:,:) = matmul_( pp.bas, mod_(matmul_(inv(pp.bas),fd(1:3,:,:)-pp.tau) +0.5)-0.5);
 
             % loop over primitive types
             phi=[]; fprintf(' ... solving for force constants '); tic;
@@ -1020,7 +1035,7 @@ classdef am_lib
             bz.hw = zeros(bvk.nbands,bz.nks); bz.U = zeros(bvk.nbands,bvk.nbands,bz.nks);
             for i = 1:bz.nks
                 % define input ...
-                input = num2cell([bvk.fc{:},[bz.recbas*bz.k(:,i)].',bvk.mass(bvk.species)]);
+                input = num2cell([bvk.fc{:},[bz.recbas*bz.k(:,i)].',bvk.mass(unique(bvk.species))]);
                 % ... and evaluate (U are column vectors)
                 [bz.U(:,:,i),bz.hw(:,i)] = eig(bvk.D(input{:}),'vector'); bz.hw(:,i) = sqrt(real(bz.hw(:,i))) * am_lib.units_eV;
             end
@@ -1071,7 +1086,7 @@ classdef am_lib
                 nosehoover = vel(:,:,j-1)/Q * ( KE(j) - 3*uc.natoms*k_boltz*T );
 
                 % 6) get acceleration in [frac]
-                accel = uc.recbas * force ./ repmat(uc.mass(uc.species),3,1);
+                accel = uc.bas \ force ./ repmat(uc.mass(uc.species),3,1);
 
                 % update md [frac]: x' = x + v * dt; v' = v + a * dt; Nose-Hoover dv/dt becomes a - p_eta / Q * v;
                 tau(:,:,j) = mod_( tau(:,:,j-1) + dt * vel(:,:,j-1) );
@@ -1152,8 +1167,8 @@ classdef am_lib
                 v = shape_(imag( q2u*(q_sk(:).*hw(:)) ));
 
                 % save positions and velocities in [frac]
-                tau(:,:,i) = uc.tau + bvk.recbas * u;
-                vel(:,:,i) =          bvk.recbas * v;
+                tau(:,:,i) = uc.tau + bvk.bas \ u;
+                vel(:,:,i) =          bvk.bas \ v;
 
                 % evaluate forces F on each atom : fc [eV/Ang^2] * u [Ang]
                 for m = 1:pp.pc_natoms; F(:,pp.c{m}) = - phi{m} * reshape(u(:,pp.o{m}), size(pp.o{m}).*[3,1]); end
@@ -1229,14 +1244,15 @@ classdef am_lib
             
             import am_lib.*
 
-            % define vector normal function
-            normc_ = @(A) sqrt(sum(abs(A).^2,1));
             % get mass vector [3 natoms * 1]
             M = repelem( uc.mass(uc.species).' ,3,1);
             % get expoential factor [ 3 natoms * nks nbands ]
+            % use [cart] b/c uc is in [uc. frac]; bz.k is in [prim. rec. frac.] 
             E = repelem( (uc.bas*uc.tau).'*(bvk.recbas*bz.k) ,3, bvk.nbands );
-            % get eigenvectors in supercell basis [ 3 natoms * nks nbands ]; W should be orthonormal: spy(abs(W'*W)>1E-5) = identity
-            W = reshape( bz.U(reshape([1:3].'+3*(uc.u2p-1),1,[]),:,:), 3*uc.natoms, bvk.nbands*bz.nks) .* exp(+2i.*pi.*E); W = W./normc_(W);
+            % u2p : unitcell to primitive cell index
+            u2p = flatten_([1:3].'+3*(uc.u2p-1)); 
+            % get eigenvectors in supercell basis [ 3 natoms * nbands nks ]; W should be orthonormal: spy(abs(W'*W)>1E-5) = identity
+            W = reshape( bz.U(u2p,:,:), 3*uc.natoms, bvk.nbands*bz.nks) .* exp(+2i.*pi.*E); W = W./normc_(W);
             % construct linear operator (multiply by q_sk to get displacements)
             q2u = real( W ./ sqrt(M) ) ;
         end
@@ -1311,7 +1327,7 @@ classdef am_lib
             fprintf('(%.f secs)\n',toc);
 
             % create bvk structure
-            tb_ = @(pp,ip,sav,nbands) struct('units','cart','latpar',pp.latpar,'bas',pp.bas2pc*pp.bas,'recbas',inv(pp.bas2pc*pp.bas), ...
+            tb_ = @(pp,ip,sav,nbands) struct('units','cart','latpar',pp.latpar,'bas',pp.bas2pc*pp.bas,'recbas',get_recbas(pp.bas2pc*pp.bas), ...
                 'vol',abs(det(pp.bas2pc*pp.bas)),'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
                 'nbands',nbands,'nshells',size(sav.W,2),'W',{sav.W},'vsk',{sav.vsk},'xy',ip.xy,'d',ip.d,'v',ip.v);
             tb = tb_(pp,ip,sav,nbands);
@@ -1619,7 +1635,7 @@ classdef am_lib
             import am_lib.*
 
             % readjust cutoff based on unitcell
-            cutoff = min([normc_(uc.bas)/2,cutoff]); 
+            cutoff = min([normc_(uc.bas)/2,cutoff]);
             
             % step 1: get pair symmetries symmetries [pc-frac]
             
@@ -1668,7 +1684,7 @@ classdef am_lib
                 xy = V(:,PM(:,E)); v = uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),uc.bas); s_ck = [PM==PM(:,E)].';
                 
                 % create "irreducible" structure
-                ip_ = @(uc,s_ck,xy,d,v) struct('units','cart','latpar',uc.latpar,'bas',uc.bas2pc*uc.bas,'recbas',inv(uc.bas2pc*uc.bas), ...
+                ip_ = @(uc,s_ck,xy,d,v) struct('units','cart','latpar',uc.latpar,'bas',uc.bas2pc*uc.bas,'recbas',get_recbas(uc.bas2pc*uc.bas), ...
                     'vol',abs(det(uc.bas2pc*uc.bas)),'symb',{uc.symb},'mass',uc.mass,'natoms',numel(uc.p2u),'species',uc.species(uc.p2u),...
                     'nshells',size(xy,2),'s_ck',s_ck,'xy',xy,'d',d,'v',v);
                 ip = ip_(uc,s_ck(:,ip2pp),xy(:,ip2pp),normc_(v(:,ip2pp)),v(:,ip2pp));
@@ -1820,7 +1836,7 @@ classdef am_lib
                 xyz = V(:,PM(:,E)); s_ck = [PM==PM(:,E)].';
 
                 % create "irreducible" structure
-                it_ = @(uc,s_ck,xyz) struct('units','cart','latpar',uc.latpar,'bas',uc.bas2pc*uc.bas,'recbas',inv(uc.bas2pc*uc.bas), ...
+                it_ = @(uc,s_ck,xyz) struct('units','cart','latpar',uc.latpar,'bas',uc.bas2pc*uc.bas,'recbas',get_recbas(uc.bas2pc*uc.bas), ...
                     'vol',abs(det(uc.bas2pc*uc.bas)),'symb',{uc.symb},'mass',uc.mass,'natoms',numel(uc.p2u),'species',uc.species(uc.p2u),...
                     'nshells',size(xyz,2),'s_ck',s_ck,'xyz',xyz);
                 it = it_(uc,s_ck(:,it2pt),xyz(:,it2pt));
@@ -1916,7 +1932,310 @@ classdef am_lib
         
     end
     
-    % auxiliary functions
+    % aux library
+    
+    methods (Static)%, Access = protected)
+        
+        % structure
+        
+        function recbas  = get_recbas(bas)
+            % note inv(bas) ~= recbas ... so that bas * recbas ~= eye(3)
+            recbas=inv(bas).';
+        end
+        
+        function [K0] = uc2ws(K,M)
+            % uc2ws uses M real (reciprocal) lattice vectors to reduces K(1:3,:) vectors 
+            % in cartesian (reciprocal) coordinates to the definiging Wigner-Seitz cell.
+            % Note: K0 = cell2mat(arrayfun(@(j) uc2ws_engine(K(:,j),G,G2),[1:size(K,2)],'unif',0)); 
+            %       is slower than looping.
+
+            % generate mesh
+            G = M * [-1,-1,-1, 0, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 0, 1, 1, 1;
+                     -1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1;
+                     -1,-1,-1,-1,-1,-1,-1,-1,-1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+            G2=sum(G.^2,1);
+
+            % call engine
+            m=size(K,2); K0 = zeros(3,m); for j = 1:m; K0(:,j) = uc2ws_engine(K(:,j),G,G2); end
+
+            function [K] = uc2ws_engine(K,G,G2)
+                % define tiny
+                tiny = 1E-12;
+
+                go = true;
+                while go; go=false;
+                    for i = 1:26
+                        P = 2*K.'*G(:,i)-G2(i);
+                        if P > + tiny
+                            K = K - G(:,i); go=true;
+                        end
+                    end
+                end
+            end
+        end
+
+
+        % aux brillouin zones
+
+        function tet = get_tetrahedra(recbas,n)
+            % divide mesh into boxes
+            box = am_lib.grid2box(n); nboxes = size(box,2);
+            % divide a single box into six tetrahedron
+            tetrahedron = am_lib.box2tetrahedron(recbas);
+            % loop over boxes 
+            tet = zeros(4,6*nboxes); t = 0;
+            for b = 1:nboxes
+                % loop over tetrahedron/box
+                for j = 1:6
+                    % augment tetrahedron counter
+                    t = t + 1;
+                    % define tetrahedra corners using indices of kpoints
+                    tet(:,t) = box(tetrahedron(:,j),b);
+                end
+            end
+        end
+
+        function box = grid2box(n)
+            % get mesh
+            [Z{1:3}]=ndgrid([1:n(1)],[1:n(2)],[1:n(3)]); ki = reshape(cat(3+1,Z{:}),[],3).';
+            % get box vertices
+            boxv = [0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1];
+            % there will be 1 box per kpoint and 8 vertices per box
+            nks = prod(n); box = zeros(8,nks);
+            % get boxes for each kpoint
+            box_ = @(d,i) mod(boxv(d,:)+ki(d,i)-1,n(d))+1;
+            for m = 1:nks; box(:,m) = sub2ind(n,box_(1,m),box_(2,m),box_(3,m)); end
+        end
+
+        function tetrahedron = box2tetrahedron(recbas)
+            %     7-------8
+            %    /|      /|
+            %   / |     / |
+            %  5-------6  |
+            %  |  3----|--4
+            %  | /     | /
+            %  |/      |/
+            %  1-------2
+            %
+            boxvc = recbas*[0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1];
+            % get indices of diagonal pairs
+            diags=[1,2,3,4;8,7,6,5];
+            % get distances across diagonals
+            d=zeros(1,4); for m = 1:4; d(m) = norm(boxvc(:,diags(2,m))-boxvc(:,diags(1,m))); end
+            % record smallest diagonal
+            [~,si]=min(d);
+            % create connectivity list defining tetrahedra
+            switch si
+                case (1)
+                tetrahedron(:,1) = [1,8,2,4];
+                tetrahedron(:,2) = [1,8,2,6];
+                tetrahedron(:,3) = [1,8,3,4];
+                tetrahedron(:,4) = [1,8,3,7];
+                tetrahedron(:,5) = [1,8,5,6];
+                tetrahedron(:,6) = [1,8,5,7];
+                case (2)
+                tetrahedron(:,1) = [2,7,1,3];
+                tetrahedron(:,2) = [2,7,1,5];
+                tetrahedron(:,3) = [2,7,3,4];
+                tetrahedron(:,4) = [2,7,4,8];
+                tetrahedron(:,5) = [2,7,5,6];
+                tetrahedron(:,6) = [2,7,6,8];
+                case (3)
+                tetrahedron(:,1) = [3,6,1,2];
+                tetrahedron(:,2) = [3,6,1,5];
+                tetrahedron(:,3) = [3,6,2,4];
+                tetrahedron(:,4) = [3,6,4,8];
+                tetrahedron(:,5) = [3,6,5,7];
+                tetrahedron(:,6) = [3,6,7,8];
+                case (4)
+                tetrahedron(:,1) = [4,5,1,2];
+                tetrahedron(:,2) = [4,5,1,3];
+                tetrahedron(:,3) = [4,5,2,6];
+                tetrahedron(:,4) = [4,5,3,7];
+                tetrahedron(:,5) = [4,5,6,8];
+                tetrahedron(:,6) = [4,5,7,8];
+            end
+        end
+
+        
+        % aux electrons
+
+        function [J,D,F] = get_tb_model_initialize_atoms(spdf,R)
+            % set symmetries D{:}, and parity-transpose F{:} for each
+            % irreducible atom given a list of orbitals for each
+            % irreducible atom, spdf = {'sp','d'}
+
+            import am_lib.*
+
+            % get symmetries
+            nRs=size(R,3);
+
+            % transform symmetries to the tight binding representation (wiger functions)
+            W=cell(1,3); for j=[1:3]; W{j} = get_wigner(j,R); end
+
+            % set orbitals J{:}, symmetries D{:}, and parity-transpose T{:} for each irreducible atom
+            natoms=numel(spdf); F=cell(1,natoms);  D=cell(1,natoms);
+            for i = 1:natoms
+                % set orbitals
+                J{i} = findrow_('spdf'==spdf{i}(:)).'-1;
+
+                % set start and end points for J
+                E=cumsum(J{i}*2+1); S=E-(J{i}*2+1)+1;
+
+                % construct D matrix and lay the ground work construction of parity super-operator
+                d = max(E); P = zeros(1,d); D{i} = zeros(d,d,nRs);
+                for j = 1:length(J{i})
+                    if J{i}(j)==0 % s orbital
+                        D{i}(S(j):E(j),S(j):E(j),:) = 1;
+                    else % p,d,f orbitals
+                        D{i}(S(j):E(j),S(j):E(j),:) = W{J{i}(j)};
+                    end
+                    P(S(j):E(j)) = (-1).^j;
+                end
+
+                % construct parity super-operator    
+                f_ = @(x) x(:); A=(P.'*P).*reshape([1:d^2],[d,d]); 
+                F{i}=zeros(d^2,d^2); F{i}(sub2ind([d^2,d^2],abs(f_(A')),abs(f_(A))))=sign(f_(A'));
+            end
+            
+            % correct rounding errors in sym (non-exauhstive)
+            for i = 1:numel(D); for j = 1:numel(D{i}); for wdv = [0,1,.5,sqrt(3)/2]
+                if abs(abs(D{i}(j))-wdv)<am_lib.eps; D{i}(j)=wdv*sign(real(D{i}(j))); end
+            end;end;end
+        end
+        
+        function [Wtes] = get_wigner(j,R)
+
+            import am_lib.get_wigner_engine
+
+            % define tiny, kronecker delta, and heavside
+            d_ = @(x,y) logical(x==y); t_ = @(x,y) logical(x>y);
+            
+            % matrix indices
+            [m,mp]=meshgrid([j:-1:-j]);
+
+            % define angular momentum operators (Jp raising, Jm lowering, ...)
+            Jm = d_(m,mp+1).*sqrt((j+m).*(j-m+1)); Jp = d_(m,mp-1).*sqrt((j-m).*(j+m+1));
+            Jx = (Jp+Jm)/2; Jy = (Jp-Jm)/2i; Jz = d_(m,mp).*m; J = cat(3,Jx,Jy,Jz);
+
+            % define basis change: spherical to tesseral harmonics (real basis)
+            T = d_(0,m) .* d_(mp,m) + ...
+                t_(m,0) .* - sqrt(-1/2) .* ( (-1).^m.*d_(m,-mp) - d_(m, mp) ) + ...
+                t_(0,m) .* - sqrt( 1/2) .* ( (-1).^m.*d_(m, mp) + d_(m,-mp) );
+
+            % batch convert to wigner
+            nRs = size(R,3); Wtes = zeros(2*j+1,2*j+1,nRs);
+            for i = [1:nRs]; Wtes(:,:,i) = get_wigner_engine(J,T,j,R(:,:,i)); end
+        end
+        
+        function [Wtes] = get_wigner_engine(J,T,j,R)
+            % define wigner function for spherical (complex) and tesseral (real) harmonics
+            % Note: for l = 1, Wtes_(R) = R
+
+            import am_lib.*
+
+            % get proper rotation
+            d = det(R); dR = R*d;
+
+            % get rotation axis and angle
+            an = R_angle_(dR); ax = circshift(R_axis_(dR),1);
+
+            % define spin-vector dot products [Eq. 1.37 Blundell]
+            dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
+
+            if size(R,1)>9 % faster for symbolic and square matrices with dimensions > 9
+                Wsph = expm( -sqrt(-1)*dotV_(J,ax)*an ) * d^j;
+                Wtes = T' * Wsph * T;
+            else % faster for numerical square matrices with dimensions < 9
+                [V,D] = eig( -sqrt(-1) * dotV_(J,ax) * an); 
+                Wsph = V*diag(exp(diag(D)))/V * d^j;
+                Wtes = T' * Wsph * T ;
+            end
+        end
+
+
+        % aux functions
+
+        function [fq] = fftinterp(f,q)
+            % fourier interpolate f(k) at points q; v must be periodic over [0,1)
+            %
+            % generate f using like this:
+            %
+            % mpgrid_ = @(N) [0:(N-1)]/N;
+            % [xk,yk,zk]=meshgrid(mpgrid_(n(1)),mpgrid_(n(2)),mpgrid_(n(3)));
+            % k = [xk(:),yk(:),zk(:)];
+            % f = cos(2*pi*xk)+cos(2*pi*yk)+cos(2*pi*zk);
+            %
+
+            % define flatten
+            flatten_ = @(x) x(:);
+
+            % mesh dimensions
+            n = size(f);
+
+            % generate Fourier mesh
+            fftmesh_ = @(N) [0:(N-1)]-floor(N/2);
+            [x,y,z]=meshgrid(fftmesh_(n(1)),fftmesh_(n(2)),fftmesh_(n(3)));
+            r = [x(:),y(:),z(:)].';
+
+            % construct inverse Fourier transform kernel
+            Ki = ones(size(q,2),size(r,2)); i2pi = sqrt(-1)*2*pi;
+            for i = 1:3; Ki = Ki.*exp(i2pi*q(i,:).'*r(i,:))./sqrt(n(i)); end
+
+            % perform interpolation 
+            fq = Ki * flatten_(fftshift(fftn( f ))) / sqrt(prod(n));
+        end
+
+        function [y] = nlinspace(d1, d2, n)
+            %LINSPACENDIM Linearly spaced multidimensional matrix.
+
+            if nargin == 2
+                n = 100;
+            end
+            n  = double(n);
+            d1 = squeeze(d1); d2 = squeeze(d2);
+
+            if ndims(d1)~= ndims(d2) || any(size(d1)~= size(d2))
+                error('d1 and d2 must have the same number of dimension and the same size'),
+            end
+
+            NDim = ndims(d1);
+            %%%%%%%% To know if the two first dimensions are singleton dimensions
+            if NDim==2 && any(size(d1)==1)
+                NDim = NDim-1;
+                if all(size(d1)==1)
+                    NDim = 0;
+                end
+            end
+
+            pp      = (0:n-2)./(floor(n)-1);
+
+            Sum1    = TensorProduct(d1, ones(1,n-1));
+            Sum2    = TensorProduct((d2-d1), pp);
+            y = cat(NDim+1, Sum1  + Sum2, shiftdim(d2, size(d1, 1)==1 ));
+
+            %%%%% An old function that I wrote to replace the built in Matlab function:
+            %%%%% KRON
+            function Z = TensorProduct(X,Y)
+                %   Z = TensorProduct(X,Y) returns the REAL Kronecker tensor product of X and Y. 
+                %   The result is a multidimensional array formed by taking all possible products
+                %   between the elements of X and those of Y. 
+                %
+
+                sX=size(X);sY=size(Y);
+
+                ndim1=ndims(X);ndim2=ndims(Y);
+
+                indperm=[ndim2+1:ndim1+ndim2,1:ndim2];
+
+                % to remove all singleton dimensions 
+                Z=squeeze(repmat(X,[ones(1,ndims(X)),sY]).*permute(repmat(Y,[ones(1,ndims(Y)),sX]),indperm));
+            end
+        end
+
+    end
+    
+    % general-purpopse functions
     
     methods (Static)%, Access = protected)
         
@@ -2352,296 +2671,6 @@ classdef am_lib
             end
         end
         
-
-        % aux brillouin zones
-
-        function tet = get_tetrahedra(recbas,n)
-            % divide mesh into boxes
-            box = am_lib.grid2box(n); nboxes = size(box,2);
-            % divide a single box into six tetrahedron
-            tetrahedron = am_lib.box2tetrahedron(recbas);
-            % loop over boxes 
-            tet = zeros(4,6*nboxes); t = 0;
-            for b = 1:nboxes
-                % loop over tetrahedron/box
-                for j = 1:6
-                    % augment tetrahedron counter
-                    t = t + 1;
-                    % define tetrahedra corners using indices of kpoints
-                    tet(:,t) = box(tetrahedron(:,j),b);
-                end
-            end
-        end
-
-        function box = grid2box(n)
-            % get mesh
-            [Z{1:3}]=ndgrid([1:n(1)],[1:n(2)],[1:n(3)]); ki = reshape(cat(3+1,Z{:}),[],3).';
-            % get box vertices
-            boxv = [0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1];
-            % there will be 1 box per kpoint and 8 vertices per box
-            nks = prod(n); box = zeros(8,nks);
-            % get boxes for each kpoint
-            box_ = @(d,i) mod(boxv(d,:)+ki(d,i)-1,n(d))+1;
-            for m = 1:nks; box(:,m) = sub2ind(n,box_(1,m),box_(2,m),box_(3,m)); end
-        end
-
-        function tetrahedron = box2tetrahedron(recbas)
-            %     7-------8
-            %    /|      /|
-            %   / |     / |
-            %  5-------6  |
-            %  |  3----|--4
-            %  | /     | /
-            %  |/      |/
-            %  1-------2
-            %
-            boxvc = recbas*[0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1];
-            % get indices of diagonal pairs
-            diags=[1,2,3,4;8,7,6,5];
-            % get distances across diagonals
-            d=zeros(1,4); for m = 1:4; d(m) = norm(boxvc(:,diags(2,m))-boxvc(:,diags(1,m))); end
-            % record smallest diagonal
-            [~,si]=min(d);
-            % create connectivity list defining tetrahedra
-            switch si
-                case (1)
-                tetrahedron(:,1) = [1,8,2,4];
-                tetrahedron(:,2) = [1,8,2,6];
-                tetrahedron(:,3) = [1,8,3,4];
-                tetrahedron(:,4) = [1,8,3,7];
-                tetrahedron(:,5) = [1,8,5,6];
-                tetrahedron(:,6) = [1,8,5,7];
-                case (2)
-                tetrahedron(:,1) = [2,7,1,3];
-                tetrahedron(:,2) = [2,7,1,5];
-                tetrahedron(:,3) = [2,7,3,4];
-                tetrahedron(:,4) = [2,7,4,8];
-                tetrahedron(:,5) = [2,7,5,6];
-                tetrahedron(:,6) = [2,7,6,8];
-                case (3)
-                tetrahedron(:,1) = [3,6,1,2];
-                tetrahedron(:,2) = [3,6,1,5];
-                tetrahedron(:,3) = [3,6,2,4];
-                tetrahedron(:,4) = [3,6,4,8];
-                tetrahedron(:,5) = [3,6,5,7];
-                tetrahedron(:,6) = [3,6,7,8];
-                case (4)
-                tetrahedron(:,1) = [4,5,1,2];
-                tetrahedron(:,2) = [4,5,1,3];
-                tetrahedron(:,3) = [4,5,2,6];
-                tetrahedron(:,4) = [4,5,3,7];
-                tetrahedron(:,5) = [4,5,6,8];
-                tetrahedron(:,6) = [4,5,7,8];
-            end
-        end
-
-        
-        % aux electrons
-
-        function [J,D,F] = get_tb_model_initialize_atoms(spdf,R)
-            % set symmetries D{:}, and parity-transpose F{:} for each
-            % irreducible atom given a list of orbitals for each
-            % irreducible atom, spdf = {'sp','d'}
-
-            import am_lib.*
-
-            % get symmetries
-            nRs=size(R,3);
-
-            % transform symmetries to the tight binding representation (wiger functions)
-            W=cell(1,3); for j=[1:3]; W{j} = get_wigner(j,R); end
-
-            % set orbitals J{:}, symmetries D{:}, and parity-transpose T{:} for each irreducible atom
-            natoms=numel(spdf); F=cell(1,natoms);  D=cell(1,natoms);
-            for i = 1:natoms
-                % set orbitals
-                J{i} = findrow_('spdf'==spdf{i}(:)).'-1;
-
-                % set start and end points for J
-                E=cumsum(J{i}*2+1); S=E-(J{i}*2+1)+1;
-
-                % construct D matrix and lay the ground work construction of parity super-operator
-                d = max(E); P = zeros(1,d); D{i} = zeros(d,d,nRs);
-                for j = 1:length(J{i})
-                    if J{i}(j)==0 % s orbital
-                        D{i}(S(j):E(j),S(j):E(j),:) = 1;
-                    else % p,d,f orbitals
-                        D{i}(S(j):E(j),S(j):E(j),:) = W{J{i}(j)};
-                    end
-                    P(S(j):E(j)) = (-1).^j;
-                end
-
-                % construct parity super-operator    
-                f_ = @(x) x(:); A=(P.'*P).*reshape([1:d^2],[d,d]); 
-                F{i}=zeros(d^2,d^2); F{i}(sub2ind([d^2,d^2],abs(f_(A')),abs(f_(A))))=sign(f_(A'));
-            end
-            
-            % correct rounding errors in sym (non-exauhstive)
-            for i = 1:numel(D); for j = 1:numel(D{i}); for wdv = [0,1,.5,sqrt(3)/2]
-                if abs(abs(D{i}(j))-wdv)<am_lib.eps; D{i}(j)=wdv*sign(real(D{i}(j))); end
-            end;end;end
-        end
-        
-        function [Wtes] = get_wigner(j,R)
-
-            import am_lib.get_wigner_engine
-
-            % define tiny, kronecker delta, and heavside
-            d_ = @(x,y) logical(x==y); t_ = @(x,y) logical(x>y);
-            
-            % matrix indices
-            [m,mp]=meshgrid([j:-1:-j]);
-
-            % define angular momentum operators (Jp raising, Jm lowering, ...)
-            Jm = d_(m,mp+1).*sqrt((j+m).*(j-m+1)); Jp = d_(m,mp-1).*sqrt((j-m).*(j+m+1));
-            Jx = (Jp+Jm)/2; Jy = (Jp-Jm)/2i; Jz = d_(m,mp).*m; J = cat(3,Jx,Jy,Jz);
-
-            % define basis change: spherical to tesseral harmonics (real basis)
-            T = d_(0,m) .* d_(mp,m) + ...
-                t_(m,0) .* - sqrt(-1/2) .* ( (-1).^m.*d_(m,-mp) - d_(m, mp) ) + ...
-                t_(0,m) .* - sqrt( 1/2) .* ( (-1).^m.*d_(m, mp) + d_(m,-mp) );
-
-            % batch convert to wigner
-            nRs = size(R,3); Wtes = zeros(2*j+1,2*j+1,nRs);
-            for i = [1:nRs]; Wtes(:,:,i) = get_wigner_engine(J,T,j,R(:,:,i)); end
-        end
-        
-        function [Wtes] = get_wigner_engine(J,T,j,R)
-            % define wigner function for spherical (complex) and tesseral (real) harmonics
-            % Note: for l = 1, Wtes_(R) = R
-
-            import am_lib.*
-
-            % get proper rotation
-            d = det(R); dR = R*d;
-
-            % get rotation axis and angle
-            an = R_angle_(dR); ax = circshift(R_axis_(dR),1);
-
-            % define spin-vector dot products [Eq. 1.37 Blundell]
-            dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
-
-            if size(R,1)>9 % faster for symbolic and square matrices with dimensions > 9
-                Wsph = expm( -sqrt(-1)*dotV_(J,ax)*an ) * d^j;
-                Wtes = T' * Wsph * T;
-            else % faster for numerical square matrices with dimensions < 9
-                [V,D] = eig( -sqrt(-1) * dotV_(J,ax) * an); 
-                Wsph = V*diag(exp(diag(D)))/V * d^j;
-                Wtes = T' * Wsph * T ;
-            end
-        end
-
-
-        % aux functions
-
-        function [K0] = uc2ws(K,M)
-            % uc2ws uses M real (reciprocal) lattice vectors to reduces K(1:3,:) vectors 
-            % in cartesian (reciprocal) coordinates to the definiging Wigner-Seitz cell.
-            % Note: K0 = cell2mat(arrayfun(@(j) uc2ws_engine(K(:,j),G,G2),[1:size(K,2)],'unif',0)); 
-            %       is slower than looping.
-
-            % generate mesh
-            G = M * [-1,-1,-1, 0, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 0, 1, 1, 1;
-                     -1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1;
-                     -1,-1,-1,-1,-1,-1,-1,-1,-1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1];
-            G2=sum(G.^2,1);
-
-            % call engine
-            m=size(K,2); K0 = zeros(3,m); for j = 1:m; K0(:,j) = uc2ws_engine(K(:,j),G,G2); end
-
-            function [K] = uc2ws_engine(K,G,G2)
-                % define tiny
-                tiny = 1E-12;
-
-                go = true;
-                while go; go=false;
-                    for i = 1:26
-                        P = 2*K.'*G(:,i)-G2(i);
-                        if P > + tiny
-                            K = K - G(:,i); go=true;
-                        end
-                    end
-                end
-            end
-        end
-
-        function [fq] = fftinterp(f,q)
-            % fourier interpolate f(k) at points q; v must be periodic over [0,1)
-            %
-            % generate f using like this:
-            %
-            % mpgrid_ = @(N) [0:(N-1)]/N;
-            % [xk,yk,zk]=meshgrid(mpgrid_(n(1)),mpgrid_(n(2)),mpgrid_(n(3)));
-            % k = [xk(:),yk(:),zk(:)];
-            % f = cos(2*pi*xk)+cos(2*pi*yk)+cos(2*pi*zk);
-            %
-
-            % define flatten
-            flatten_ = @(x) x(:);
-
-            % mesh dimensions
-            n = size(f);
-
-            % generate Fourier mesh
-            fftmesh_ = @(N) [0:(N-1)]-floor(N/2);
-            [x,y,z]=meshgrid(fftmesh_(n(1)),fftmesh_(n(2)),fftmesh_(n(3)));
-            r = [x(:),y(:),z(:)].';
-
-            % construct inverse Fourier transform kernel
-            Ki = ones(size(q,2),size(r,2)); i2pi = sqrt(-1)*2*pi;
-            for i = 1:3; Ki = Ki.*exp(i2pi*q(i,:).'*r(i,:))./sqrt(n(i)); end
-
-            % perform interpolation 
-            fq = Ki * flatten_(fftshift(fftn( f ))) / sqrt(prod(n));
-        end
-
-        function [y] = nlinspace(d1, d2, n)
-            %LINSPACENDIM Linearly spaced multidimensional matrix.
-
-            if nargin == 2
-                n = 100;
-            end
-            n  = double(n);
-            d1 = squeeze(d1); d2 = squeeze(d2);
-
-            if ndims(d1)~= ndims(d2) || any(size(d1)~= size(d2))
-                error('d1 and d2 must have the same number of dimension and the same size'),
-            end
-
-            NDim = ndims(d1);
-            %%%%%%%% To know if the two first dimensions are singleton dimensions
-            if NDim==2 && any(size(d1)==1)
-                NDim = NDim-1;
-                if all(size(d1)==1)
-                    NDim = 0;
-                end
-            end
-
-            pp      = (0:n-2)./(floor(n)-1);
-
-            Sum1    = TensorProduct(d1, ones(1,n-1));
-            Sum2    = TensorProduct((d2-d1), pp);
-            y = cat(NDim+1, Sum1  + Sum2, shiftdim(d2, size(d1, 1)==1 ));
-
-            %%%%% An old function that I wrote to replace the built in Matlab function:
-            %%%%% KRON
-            function Z = TensorProduct(X,Y)
-                %   Z = TensorProduct(X,Y) returns the REAL Kronecker tensor product of X and Y. 
-                %   The result is a multidimensional array formed by taking all possible products
-                %   between the elements of X and those of Y. 
-                %
-
-                sX=size(X);sY=size(Y);
-
-                ndim1=ndims(X);ndim2=ndims(Y);
-
-                indperm=[ndim2+1:ndim1+ndim2,1:ndim2];
-
-                % to remove all singleton dimensions 
-                Z=squeeze(repmat(X,[ones(1,ndims(X)),sY]).*permute(repmat(Y,[ones(1,ndims(Y)),sX]),indperm));
-            end
-        end
-
 
         % aux aesthetic
 
