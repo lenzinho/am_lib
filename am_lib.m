@@ -81,7 +81,7 @@ classdef am_lib
             r_ = @(fid) fprintf(fid,'\n');
             fid=fopen(fname,'w');
             fprintf(fid,'%s ','POSCAR'); r_(fid);
-            fprintf(fid,'%12.8f ',uc.latpar); r_(fid);
+            fprintf(fid,'%12.8f ',1.0); r_(fid); % latpar
             fprintf(fid,'%12.8f ',uc.bas(:,1)/uc.latpar); r_(fid);
             fprintf(fid,'%12.8f ',uc.bas(:,2)/uc.latpar); r_(fid);
             fprintf(fid,'%12.8f ',uc.bas(:,3)/uc.latpar); r_(fid);
@@ -94,15 +94,13 @@ classdef am_lib
 
         function [uc]    = load_poscar(fname)
             import am_lib.*
-            fid=fopen(fname,'r');                 % open file
-            fgetl(fid); uc.units='frac';          % skip header but write units instead
-            uc.latpar=sscanf(fgetl(fid),'%f');    % read lattice parameter
-            a1=sscanf(fgetl(fid),'%f %f %f');     % first basis vector
-            a2=sscanf(fgetl(fid),'%f %f %f');     % second basis vector
-            a3=sscanf(fgetl(fid),'%f %f %f');     % third basis vector
-            uc.bas=uc.latpar*[a1,a2,a3];          % construct the basis (column vectors)
-            uc.recbas=get_recbas(uc.bas);
-            uc.vol=abs(det(uc.bas));
+            fid=fopen(fname,'r');              % open file
+            fgetl(fid); uc.units='frac';       % skip header but write units instead
+            latpar=sscanf(fgetl(fid),'%f');    % read lattice parameter
+            a1=sscanf(fgetl(fid),'%f %f %f');  % first basis vector
+            a2=sscanf(fgetl(fid),'%f %f %f');  % second basis vector
+            a3=sscanf(fgetl(fid),'%f %f %f');  % third basis vector
+            uc.bas=latpar*[a1,a2,a3];          % construct the basis (column vectors)
             uc.symb=regexp(fgetl(fid), '([^ \s][^\s]*)', 'match');
             uc.nspecies=sscanf(fgetl(fid),repmat('%f' ,1,length(uc.symb)))';
             for i=1:length(uc.nspecies); uc.mass(i)=Z2mass(symb2Z(uc.symb{i})); end
@@ -665,8 +663,8 @@ classdef am_lib
             p2u = member_(B*mod_(B\uc.tau(:,findrow_(A))),uc.tau).'; u2p = ([1:size(A,1)]*A);
 
             % define primitive cell creation function and make structure
-            pc_ = @(uc,B,p2u) struct('units','frac','latpar',uc.latpar,'bas',uc.bas*B,'recbas',uc.recbas/B, ...
-                'vol',det(uc.bas*B),'symb',{uc.symb},'mass',uc.mass,'nspecies',sum(unique(uc.species(p2u)).'==uc.species(p2u),2).', ...
+            pc_ = @(uc,B,p2u) struct('units','frac','bas',uc.bas*B, ...
+                'symb',{uc.symb},'mass',uc.mass,'nspecies',sum(unique(uc.species(p2u)).'==uc.species(p2u),2).', ...
                 'natoms',numel(p2u),'tau',mod_(B\uc.tau(:,p2u)),'species',uc.species(p2u) );
             pc = pc_(uc,B,p2u);
         end
@@ -693,8 +691,8 @@ classdef am_lib
             i2p = round(findrow_(A)).'; p2i = round(([1:size(A,1)]*A));
             
             % define irreducible cell creation function and make structure
-            ic_ = @(uc,i2p) struct('units','frac','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas, ...
-                'vol',uc.vol,'symb',{uc.symb},'mass',uc.mass,'nspecies',sum(unique(i2p).'==i2p,2).', ...
+            ic_ = @(uc,i2p) struct('units','frac','bas',uc.bas, ...
+                'symb',{uc.symb},'mass',uc.mass,'nspecies',sum(unique(i2p).'==i2p,2).', ...
                 'natoms',numel(i2p),'tau',uc.tau(1:3,i2p),'species',uc.species(i2p));
             ic = ic_(pc,i2p);
         end
@@ -716,8 +714,8 @@ classdef am_lib
             s2u = X(1,:); [~,u2s]=unique(s2u); u2s=u2s(:).';
 
             % define irreducible cell creation function and make structure
-            sc_ = @(uc,tau,B,s2u) struct('units','frac','latpar',uc.latpar,'bas',uc.bas*B,'recbas',uc.recbas/B,'bas2pc',inv(B),'tau2pc',B,...
-                'vol',det(uc.bas*B),'symb',{{uc.symb{unique(uc.species(s2u))}}},'nspecies',sum(unique(uc.species(s2u)).'==uc.species(s2u),2).', ...
+            sc_ = @(uc,tau,B,s2u) struct('units','frac','bas',uc.bas*B,'bas2pc',inv(B),'tau2pc',B,...
+                'symb',{{uc.symb{unique(uc.species(s2u))}}},'nspecies',sum(unique(uc.species(s2u)).'==uc.species(s2u),2).', ...
                 'natoms',numel(s2u),'tau',tau,'species',uc.species(s2u),'mass',uc.mass(s2u));
             sc = sc_(uc,X(2:4,:),B,s2u);
         end
@@ -725,7 +723,7 @@ classdef am_lib
 
         % brillouin zones
 
-        function [fbz,ibz,bzp] = get_zones(pc,n,flags)
+        function [fbz,ibz]     = get_zones(pc,n,flags)
             
             import am_lib.*
 
@@ -739,22 +737,63 @@ classdef am_lib
             % get irreducible zone
             [ibz,i2f,f2i] = get_ibz(fbz,pc);
 
-            % get zone path
-            [bzp] = get_bz_path(pc,flags);
-
             % save mapping to zones
             fbz.f2i = f2i; fbz.i2f = i2f;
             ibz.i2f = i2f; ibz.f2i = f2i;
 
             % save
-            save(sfile,'fbz','ibz','bzp','i2f','f2i');
+            save(sfile,'fbz','ibz','i2f','f2i');
         end
 
-        function [bzp]         = get_bz_path(pc,brav)
+        function [fbz]         = get_fbz(pc,n)
 
+            import am_lib.*
+            
+            % check
+            if any(mod(n,1)~=0); error('n must be integers'); end
+            if numel(n)~=3; error('n must be three integers'); end
+                
+            % generate primitive lattice vectors
+            Q_ = @(i) [0:(n(i)-1)]/n(i); [Y{1:3}]=ndgrid(Q_(1),Q_(2),Q_(3)); k=reshape(cat(3+1,Y{:}),[],3).';
+
+            % define irreducible cell creation function and make structure
+            fbz_ = @(uc,n,k) struct('units','frac-recp','recbas',get_recbas(uc.bas),...
+                'n',n,'nks',size(k,2),'k',k,'w',ones([1,size(k,2)]));
+            fbz = fbz_(pc,n,k);
+
+        end
+
+        function [ibz,i2f,f2i] = get_ibz(fbz,pc)
+            
+            import am_lib.*
+            
+            % get point symmetries [real-frac --> rec-frac] by applying basis transformation twice
+            [~,R] = get_symmetries(pc); R = matmul_(pc.bas^2,matmul_(R,inv(pc.bas)^2)); 
+
+            % build permutation matrix for kpoints related by point symmetries
+            PM = member_(mod_(matmul_(R,fbz.k)),fbz.k); A = get_connectivity_chart(PM);
+
+            % set identifiers
+            i2f = round(findrow_(A)).'; f2i = round(([1:size(A,1)]*A)); w=sum(A,2).';
+            if abs(sum(w)-prod(fbz.n))>am_lib.eps; error('mismatch: kpoint mesh and point group symmetry'); end
+
+            % get irreducible tetrahedra
+            [tet,~,tet_f2i] = unique(sort(f2i(get_tetrahedra(fbz.recbas,fbz.n))).','rows'); tet=tet.'; tetw = hist(tet_f2i,[1:size(tet,2)].'-.5);
+
+            % define irreducible cell creation function and make structure
+            ibz_ = @(fbz,i2f,w,tet,tetw) struct('units','frac-recp','recbas',fbz.recbas,...
+                'n',fbz.n,'nks',numel(i2f),'k',fbz.k(:,i2f),'w',w,'ntets',size(tet,2),'tet',tet,'tetw',tetw);
+            ibz = ibz_(fbz,i2f,w,tet,tetw);
+        end
+
+        function [bzp]         = get_bz_path(pc,n,brav)
+
+            import am_lib.*
+            
             % define kpoint path
             if     strfind( lower(brav), 'fcc' )
-                G=[0;0;0]; X1=[0;1;1]/2; X2=[2;1;1]/2; L=[1;1;1]/2; K=[6;3;3]/8;
+                G=[0;0;0]; X1=[0;1;1]/2; X2=[2;1;1]/2; 
+                L=[1;1;1]/2; K=[6;3;3]/8;
                 ql={'G','X','K','G','L'}; 
                 qs=[G,X2,K,G]; 
                 qe=[X1,K,G,L];
@@ -773,15 +812,15 @@ classdef am_lib
             end
             
             % get number of kpoints
-            N=101; nqs=size(qs,2); 
+            nqs=size(qs,2); recbas = get_recbas(pc.bas);
 
             % get path: convert to [cart-recp] to get x spacings right then convert back to [frac-recp]
-            [k,x,qt] = get_path(pc.recbas*qs,pc.recbas*qe,nqs,N); k=pc.recbas\k;
+            [k,x,qt] = get_path(recbas*qs,recbas*qe,nqs,n); k=recbas\k;
 
             % create path object
-            bzp_ = @(pc,ql,qt,nks,x,k) struct('units','frac-recp','latpar',pc.latpar,...
-                'bas',pc.bas,'recbas',pc.recbas,'vol',pc.vol,'ql',{{ql{:}}},'qt',qt,'nks',nks,'x',x,'k',k);
-            bzp = bzp_(pc,ql,qt,size(k,2),x,k);
+            bzp_ = @(recbas,ql,qt,nks,x,k) struct('units','frac-recp', ...
+                'recbas',recbas,'ql',{{ql{:}}},'qt',qt,'nks',nks,'x',x,'k',k);
+            bzp = bzp_(recbas,ql,qt,size(k,2),x,k);
 
             function [k,x,qt] = get_path(qs,qe,nqs,N)
               % define path (includes both boundaries)
@@ -800,49 +839,50 @@ classdef am_lib
                 qt = x([1,N*[1:nqs]]);
             end
         end
-
-        function [fbz]         = get_fbz(pc,n)
-
-            % check
-            if any(mod(n,1)~=0); error('n must be integers'); end
-            if numel(n)~=3; error('n must be three integers'); end
-                
-            % generate primitive lattice vectors
-            Q_ = @(i) [0:(n(i)-1)]/n(i); [Y{1:3}]=ndgrid(Q_(1),Q_(2),Q_(3)); k=reshape(cat(3+1,Y{:}),[],3).';
-
-            % define irreducible cell creation function and make structure
-            fbz_ = @(uc,n,k) struct('units','frac-recp','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,...
-                'n',n,'nks',size(k,2),'k',k,'w',ones([1,size(k,2)]));
-            fbz = fbz_(pc,n,k);
-
-        end
-
-        function [ibz,i2f,f2i] = get_ibz(fbz,pc)
+        
+        function [bzs]         = get_bz_surf(pc,n,vy,vx)
+            % surf: v1 and v2 are in cart
+            % n=[101,101]; 
             
             import am_lib.*
             
-            tiny = am_lib.tiny;
+            % get number of kpoints
+            nks=prod(n); recbas = get_recbas(pc.bas);
 
-            % get point symmetries [real-frac --> rec-frac] by applying basis transformation twice
-            [~,R] = get_symmetries(pc); R = matmul_(pc.bas^2,matmul_(R,inv(pc.bas)^2)); 
+            % get surface in [cart-recp] then convert back to [frac-recp]
+            Q_ = @(n) [0:(n-1)]./(n-1); [Y{1:2}]=meshgrid(Q_(n(2)),Q_(n(1))); 
+            x = Y{1}.*norm(vx); y = Y{2}.*norm(vy); 
+            k = Y{1}(:).'.*vx + Y{2}(:).'.*vy; k = recbas\k;
 
-            % build permutation matrix for kpoints related by point symmetries
-            PM = member_(mod_(matmul_(R,fbz.k)),fbz.k); A = get_connectivity_chart(PM);
-
-            % set identifiers
-            i2f = round(findrow_(A)).'; f2i = round(([1:size(A,1)]*A)); w=sum(A,2).';
-            if abs(sum(w)-prod(fbz.n))>tiny; error('mismatch: kpoint mesh and point group symmetry'); end
-
-            % get irreducible tetrahedra
-            [tet,~,tet_f2i] = unique(sort(f2i(get_tetrahedra(fbz.recbas,fbz.n))).','rows'); tet=tet.'; tetw = hist(tet_f2i,[1:size(tet,2)].'-.5);
-
-            % define irreducible cell creation function and make structure
-            ibz_ = @(fbz,uc,i2f,w,tet,tetw) struct('units','frac-recp','latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,...
-                'n',fbz.n,'nks',numel(i2f),'k',fbz.k(:,i2f),'w',w,'ntets',size(tet,2),'tet',tet,'tetw',tetw);
-            ibz = ibz_(fbz,pc,i2f,w,tet,tetw);
+            % create path object
+            bzs_ = @(recbas,n,nks,x,y,k) struct('units','frac-recp', ...
+                'recbas',recbas,'nks',nks,'n',n,'x',x,'y',y,'k',k);
+            bzs = bzs_(recbas,n,nks,x,y,k);
         end
 
+        function [bzl]         = get_bz_line(pc,n,vs,ve)
+            % surf: vs and ve are the start and end vectors in cart
+            
+            import am_lib.*
+            
+            % get number of kpoints
+            nks=n; recbas = get_recbas(pc.bas);
+            
+            % define path (includes both boundaries)
+            path_ = @(k,q,N) cumsum([zeros(3,1),repmat((k-q)/(N-1),1,N-1)],2)+repmat(q,1,N);
+            x_    = @(k,q,N) [0, repmat(norm((k-q)/(N-1)),1,N-1) ];
+            
+            % build path in recp.-frac
+            k(1:3,:) = path_(ve-vs,[0;0;0],n); k = recbas\k;
+            x(    :) =    x_(ve-vs,[0;0;0],n); x = cumsum(x);
 
+            % create path object
+            bzl_ = @(recbas,n,nks,x,k) struct('units','frac-recp',...
+                'recbas',recbas,'nks',nks,'n',n,'x',x,'k',k);
+            bzl = bzl_(recbas,n,nks,x,k);
+        end
+
+        
         % phonons
 
         function [bvk,pp] = get_bvk(cutoff,pc,uc,fname,flags)
@@ -910,8 +950,8 @@ classdef am_lib
             fprintf('(%.f secs)\n',toc);
 
             % create bvk structure
-            bvk_ = @(pp,ip,sav) struct('units','cart','latpar',pp.latpar,'bas',pp.bas2pc*pp.bas,'recbas',get_recbas(pp.bas2pc*pp.bas), ...
-                'vol',abs(det(pp.bas2pc*pp.bas)),'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
+            bvk_ = @(pp,ip,sav) struct('units','cart','bas',pp.bas2pc*pp.bas, ...
+                'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
                 'nbands',3*pp.pc_natoms,'nshells',size(sav.W,2),'W',{sav.W},'phi',{sav.phi},'d',ip.d,'v',ip.v,'xy',ip.xy);
             bvk = bvk_(pp,ip,sav);
 
@@ -1033,12 +1073,18 @@ classdef am_lib
         function [bz]  = get_bvk_dispersion(bvk,bz)
             % get eigenvalues
             bz.hw = zeros(bvk.nbands,bz.nks); bz.U = zeros(bvk.nbands,bvk.nbands,bz.nks);
+            fprintf(' ... computing dispersion '); tic; 
             for i = 1:bz.nks
                 % define input ...
                 input = num2cell([bvk.fc{:},[bz.recbas*bz.k(:,i)].',bvk.mass(unique(bvk.species))]);
                 % ... and evaluate (U are column vectors)
-                [bz.U(:,:,i),bz.hw(:,i)] = eig(bvk.D(input{:}),'vector'); bz.hw(:,i) = sqrt(real(bz.hw(:,i))) * am_lib.units_eV;
+                [bz.U(:,:,i),bz.hw(:,i)] = eig(bvk.D(input{:}),'vector'); 
+                % correct units
+                bz.hw(:,i) = sqrt(real(bz.hw(:,i))) * am_lib.units_eV;
+                % sort energies
+                [bz.hw(:,i),inds]=sort(bz.hw(:,i)); bz.U(:,:,i)=bz.U(:,inds,i);
             end
+            fprintf('(%.f secs)\n',toc);
         end
 
         function [md]  = run_bvk_md(bvk,pp,uc,dt,nsteps,Q,T)
@@ -1103,8 +1149,8 @@ classdef am_lib
             end
 
             % define md creation function
-            md_ = @(uc,tau,vel,dt,KE,PE) struct('header','md simulation','latpar',uc.latpar,...
-                'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,'symb',{{uc.symb{:}}},...
+            md_ = @(uc,tau,vel,dt,KE,PE) struct('header','md simulation',...
+                'bas',uc.bas,'symb',{{uc.symb{:}}},...
                 'nspecies',uc.nspecies,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
                 'species',uc.species,'mass',uc.mass,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE);
             md = md_(uc,tau,vel,dt,KE,PE);
@@ -1125,12 +1171,12 @@ classdef am_lib
            
             import am_lib.*
             
-            % get phonon energies and eigenvectors at k-point
+            % get phonon energies and eigenvectors at k-point; convert hw back to wierd units
             bz=get_fbz(pc,[1,1,1]); bz.k=kpt; bz=get_bvk_dispersion(bvk,bz);
-            [q2u,hw] = get_bvk_normal_transform(bvk,uc,bz);
+            [q2u] = get_bvk_normal_transform(bvk,uc,bz); hw = hw./am_lib.units_eV;
 
             % select a mode
-            fprintf('Energies [meV]\n');fprintf('%5.2f \n',hw*1E3);
+            fprintf('Energies [meV]\n');fprintf('%5.2f \n',bz.hw*1E3);
             fprintf('Mode selected: %i \n',mode);
 
             % build force constant matrices
@@ -1145,9 +1191,6 @@ classdef am_lib
                 phi{m}(1:3,[1:3]+3*(j-1)) = pp.Q{1}(1:3,1:3,iq) * permute(iphi,pp.Q{2}(:,iq)) * pp.Q{1}(1:3,1:3,iq).';
             end
             end
-            
-            % convert hw back into wierd units
-            hw = hw./am_lib.units_eV;
 
             % initialize all arrays 
             PEr=zeros(1,nsteps); KEr=zeros(1,nsteps); PE=zeros(1,nsteps); KE=zeros(1,nsteps);
@@ -1188,8 +1231,8 @@ classdef am_lib
             dt=(nsteps-1)/(hw(:) * am_lib.units_THz);
 
             % create displaced structure
-            md_ = @(uc,tau,vel,dt,KE,PE) struct('units','frac','latpar',uc.latpar,...
-                'bas',uc.bas,'recbas',uc.recbas,'vol',uc.vol,'symb',{{uc.symb{:}}},...
+            md_ = @(uc,tau,vel,dt,KE,PE) struct('units','frac', ...
+                'bas',uc.bas,'symb',{{uc.symb{:}}},...
                 'nspecies',uc.nspecies,'mass',uc.mass,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
                 'species',uc.species,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE);
             dc = md_(uc,tau,vel,dt,KE,PE);
@@ -1327,8 +1370,8 @@ classdef am_lib
             fprintf('(%.f secs)\n',toc);
 
             % create bvk structure
-            tb_ = @(pp,ip,sav,nbands) struct('units','cart','latpar',pp.latpar,'bas',pp.bas2pc*pp.bas,'recbas',get_recbas(pp.bas2pc*pp.bas), ...
-                'vol',abs(det(pp.bas2pc*pp.bas)),'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
+            tb_ = @(pp,ip,sav,nbands) struct('units','cart','bas',pp.bas2pc*pp.bas, ...
+                'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
                 'nbands',nbands,'nshells',size(sav.W,2),'W',{sav.W},'vsk',{sav.vsk},'xy',ip.xy,'d',ip.d,'v',ip.v);
             tb = tb_(pp,ip,sav,nbands);
 
@@ -1493,7 +1536,7 @@ classdef am_lib
 
             % evaluate eigenvalues on ibz and save to fbz mesh
             nbands = 8; E = zeros(nbands,numel(f2i));
-            for i=[1:ibz.nks]; E(:,f2i==i)=repmat(eig(getH(v,(ibz.recbas*ibz.latpar)*ibz.k(:,i)),'vector'),1,ibz.w(i)); end
+            for i=[1:ibz.nks]; E(:,f2i==i)=repmat(eig(getH(v,ibz.recbas*ibz.k(:,i)),'vector'),1,ibz.w(i)); end
 
             % define nonzero, reshape array into tensor, flatten
             expand_ = @(x) reshape(x,ibz.n); flatten_ = @(x) x(:);
@@ -1575,7 +1618,7 @@ classdef am_lib
 
             % evaluate eigenvalues on ibz and save to fbz mesh
             nbands = 8; E = zeros(nbands,numel(f2i));
-            for i=[1:ibz.nks]; E(:,f2i==i)=repmat(eig(getH(v,(ibz.recbas*ibz.latpar)*ibz.k(:,i)),'vector'),1,ibz.w(i)); end
+            for i=[1:ibz.nks]; E(:,f2i==i)=repmat(eig(getH(v,ibz.recbas*ibz.k(:,i)),'vector'),1,ibz.w(i)); end
 
             % define nonzero, reshape array into tensor, flatten
             expand_ = @(x) reshape(x,ibz.n); flatten_ = @(x) x(:);
@@ -1684,8 +1727,8 @@ classdef am_lib
                 xy = V(:,PM(:,E)); v = uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),uc.bas); s_ck = [PM==PM(:,E)].';
                 
                 % create "irreducible" structure
-                ip_ = @(uc,s_ck,xy,d,v) struct('units','cart','latpar',uc.latpar,'bas',uc.bas2pc*uc.bas,'recbas',get_recbas(uc.bas2pc*uc.bas), ...
-                    'vol',abs(det(uc.bas2pc*uc.bas)),'symb',{uc.symb},'mass',uc.mass,'natoms',numel(uc.p2u),'species',uc.species(uc.p2u),...
+                ip_ = @(uc,s_ck,xy,d,v) struct('units','cart','bas',uc.bas2pc*uc.bas, ...
+                    'symb',{uc.symb},'mass',uc.mass,'natoms',numel(uc.p2u),'species',uc.species(uc.p2u),...
                     'nshells',size(xy,2),'s_ck',s_ck,'xy',xy,'d',d,'v',v);
                 ip = ip_(uc,s_ck(:,ip2pp),xy(:,ip2pp),normc_(v(:,ip2pp)),v(:,ip2pp));
             
@@ -1723,7 +1766,7 @@ classdef am_lib
             % define primitive pair saving function
             pp_ = @(uc,c_id,o_id,i_id,q_id,iq_id,Q) struct(...
                 'units','cart',...
-                'latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas,'bas2pc',uc.bas2pc,'tau2pc',uc.tau2pc,...
+                'bas',uc.bas,'bas2pc',uc.bas2pc,'tau2pc',uc.tau2pc,...
                 'symb',{uc.symb},'mass',uc.mass,'natoms',uc.natoms,'tau',uc.bas*uc.tau,'species',uc.species,...
                 'u2p',uc.u2p,'u2i',uc.u2i,'p2u',uc.p2u,'i2u',uc.i2u, ...
                 'pc_natoms',numel(uc.p2u),...
@@ -1836,8 +1879,8 @@ classdef am_lib
                 xyz = V(:,PM(:,E)); s_ck = [PM==PM(:,E)].';
 
                 % create "irreducible" structure
-                it_ = @(uc,s_ck,xyz) struct('units','cart','latpar',uc.latpar,'bas',uc.bas2pc*uc.bas,'recbas',get_recbas(uc.bas2pc*uc.bas), ...
-                    'vol',abs(det(uc.bas2pc*uc.bas)),'symb',{uc.symb},'mass',uc.mass,'natoms',numel(uc.p2u),'species',uc.species(uc.p2u),...
+                it_ = @(uc,s_ck,xyz) struct('units','cart','bas',uc.bas2pc*uc.bas, ...
+                    'symb',{uc.symb},'mass',uc.mass,'natoms',numel(uc.p2u),'species',uc.species(uc.p2u),...
                     'nshells',size(xyz,2),'s_ck',s_ck,'xyz',xyz);
                 it = it_(uc,s_ck(:,it2pt),xyz(:,it2pt));
 
@@ -1875,7 +1918,7 @@ classdef am_lib
             % define primitive pair saving function
             pt_ = @(uc,c_id,o_id,i_id,q_id,iq_id,Q) struct(...
                 'units','cart',...
-                'latpar',uc.latpar,'bas',uc.bas,'recbas',uc.recbas,'bas2pc',uc.bas2pc,'tau2pc',uc.tau2pc,...
+                'bas',uc.bas,'bas2pc',uc.bas2pc,'tau2pc',uc.tau2pc,...
                 'symb',{uc.symb},'mass',uc.mass,'natoms',uc.natoms,'tau',uc.bas*uc.tau,'species',uc.species,...
                 'u2p',uc.u2p,'u2i',uc.u2i,'p2u',uc.p2u,'i2u',uc.i2u, ...
                 'pc_natoms',numel(uc.p2u),...
