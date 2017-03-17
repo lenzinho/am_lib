@@ -737,12 +737,17 @@ classdef am_lib
             set(gcf,'color','w'); hold on;
             
             % get symmetries
-            [~,~,~,R] = get_symmetries(pc);
+            [~,~,S,~] = get_symmetries(pc);
             
-            % generate atoms via point group
-            X = cat(1,matmul_(R,pc.tau),repelem(pc.species,1,1,size(R,3)));
+            % generate atoms via space group
+            seitz_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
+            X = cat(1,seitz_apply_(S,pc.tau),repelem(pc.species,1,1,size(S,3)));
             X = unique(reshape(X,4,[]).','rows').';
             tau = X(1:3,:); species = X(4,:);
+            
+            %  TRY THIS TOO:
+            % tau = osum_([0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1],pc.tau);
+            % species = repelem(pc.species,1,8);
 
             % plot atoms
             h = scatter3_(pc.bas*tau,100*sqrt(species),species,'filled');
