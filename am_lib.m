@@ -113,7 +113,7 @@ classdef am_lib
                     uc.species(l)=i;
                 end
             end
-            if ~strcmp(coordtype(1),'d'); uc.tau=uc.bas\uc.tau; end
+            if ~strcmp(coordtype(1),'d'); uc.tau=uc.bas\uc.tau*latpar; end
             fclose(fid);
             %
             function [Z] = symb2Z(symb)
@@ -377,48 +377,46 @@ classdef am_lib
         
         % symmetry
 
-        function [P]     = get_translations(tau,species)
+        function [T,H,S,R] = get_symmetries(pc)
+            % T = all possible translations which restore the crystal to iteself
+            % H = holohogries (all possible rotations which restore the bravais lattice onto iteself)
+            % S = space group symmetries
+            % R = point group symmetries
             
             import am_lib.*
             
             % define function to check first two dimensions
             check3_ = @(A) all(all(abs(A)<am_lib.tiny,1),2);
-
-            % sort atoms and species into a unique order (reference)
-            X_ = @(tau,species) sortcol_([species;mod_(tau)]); X = X_(tau,species);
-
-            % find vectors that preserve periodic boundary conditions
-            N=1; P=mod_(tau(:,species==species(N))-tau(:,N)); nPs=size(P,2); P_ck=false(1,nPs);
-            for j = 1:nPs; P_ck(j) = check3_( X_(tau(1:3,:)-P(:,j),species)-X ); end
-
-            % sort P based on lengths
-            P=[P(:,P_ck),eye(3)]; P=P(:,rankcol_(normc_(P))); 
-        end
-
-        function [S,R]   = get_symmetries(pc)
             
-            import am_lib.*
-            
-            % define function to check first two dimensions
-            check3_ = @(A) all(all(abs(A)<am_lib.tiny,1),2);
+            % define function to sort atoms and species into a unique order (reference)
+            X_ = @(tau,species) sortcol_([species;mod_(tau)]); X = X_(pc.tau,pc.species);
 
-            % define function to check for arithmetic holodries (symmetries for which R'*g*R = g; g = bas'*bas)
+            % get vectors that preserve periodic boundary conditions
+            N=1; T=mod_(pc.tau(:,pc.species==pc.species(N))-pc.tau(:,N)); nTs=size(T,2); T_ck=false(1,nTs);
+            for j = 1:nTs; T_ck(j) = check3_( X_(pc.tau(1:3,:)-T(:,j),pc.species)-X ); end
+            T=[T(:,T_ck),eye(3)]; T=T(:,rankcol_(normc_(T))); 
+
+            if nargout == 1; return; end
+            
+            % get arithmetic holodries (symmetries for which R'*g*R = g; g = bas'*bas)
             N=9; Q=[-1:1]; nQs=numel(Q);[Y{N:-1:1}]=ndgrid(1:nQs); L=reshape(Q(reshape(cat(N+1,Y{:}),[],N)).',3,3,[]);
-            get_rotations_frac_ = @(M) L(:,:,check3_(matmul_(matmul_(permute(L,[2,1,3]),M'*M),L)-M'*M));
+            get_holodries_frac_ = @(M) L(:,:,check3_(matmul_(matmul_(permute(L,[2,1,3]),M'*M),L)-M'*M));
+            H = get_holodries_frac_(pc.bas); nHs = size(H,3);
+            id = member_(flatten_(eye(3)),reshape(H,3^2,[])); H(:,:,[1,id])=H(:,:,[id,1]);
 
-            % get seitz operators which leave the atomic basis invariant
-            X_= @(tau,species) sortcol_([species;mod_(tau)]); X = X_(pc.tau,pc.species); 
-            R = get_rotations_frac_(pc.bas); T = uniquecol_( osum_(pc.tau,-pc.tau) ); 
-            nRs = size(R,3); nTs = size(T,2); S = zeros(4,4,nRs*nTs); S(4,4,:)=1; k=0;
-            for i = 1:nRs; for j = 1:nTs
-                if check3_( X_(R(:,:,i)*pc.tau+T(:,j),pc.species) - X ); k=k+1; S(1:3,1:4,k)=[ R(:,:,i), T(:,j) ]; end
-            end; end
-
-            % trim unused space, apply mod, and get point symmetries
-            S=S(:,:,1:k); R=reshape(uniquecol_( reshape(S(1:3,1:3,:),[9,k]) ),3,3,[]);
+            if nargout == 2; return; end
             
-            % put identity first
+            % get seitz operators which leave the atomic basis invariant
+            S = zeros(4,4,nHs*nTs); S(4,4,:)=1; k=0;
+            for i = 1:nHs; for j = 1:nTs
+                if check3_( X_(H(:,:,i)*pc.tau+T(:,j),pc.species) - X ); k=k+1; S(1:3,1:4,k)=[ H(:,:,i), T(:,j) ]; end
+            end; end; S = S(:,:,1:k); 
             id = member_(flatten_(eye(4)),reshape(S,4^2,[])); S(:,:,[1,id])=S(:,:,[id,1]);
+            
+            if nargout == 3; return; end
+
+            % get point symmetries and set identity first
+            R  = reshape(uniquecol_( reshape(S(1:3,1:3,:),[9,k]) ),3,3,[]);
             id = member_(flatten_(eye(3)),reshape(R,3^2,[])); R(:,:,[1,id])=R(:,:,[id,1]);
         end
 
@@ -592,20 +590,28 @@ classdef am_lib
             % print point group name
             pg_name = pg{pg_code};
         end
+        
+        function brv_name = decode_holohodry(pg_code)
+            % point group dataset
+            brav={'triclinic','','','','monoclinic','','','orthorhombic', ...
+                  '','','','','trigonal','','','','','','','tetragonal',...
+                  '','','','','','','hexagonal','','','','','cubic'};
+            % print point group name
+            brv_name = brav{pg_code};
+        end
 
 
         % unit cells
 
-        function [uc,pc,ic]   = get_cells(fname,flags)
+        function [uc,pc,ic]   = get_cells(fname)
             % wrapper routine
             % fname = 'infile.supercell' (poscar)
             
             import am_lib.*
-            
-            % continue earlier calc?
-            sfile = sprintf('%s','am_cells.mat');
-            if and(strfind(flags,'continue'),exist(sfile,'file')); load(sfile); return; end 
 
+            % time
+            fprintf(' ... solving for cells and symmetries'); tic
+            
             % load poscar
             uc = load_poscar(fname);
 
@@ -631,8 +637,13 @@ classdef am_lib
             % save bas2pc and tau2pc to convert [uc-frac] to [pc-frac]
             uc.bas2pc = pc.bas/uc.bas; uc.tau2pc = inv(uc.bas2pc);
             
-            % save
-            save('am_cells.mat','uc','pc','ic');
+            % print basic symmetry info
+            [~,H,~,R] = get_symmetries(pc);
+            
+            fprintf(', %s',decode_holohodry(identify_pointgroup(H)));
+            fprintf(', %s',decode_pg(identify_pointgroup(R)));
+            
+            fprintf(' (%.f secs)\n',toc);
         end
 
         function [pc,p2u,u2p] = get_primitive_cell(uc)
@@ -643,10 +654,8 @@ classdef am_lib
 
             import am_lib.*
             
-            tiny = am_lib.tiny;
-
             % build permutation matrix for atoms related by translations
-            T=get_translations(uc.tau,uc.species); nTs=size(T,2); PM=zeros(uc.natoms,nTs);
+            T = get_symmetries(uc); nTs=size(T,2); PM=zeros(uc.natoms,nTs);
             for i = [1:nTs]; PM(:,i)=rankcol_( [mod_(uc.tau+T(1:3,i));uc.species] ); end
 
             % construct a sparse binary representation 
@@ -654,9 +663,9 @@ classdef am_lib
 
             % set basis (the three smallest vectors which preserve periodic boundary conditions)
             inds=[0,0,0];
-            for j = 1:nTs; if any(abs(T(:,j))>tiny); inds(1)=j; break; end; end
-            for j = 1:nTs; if any(abs( cross(T(:,2),T(:,j)) )>tiny); inds(2)=j; break; end; end
-            for j = 1:nTs; inds(3)=j; if abs(det(T(:,inds))+eye(3)*eps) > tiny; break; end; end
+            for j = 1:nTs; if any(abs(T(:,j))>am_lib.eps); inds(1)=j; break; end; end
+            for j = 1:nTs; if any(abs( cross(T(:,2),T(:,j)) )>am_lib.eps); inds(2)=j; break; end; end
+            for j = 1:nTs; inds(3)=j; if abs(det(T(:,inds))+eye(3)*eps) > am_lib.eps; break; end; end
             B=T(:,inds); if det(B)<0; B=fliplr(B); end
             
             % set identifiers (see NOTE)
@@ -679,7 +688,7 @@ classdef am_lib
             bundle_ = @(ex_,PM,Sinds) deal(PM(:,ex_),Sinds(ex_));
             
             % get seitz matrices
-            [S,~] = get_symmetries(pc);
+            [~,~,S] = get_symmetries(pc);
 
             % define function to apply symmetries to position vectors
             seitz_apply_ = @(S,tau) mod_(reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:));
@@ -720,7 +729,31 @@ classdef am_lib
             sc = sc_(uc,X(2:4,:),B,s2u);
         end
 
+        function [h] = plot_cell(pc)
+            
+            import am_lib.*
+            
+            % initialize figure
+            figure(1); set(gcf,'color','w'); hold on;
+            
+            % get symmetries
+            [~,~,~,R] = get_symmetries(pc);
+            
+            % generate atoms via point group
+            X = cat(1,matmul_(R,pc.tau),repelem(pc.species,1,1,size(R,3)));
+            X = unique(reshape(X,4,[]).','rows').';
+            tau = X(1:3,:); species = X(4,:);
 
+            % plot atoms
+            h = scatter3_(pc.bas*tau,100*sqrt(species),species,'filled');
+            
+            % plot pc boundaries
+            plothull_(pc.bas*[0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1]);
+
+            hold off; daspect([1 1 1]); box on;
+        end
+        
+        
         % brillouin zones
 
         function [fbz,ibz]     = get_zones(pc,n,flags)
@@ -768,7 +801,7 @@ classdef am_lib
             import am_lib.*
             
             % get point symmetries [real-frac --> rec-frac] by applying basis transformation twice
-            [~,R] = get_symmetries(pc); R = matmul_(pc.bas^2,matmul_(R,inv(pc.bas)^2)); 
+            [~,~,~,R] = get_symmetries(pc); R = matmul_(pc.bas^2,matmul_(R,inv(pc.bas)^2)); 
 
             % build permutation matrix for kpoints related by point symmetries
             PM = member_(mod_(matmul_(R,fbz.k)),fbz.k); A = get_connectivity_chart(PM);
@@ -900,7 +933,7 @@ classdef am_lib
             [bvk,pp] = get_pairs(pc,uc,cutoff);
 
             % force constant model
-            bvk = get_bvk_model(bvk,pp);
+            bvk = get_bvk_model(bvk,pp,uc);
 
             % get force constants
             bvk = get_bvk_force_constants(bvk,pp,fname);
@@ -912,13 +945,7 @@ classdef am_lib
             save(sfile,'bvk','pp')
         end
 
-        function [bvk] = get_bvk_model(ip,pp)
-            %
-            % NOTE #1: sum rules are enforced again in the extraction of
-            % symmetry-adapted force constants and the implementation here is
-            % redundant. Still, keep in mind that, it will add more parameters to
-            % the evaluation of the dynamical matrix.
-            %
+        function [bvk] = get_bvk_model(ip,pp,uc)
             
             import am_lib.*
 
@@ -956,7 +983,8 @@ classdef am_lib
             bvk = bvk_(pp,ip,sav);
 
             % define function to get bond vector
-            vec_ = @(xy) uc2ws(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)),pp.bas);
+            vec_ = @(xy) uc2ws(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)),pp.bas); % [cart]
+            % vec_ = @(xy) uc.tau2pc*(mod_(uc.tau(:,xy(2,:)) - uc.tau(:,xy(1,:))+.5)-.5); % [pc-frac]
             
             % construct symbolic dynamical matrix
             fprintf(' ... solving for symbolic dynamical matrix '); tic;
@@ -970,7 +998,7 @@ classdef am_lib
                 n = pp.u2p(y); np = [1:3]+3*(n-1);
 
                 % rotate force constants and bond vector
-                xy = [x;y]; rij = vec_(xy(pp.Q{2}(:,iq))); rij(abs(rij)<1E-8) = 0;
+                xy = [x;y]; rij = vec_(xy(pp.Q{2}(:,iq))); rij(abs(rij)<am_lib.eps) = 0;
                 phi = sym(pp.Q{1}(1:3,1:3,iq)) * permute(bvk.phi{i},pp.Q{2}(:,iq)) * sym(pp.Q{1}(1:3,1:3,iq)).';
                 
                 % build dynamical matrix
@@ -1076,7 +1104,8 @@ classdef am_lib
             fprintf(' ... computing dispersion '); tic; 
             for i = 1:bz.nks
                 % define input ...
-                input = num2cell([bvk.fc{:},[bz.recbas*bz.k(:,i)].',bvk.mass(unique(bvk.species))]);
+                % input = num2cell([bvk.fc{:},bz.k(:,i).',bvk.mass]); % [pc-frac]
+                input = num2cell([bvk.fc{:},(bz.recbas*bz.k(:,i)).',bvk.mass]); % [cart]
                 % ... and evaluate (U are column vectors)
                 [bz.U(:,:,i),bz.hw(:,i)] = eig(bvk.D(input{:}),'vector'); 
                 % correct units
@@ -1683,7 +1712,7 @@ classdef am_lib
             % step 1: get pair symmetries symmetries [pc-frac]
             
                 % get space symmetries
-                [S,~] = get_symmetries(pc); nSs = size(S,3); 
+                [~,~,S] = get_symmetries(pc); nSs = size(S,3); 
 
                 % save space symmetry combined with permutation of atomic positions as Q
                 M = perms([1:2]).'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); nQs = nSs*nMs;
@@ -1829,7 +1858,7 @@ classdef am_lib
             % step 1: get pair symmetries symmetries [pc-frac]
 
                 % get space symmetries
-                [S,~] = get_symmetries(pc); nSs = size(S,3); 
+                [~,~,S] = get_symmetries(pc); nSs = size(S,3); 
 
                 % save space symmetry combined with permutation of atomic positions as Q
                 M = perms([1:3]).'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); nQs = nSs*nMs;
@@ -2563,8 +2592,32 @@ classdef am_lib
             end
         end
 
-        function [h] = plot3_(A)
-           h = plot3(A(1,:),A(2,:),A(3,:),'o');
+        function [h] = plot3_(A,varargin)
+           h = plot3(A(1,:),A(2,:),A(3,:),varargin{:});
+        end
+        
+        function [h] = scatter3_(A,varargin)
+           h = scatter3(A(1,:),A(2,:),A(3,:),varargin{:});
+        end
+        
+        function [h] = plothull_(A,varargin)
+            
+            import am_lib.*
+            
+            % get points in convex hull
+            DT = delaunayTriangulation(A(1,:).',A(2,:).',A(3,:).'); 
+            CH = convexHull(DT); A=A(:,unique(CH));
+            
+            % get and plot faces
+            DT = delaunayTriangulation(A(1,:).',A(2,:).',A(3,:).');
+            CH = convexHull(DT); TR = triangulation(CH,A.');
+            h = trisurf(TR,'FaceColor','black','EdgeColor','none','FaceAlpha',0.01); 
+
+            % get and plot edges
+            FE = featureEdges(TR,pi/100).'; hold on;
+            for i = 1:size(FE,2); plot3_(A(:,FE(:,i)),'-','color','k','linewidth',2); end
+            hold off;
+
         end
         
         function [h] = plotv3_(A)
