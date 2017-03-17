@@ -734,7 +734,7 @@ classdef am_lib
             import am_lib.*
             
             % initialize figure
-            figure(1); set(gcf,'color','w'); hold on;
+            set(gcf,'color','w'); hold on;
             
             % get symmetries
             [~,~,~,R] = get_symmetries(pc);
@@ -933,7 +933,7 @@ classdef am_lib
             [bvk,pp] = get_pairs(pc,uc,cutoff);
 
             % force constant model
-            bvk = get_bvk_model(bvk,pp,uc);
+            bvk = get_bvk_model(bvk,pp);
 
             % get force constants
             bvk = get_bvk_force_constants(bvk,pp,fname);
@@ -945,7 +945,7 @@ classdef am_lib
             save(sfile,'bvk','pp')
         end
 
-        function [bvk] = get_bvk_model(ip,pp,uc)
+        function [bvk] = get_bvk_model(ip,pp)
             
             import am_lib.*
 
@@ -1304,7 +1304,7 @@ classdef am_lib
             fig_ = @(h)       set(h,'color','white');
             axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
 
-            figure(1); fig_(gcf);
+            fig_(gcf);
             plot(bzp.x,sort(real(bzp.hw)*1E3),'-k',bzp.x,-sort(abs(imag(bzp.hw))),':r');
             axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [meV]'); xlabel('Wavevector k');
         end
@@ -2028,12 +2028,9 @@ classdef am_lib
             G2=sum(G.^2,1);
 
             % call engine
-            m=size(K,2); K0 = zeros(3,m); for j = 1:m; K0(:,j) = uc2ws_engine(K(:,j),G,G2); end
+            m=size(K,2); K0 = zeros(3,m); for j = 1:m; K0(:,j) = uc2ws_engine(K(:,j),G,G2,am_lib.eps); end
 
-            function [K] = uc2ws_engine(K,G,G2)
-                % define tiny
-                tiny = 1E-12;
-
+            function [K] = uc2ws_engine(K,G,G2,tiny)
                 go = true;
                 while go; go=false;
                     for i = 1:26
@@ -2604,6 +2601,9 @@ classdef am_lib
             
             import am_lib.*
             
+            % initialize figure
+            set(gcf,'color','w'); hold on;
+            
             % get points in convex hull
             DT = delaunayTriangulation(A(1,:).',A(2,:).',A(3,:).'); 
             CH = convexHull(DT); A=A(:,unique(CH));
@@ -2614,10 +2614,10 @@ classdef am_lib
             h = trisurf(TR,'FaceColor','black','EdgeColor','none','FaceAlpha',0.01); 
 
             % get and plot edges
-            FE = featureEdges(TR,pi/100).'; hold on;
+            FE = featureEdges(TR,pi/100).'; 
             for i = 1:size(FE,2); plot3_(A(:,FE(:,i)),'-','color','k','linewidth',2); end
-            hold off;
 
+            hold off; daspect([1 1 1])
         end
         
         function [h] = plotv3_(A)
