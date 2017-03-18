@@ -827,12 +827,20 @@ classdef am_lib
             import am_lib.*
             
             % define kpoint path
-            if     strfind( lower(brav), 'fcc' )
-                G=[0;0;0]; X1=[0;1;1]/2; X2=[2;1;1]/2; 
+            if     strfind( lower(brav), 'fcc-short' )
+                G=[0;0;0];  X1=[0;1;1]/2; X2=[2;1;1]/2; 
                 L=[1;1;1]/2; K=[6;3;3]/8;
+                % short path
                 ql={'G','X','K','G','L'}; 
                 qs=[G,X2,K,G]; 
                 qe=[X1,K,G,L];
+            elseif strfind( lower(brav), 'fcc' )
+                G=[0;0;0];  X1=[0;1;1]/2; W=[1;3;2]/4;
+                U=[2;5;5]/8; L=[1;1;1]/2; K=[3;6;3]/8;
+                % long path
+                ql={'G','X','W','K','G','L','U','W','L','K'}; 
+                qs=[G,X1,W,K,G,L,U,W,L]; 
+                qe=[X1,W,K,G,L,U,W,L,K];
             elseif strfind( lower(brav), 'hex' )
                 % for a pc.bas ordered like so:
                 %     3.0531   -1.5266         0
@@ -886,14 +894,13 @@ classdef am_lib
             nks=prod(n); recbas = get_recbas(pc.bas);
 
             % get surface in [cart-recp] then convert back to [frac-recp]
-            Q_ = @(n) [0:(n-1)]./(n-1); [Y{1:2}]=meshgrid(Q_(n(2)),Q_(n(1))); 
-            x = Y{1}.*norm(vx); y = Y{2}.*norm(vy); 
+            Q_ = @(n) [0:(n-1)]./(n-1); [Y{1:2}]=meshgrid(Q_(n(2)),Q_(n(1)));
             k = Y{1}(:).'.*vx + Y{2}(:).'.*vy; k = recbas\k;
 
             % create path object
-            bzs_ = @(recbas,n,nks,x,y,k) struct('units','frac-recp', ...
-                'recbas',recbas,'nks',nks,'n',n,'x',x,'y',y,'k',k);
-            bzs = bzs_(recbas,n,nks,x,y,k);
+            bzs_ = @(recbas,n,nks,k) struct('units','frac-recp', ...
+                'recbas',recbas,'nks',nks,'n',n,'k',k);
+            bzs = bzs_(recbas,n,nks,k);
         end
 
         function [bzl]         = get_bz_line(pc,n,vs,ve)
@@ -946,14 +953,57 @@ classdef am_lib
             X=zeros(3,sum(ex_)); 
             for i = find(ex_); X(:,i) = NP(1:3,ijk(:,i)).'\NP(4,ijk(:,i)).'; end
 
-            % shift to wigner seitz cell and get unique values [slack of 0.99]
-            X = uc2ws(X*0.99,fbz.recbas)/0.99; X = uniquecol_(rnd_(X));
+            % shift to wigner seitz cell and get unique values [relax the edge by ~0.99999x]
+            X = uc2ws(X*0.999,fbz.recbas)/0.999; X = uniquecol_(rnd_(X));
 
             % plot convex hull 
             plothull_(X);
 
             hold off; daspect([1 1 1]); box on;
         end
+        
+        function plot_bz_path(bzp)
+            
+            import am_lib.*
+
+            % initialize figure
+            set(gcf,'color','w'); hold on;
+            
+            % plot brillouin zone path
+            k=bzp.recbas*bzp.k;
+            hold on; plot3(k(1,:),k(2,:),k(3,:),':r','linewidth',2);
+
+            % plot brillouin zone boundary
+            hold on; plot_bz(bzp);
+
+            % plot reciprocal lattice vectors
+            hold on; plotv3_(bzp.recbas,'o-','linewidth',2);
+
+            hold off; daspect([1 1 1]); box on;
+        end
+        
+        function plot_bz_surf(bzs,band)
+            
+            import am_lib.*
+
+            % initialize figure
+            set(gcf,'color','w'); hold on;
+            
+            % plot bz surface
+            k=bzs.recbas*bzs.k; k(abs(k)<am_lib.eps)=0; s_ = @(i) reshape(k(i,:),bzs.n);
+            surf(s_(1),s_(2),s_(3),reshape(real(bzs.hw(band,:)),bzs.n),'facecolor','interp');
+            shading interp;
+
+            % plot brillouin zone boundary
+            plot_bz(bzs);
+
+            % fix axes
+            minmax = @(x) [min(x(:)),max(x(:))]; 
+            caxis(minmax(bzs.hw(band,:)))
+
+            hold off; daspect([1 1 1]); box on;
+        end
+        
         
         % phonons
 
@@ -985,6 +1035,14 @@ classdef am_lib
         end
 
         function [bvk] = get_bvk_model(ip,pp)
+            % NOTE #1:
+            % WTF? Should not flip bond here? If bond flips using:
+            %
+            %           xy = xy(pp.Q{2}(:,iq))
+            %
+            % D becomes non-hermitian for hexagonal case... hmm...
+            % xy = [x;y]; xy = xy(pp.Q{2}(:,iq)); rij = vec_(xy); rij(abs(rij)<am_lib.eps) = 0;
+            %
             
             import am_lib.*
 
@@ -1022,22 +1080,22 @@ classdef am_lib
             bvk = bvk_(pp,ip,sav);
 
             % define function to get bond vector
+            % vec_ = @(xy) pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)); % [cart]
             vec_ = @(xy) uc2ws(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)),pp.bas); % [cart]
-            % vec_ = @(xy) uc.tau2pc*(mod_(uc.tau(:,xy(2,:)) - uc.tau(:,xy(1,:))+.5)-.5); % [pc-frac]
+            % vec_ = @(xy) pp.tau2pc*(mod_(pp.bas\(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)))+.5)-.5); % [pc-frac]
             
             % construct symbolic dynamical matrix
             fprintf(' ... solving for symbolic dynamical matrix '); tic;
             D=sym(zeros(bvk.nbands)); kvec=sym('k%d',[3,1],'real'); mass=sym('m%d',[1,numel(pp.i2u)],'positive');
             for p = 1:pp.pc_natoms
             for j = 1:pp.npairs(p)
-                % get indicies
+                % get indicies and already permute xy,mn,mp,np if necessary by iq
                 i = pp.i{p}(j);iq = pp.iq{p}(j);
-                x = pp.c{p}(1); y = pp.o{p}(j,1);
-                m = pp.u2p(x); mp = [1:3]+3*(m-1);
-                n = pp.u2p(y); np = [1:3]+3*(n-1);
+                x = pp.c{p}(1); y = pp.o{p}(j,1); xy = [x;y];
+                m = pp.u2p(x); mp = [1:3]+3*(m-1); n = pp.u2p(y); np = [1:3]+3*(n-1);
 
-                % rotate force constants and bond vector
-                xy = [x;y]; rij = vec_(xy(pp.Q{2}(:,iq))); rij(abs(rij)<am_lib.eps) = 0;
+                % rotate force constants and bond vector (NOTE #1)
+                rij = vec_(xy); rij(abs(rij)<am_lib.eps) = 0;
                 phi = sym(pp.Q{1}(1:3,1:3,iq)) * permute(bvk.phi{i},pp.Q{2}(:,iq)) * sym(pp.Q{1}(1:3,1:3,iq)).';
                 
                 % build dynamical matrix
@@ -1465,7 +1523,7 @@ classdef am_lib
                 j = uc.u2i(y); n = pp.u2p(y); np = S(n):E(n);
 
                 % rotate force constants and bond vector
-                rij = vec_(xy(pp.Q{2}(:,iq))); rij(abs(rij)<am_lib.eps) = 0;
+                rij = vec_(xy); rij(abs(rij)<am_lib.eps) = 0;
                 vsk =  sym(D{i}(:,:,iq)) * permute(tb.vsk{ir},pp.Q{2}(:,iq)) * sym(D{j}(:,:,iq)).';
                 
                 % build dynamical matrix
@@ -2659,9 +2717,9 @@ classdef am_lib
             hold off; daspect([1 1 1])
         end
         
-        function [h] = plotv3_(A)
+        function [h] = plotv3_(A,varargin)
            A = repelem(A,1,2); A(:,1:2:end)=0;
-           h = plot3(A(1,:),A(2,:),A(3,:),'o-');
+           h = plot3(A(1,:),A(2,:),A(3,:),varargin{:});
         end
 
         function [h] = spyc_(A)
