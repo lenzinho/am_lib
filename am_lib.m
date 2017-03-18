@@ -736,21 +736,19 @@ classdef am_lib
             % initialize figure
             set(gcf,'color','w'); hold on;
             
-            % get symmetries
-            [~,~,S,~] = get_symmetries(pc);
+            % primitive cell
+            tau = pc.tau; species = pc.species;
             
-            % generate atoms via space group
-            seitz_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
-            X = cat(1,seitz_apply_(S,pc.tau),repelem(pc.species,1,1,size(S,3)));
-            X = unique(reshape(X,4,[]).','rows').';
-            tau = X(1:3,:); species = X(4,:);
+            % % get symmetries
+            % [~,~,~,R] = get_symmetries(pc);
+            % 
+            % % generate atoms via space group
+            % apply_sym_ = @(R,tau) reshape(matmul_(R(1:3,1:3,:),tau),3,[]);
+            % X = cat(1,apply_sym_(R,pc.tau),repelem(pc.species,1,size(R,3)));
+            % X = uniquecol_(X); tau = X(1:3,:); species = X(4,:);
             
-            %  TRY THIS TOO:
-            % tau = osum_([0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1],pc.tau);
-            % species = repelem(pc.species,1,8);
-
             % plot atoms
-            h = scatter3_(pc.bas*tau,100*sqrt(species),species,'filled');
+            h = scatter3_(pc.bas*tau,50*sqrt(pc.mass(species)),species,'filled');
             
             % plot pc boundaries
             plothull_(pc.bas*[0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1]);
@@ -920,6 +918,42 @@ classdef am_lib
             bzl = bzl_(recbas,n,nks,x,k);
         end
 
+        function plot_bz(fbz)
+            
+            import am_lib.*
+            
+            % initialize figure
+            set(gcf,'color','w'); hold on;
+            
+            % plot points
+            % h = scatter3_(uc2ws(fbz.recbas*fbz.k,fbz.recbas),'.');
+            
+            % generate all possible points halfway between reciprocal lattice vectors
+            P = [-1,-1,-1,-1,-1,-1,-1,-1,-1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1;...
+                 -1,-1,-1,0,0,0,1,1,1,-1,-1,-1,0,0,1,1,1,-1,-1,-1,0,0,0,1,1,1;...
+                 -1,0,1,-1,0,1,-1,0,1,-1,0,1,-1,1,-1,0,1,-1,0,1,-1,0,1,-1,0,1]/2;
+            P = uc2ws(fbz.recbas*P,fbz.recbas); P = uniquecol_(rnd_(P));
+
+            % get the wigner-seitz planes corresponding to each point
+            N = P./normc_(P); nplanes=size(P,2); NP=zeros(4,nplanes);
+            for i = 1:nplanes; NP(:,i) = [N(:,i);N(:,i).'*P(:,i)]; end
+
+            % find all combinations of three wigner-seitz planes which intersect at a point
+            ijk = nchoosek_(size(P,2),3); nijks = size(ijk,2); ex_ = false(1,nijks); 
+            for i = 1:nijks; ex_(i) = (rank(NP(1:3,ijk(:,i)).')==3); end
+
+            % find points at the intersection of three wigner-seitz planes
+            X=zeros(3,sum(ex_)); 
+            for i = find(ex_); X(:,i) = NP(1:3,ijk(:,i)).'\NP(4,ijk(:,i)).'; end
+
+            % shift to wigner seitz cell and get unique values [slack of 0.99]
+            X = uc2ws(X*0.99,fbz.recbas)/0.99; X = uniquecol_(rnd_(X));
+
+            % plot convex hull 
+            plothull_(X);
+
+            hold off; daspect([1 1 1]); box on;
+        end
         
         % phonons
 
