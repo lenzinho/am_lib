@@ -706,7 +706,7 @@ classdef am_lib
             ic = ic_(pc,i2p);
         end
 
-        function [sc,s2u,u2s] = get_supercell(uc,B)
+        function [uc]         = get_supercell(pc,B)
             
             import am_lib.*
 
@@ -717,16 +717,23 @@ classdef am_lib
             n=round(sum(abs(B),1)); [Y{3:-1:1}]=ndgrid(1:n(1),1:n(2),1:n(3)); nLs=prod(n); L=reshape(cat(3+1,Y{:})-1,[],3).'; 
 
             % expand atoms, coordinates supercell fractional, and reduce to primitive supercell
-            X=uniquecol_([ reshape(repmat([1:uc.natoms],nLs,1),1,[]); mod_(inv(B)*osum_(L,uc.tau)) ]);
+            X=uniquecol_([ reshape(repmat([1:pc.natoms],nLs,1),1,[]); mod_(inv(B)*osum_(L,pc.tau)) ]);
 
             % create mapping
-            s2u = X(1,:); [~,u2s]=unique(s2u); u2s=u2s(:).';
+            u2p = X(1,:); [~,p2u]=unique(u2p); p2u=p2u(:).';
 
             % define irreducible cell creation function and make structure
-            sc_ = @(uc,tau,B,s2u) struct('units','frac','bas',uc.bas*B,'bas2pc',inv(B),'tau2pc',B,...
-                'symb',{{uc.symb{unique(uc.species(s2u))}}},'nspecies',sum(unique(uc.species(s2u)).'==uc.species(s2u),2).', ...
-                'natoms',numel(s2u),'tau',tau,'species',uc.species(s2u),'mass',uc.mass(s2u));
-            sc = sc_(uc,X(2:4,:),B,s2u);
+            uc_ = @(uc,tau,B,s2u) struct('units','frac','bas',uc.bas*B,'bas2pc',inv(B),'tau2pc',B,...
+                'symb',{{uc.symb{unique(uc.species(s2u))}}},'mass',uc.mass,'nspecies',sum(unique(uc.species(s2u)).'==uc.species(s2u),2).', ...
+                'natoms',numel(s2u),'tau',tau,'species',uc.species(s2u));
+            uc = uc_(pc,X(2:4,:),B,u2p);
+            
+            % add maps
+            uc.u2p = u2p; 
+            uc.p2u = p2u; 
+            uc.u2i = pc.p2i(uc.u2p); 
+            uc.i2u = uc.p2u(pc.i2p);
+            
         end
 
         function [h] = plot_cell(pc)
@@ -1298,8 +1305,10 @@ classdef am_lib
             import am_lib.*
             
             % get phonon energies and eigenvectors at k-point; convert hw back to wierd units
-            bz=get_fbz(pc,[1,1,1]); bz.k=kpt; bz=get_bvk_dispersion(bvk,bz);
-            [q2u] = get_bvk_normal_transform(bvk,uc,bz); hw = hw./am_lib.units_eV;
+            bz = get_fbz(pc,[1,1,1]); bz.k = kpt; bz = get_bvk_dispersion(bvk,bz); hw = bz.hw./am_lib.units_eV;
+            
+            % get phonon eigenvector in unit cell based on primitive cell dynamical matrix
+            [q2u] = get_bvk_normal_transform(bvk,uc,bz); 
 
             % select a mode
             fprintf('Energies [meV]\n');fprintf('%5.2f \n',bz.hw*1E3);
@@ -1322,9 +1331,6 @@ classdef am_lib
             PEr=zeros(1,nsteps); KEr=zeros(1,nsteps); PE=zeros(1,nsteps); KE=zeros(1,nsteps);
             tau=zeros(3,uc.natoms,nsteps);vel=zeros(3,uc.natoms,nsteps);F=zeros(3,uc.natoms);
             
-            % zone-center factor
-            if all(abs(mod_(kpt))<am_lib.eps); zcf=1; else; zcf=0.5; end
-
             % displace according to the phonon mode
             t=[0:(nsteps-1)]/(nsteps-1); shape_ = @(A) reshape(A,3,uc.natoms); 
             for i = 1:nsteps
@@ -1348,9 +1354,9 @@ classdef am_lib
                 KEr(i)= sum(v.^2,1) * uc.mass(uc.species).'/2;
 
                 % get potential energy (Ziman Eq. 1.6.17)
-                PE(i) = real( real(   q_sk(:)).'*hw(:) )^2 * zcf;
+                PE(i) = real( real(   q_sk(:)).'*hw(:) )^2;
                 % get kinetic energy (Ziman Eq. 1.6.17)
-                KE(i) = real( real(1i*q_sk(:)).'*hw(:) )^2/2 * zcf;
+                KE(i) = real( real(1i*q_sk(:)).'*hw(:) )^2/2;
             end
 
             % set time step :  sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz = 1/ps]
@@ -1358,8 +1364,8 @@ classdef am_lib
 
             % create displaced structure
             md_ = @(uc,tau,vel,dt,KE,PE) struct('units','frac', ...
-                'bas',uc.bas,'symb',{{uc.symb{:}}},...
-                'nspecies',uc.nspecies,'mass',uc.mass,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
+                'bas',uc.bas,'symb',{{uc.symb{:}}},'mass',uc.mass, ...
+                'nspecies',uc.nspecies,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
                 'species',uc.species,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE);
             dc = md_(uc,tau,vel,dt,KE,PE);
 
@@ -1413,20 +1419,14 @@ classdef am_lib
             
             import am_lib.*
 
-            % get mass vector [3 natoms * 1]
-            M = repelem( uc.mass(uc.species).' ,3,1);
-            % get expoential factor [ 3 natoms * nks nbands ]
-            % use [cart] b/c uc is in [uc. frac]; bz.k is in [prim. rec. frac.] 
-            E = repelem( (uc.bas*uc.tau).'*(bvk.recbas*bz.k) ,3, bvk.nbands );
-            % u2p : unitcell to primitive cell index
-            u2p = flatten_([1:3].'+3*(uc.u2p-1)); 
-            % get eigenvectors in supercell basis [ 3 natoms * nbands nks ]; W should be orthonormal: spy(abs(W'*W)>1E-5) = identity
-            W = reshape( bz.U(u2p,:,:), 3*uc.natoms, bvk.nbands*bz.nks) .* exp(+2i.*pi.*E); W = W./normc_(W);
-            % construct linear operator (multiply by q_sk to get displacements)
-            q2u = real( W ./ sqrt(M) ) ;
+            % expand primitive eigenvectors to unit cell
+            u2p = flatten_([1:3].'+3*(uc.u2p-1));
+            U = reshape(bz.U(u2p,:),3*uc.natoms,bvk.nbands*bz.nks); 
+            E = repelem(exp(+2i*pi*(uc.tau2pc*uc.tau).'*bz.k),3,bvk.nbands);
+            M = repelem(uc.mass(uc.species).',3,1);
+            q2u = real(U.*E); q2u=q2u./normc_(q2u); q2u=q2u./sqrt(M);
         end
        
-
         % electrons
 
         function [tb,pp] = get_tb(pc,uc,cutoff,spdf,nskips,Ef,fname,flags)
@@ -1812,7 +1812,8 @@ classdef am_lib
                 [~,~,S] = get_symmetries(pc); nSs = size(S,3); 
 
                 % save space symmetry combined with permutation of atomic positions as Q
-                M = perms([1:2]).'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); nQs = nSs*nMs;
+                M = perms([2:-1:1]).'; nMs = size(M,2); nQs = nSs*nMs;
+                Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); 
 
                 % get multiplication table, list of inverse elements, and identity
                 [MT,E,I]= get_multiplication_table(Q); nQs = size(MT,1);
@@ -1820,8 +1821,9 @@ classdef am_lib
             % step 2: [PM, V, ip2pp, and pp2ip]
 
                 % get all possible pairs which have bond legnths below the cutoff 
+                d_cart_ = @(dX) normc_(uc2ws(uc.bas*dX,uc.bas));
                 [Y{1:2}]=ndgrid(1:uc.natoms,uc.p2u); x=[Y{2}(:),Y{1}(:)].';
-                ex_ = normc_(uc2ws(uc.bas*(uc.tau(:,x(2,:))-uc.tau(:,x(1,:))),uc.bas))<cutoff;
+                ex_ = d_cart_(uc.tau(:,x(2,:))-uc.tau(:,x(1,:)))<cutoff;
 
                 % [pc-frac] compute action of space symmetries on pair positions
                 seitz_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
@@ -1831,9 +1833,14 @@ classdef am_lib
                 for iq = 1:nQs; tau(:,:,iq,:) = tau(1:3,:,iq,Q{2}(:,iq)); end
 
                 % [uc-frac] shift reference atom to primitive cell and record uc index
-                G_ = @(tau) tau - mod_(tau); tau = mod_(matmul_(uc.bas2pc, tau - G_(tau(:,:,:,1)) ));
-                P1 = member_(tau(:,:,:,1),uc.tau);
-                P2 = member_(tau(:,:,:,2),uc.tau);
+                %     relax matching criteria here by a factor of 10;
+                %     solves a problem for systems with atoms are at 1/3
+                %     position whereone of the coordinates may be -0.6666
+                %     and the other 0.3334. Applying mod takes -0.6666 to
+                %     0.3334 causing a difference of 0.001.        
+                G_ = @(tau) tau - mod_(tau); tau = mod_(matmul_(uc.bas2pc,tau-G_(tau(:,:,:,1))));
+                P1 = member_(tau(:,:,:,1)/10,uc.tau/10);
+                P2 = member_(tau(:,:,:,2)/10,uc.tau/10);
 
                 % create a unique pair label
                 [V,~,V_p2i]=unique([P1(:),P2(:)],'rows'); V=V.';
@@ -2467,7 +2474,7 @@ classdef am_lib
 
         function [C] = normc_(A)
             % get length of each column vector
-            C = sqrt(sum(A.^2,1));
+            C = sqrt(sum(abs(A).^2,1));
         end
 
         function [C] = operm_(A,I)
