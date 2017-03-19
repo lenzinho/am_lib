@@ -159,7 +159,7 @@ classdef am_lib
             for i = 1:5; fgetl(fid); end
             buffer = strsplit(strtrim(fgetl(fid)));
             dr.nelecs = sscanf(buffer{1},'%i');
-            bz.nks  = sscanf(buffer{2},'%i');
+            bz.nks    = sscanf(buffer{2},'%i');
             dr.nbands = sscanf(buffer{3},'%i');
             fprintf(' ... electrons = %i \n',dr.nelecs);
             fprintf(' ... kpoints = %i \n',bz.nks);
@@ -265,12 +265,12 @@ classdef am_lib
             import am_lib.*
             
             fprintf(' ... loading displacements vs forces'); tic;
-            
+
             % count number of lines in file and check that all runs completed properly
             nlines = count_lines(fname); if mod(nlines,uc.natoms)~=0; error('lines appear to be missing.'); end;
 
-            % open file and parse
-            fid = fopen(fname); fd = reshape(fscanf(fid,'%f'),6,uc.natoms,nlines/uc.natoms); fclose(fid);
+            % open file and parse: use single precision here, solves for force constants much faster
+            fid = fopen(fname); fd = reshape(single(fscanf(fid,'%f')),6,uc.natoms,nlines/uc.natoms); fclose(fid);
             
             % convert to [uc-frac]
             fd(1:3,:,:) = matmul_(inv(uc.bas),fd(1:3,:,:));
@@ -280,18 +280,10 @@ classdef am_lib
                 'bas',uc.bas,'symb',{{uc.symb{:}}},'mass',uc.mass,'nspecies',uc.nspecies, ...
                 'natoms',uc.natoms,'force',force,'tau',tau,'vel',vel,'species',uc.species, ...
                 'dt',dt,'nsteps',size(tau,3));
-            md = fd_(uc,fd(4:6,:,:),fd(1:3,:,:),cat(3,zeros(3,uc.natoms),diff(fd(1:3,:,:),1,3)/dt),dt);
+            md = fd_(uc,fd(4:6,:,:),fd(1:3,:,:),cat(3,zeros(3,uc.natoms),(mod_(diff(fd(1:3,:,:),1,3)+.5)-.5)/dt),dt);
             
             fprintf(' (%.f secs)\n',toc);
-            
-            function [nlines] = count_lines(fname)
-                if ispc
-                    [~,a] = system(sprintf('type %s | find /c /v ""',fname));
-                elseif or(ismac,isunix)
-                    [~,a] = system(sprintf('wc -l %s',fname));
-                end
-                nlines = sscanf(a,'%i');
-            end
+
         end
         
         function [en]    = load_band_energies(nbands,fname)
@@ -380,14 +372,6 @@ classdef am_lib
             % open file and parse
             nsteps=nlines/nbands; fid=fopen(fname); en=reshape(fscanf(fid,'%f'),nbands,nsteps); fclose(fid);
 
-            function [nlines] = count_lines(fname)
-                if ispc
-                    [~,a] = system(sprintf('type %s | find /c /v ""',fname));
-                elseif or(ismac,isunix)
-                    [~,a] = system(sprintf('wc -l %s',fname));
-                end
-                nlines = sscanf(a,'%i');
-            end
         end
         
         
@@ -1409,7 +1393,7 @@ classdef am_lib
                 PE(j) = - u(:).'*flatten_(force(:,:,j));
 
                 % 4) compute kinetic energy [ need a change of units here? amu * (Ang/ps)^2 -> 1.036382E-4 eV ]
-                KE(j) = sum(uc.mass(uc.species).*normc_(uc.bas*vel(:,:,j-1))/2); 
+                KE(j) = uc.mass(uc.species)*sum((uc.bas*v(:,:,j)).^2,1).'/2;
 
                 % 5) compute Nose-Hoover drag: p_eta = KE - TE; degrees of freedom = 3 (1/2 PE + 1/2 KE per direction)
                 nosehoover = vel(:,:,j-1)/Q * ( KE(j) - 3*uc.natoms*k_boltz*T );
@@ -1448,6 +1432,57 @@ classdef am_lib
             end
         end
 
+
+        function [T,KE,PE]  = md_parse(uc,md)
+            
+            import am_lib.*
+            
+            % [cart] get displacements and forces
+            u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
+            f = matmul_( md.bas, md.force );
+            v = matmul_( md.bas, md.vel );
+            
+            % get kinetic energy : amu * (Ang/fs)^2 -> 103.6382 eV ]
+            KE = uc.mass(uc.species)*reshape(sum(v.^2,1),[],md.nsteps)/2 * 103.6382;
+            
+            % get potential energy
+            PE = dot(-reshape(u,[],md.nsteps),reshape(f,[],md.nsteps),1);
+            
+            % get temperature : amu * (Ang/fs)^2/ k_B = 1.20267E6 K
+            k_boltz = 8.6173303E-5; % [eV/K]
+            T = 2/3*KE/uc.natoms /k_boltz;
+            
+            % run md using verlet algorithm
+            Z = [[1:md.nsteps].',T(:),PE(:),KE(:),KE(:)+PE(:)];
+            fprintf('%10s   %10s   %10s   %10s   %10s \n','step [#]','T [K]','PE [eV]','KE [eV]','PE+KE [eV]');
+            fprintf('%10i   %10f   %10f   %10f   %10f \n',Z(1:50,:).');
+
+            % print
+            set(gcf,'color','w');
+            subplot(3,1,1); plot([1:md.nsteps],[KE;PE;KE+PE].'); legend('KE','PE','KE+PE');
+                            axis tight; xlabel('time step'); ylabel('energy');
+
+            % plot position and velocity histograms
+            nbins  = 101;
+            dist_v = reshape(normc_(v),uc.natoms,md.nsteps); 
+            dist_u = reshape(normc_(u),uc.natoms,md.nsteps); 
+            bin_v  = linspace(0,max(dist_v(:)),nbins);
+            bin_u  = linspace(0,max(dist_u(:)),nbins);
+            hist_v = zeros(nbins-1,md.nsteps);
+            hist_u = zeros(nbins-1,md.nsteps);
+            for i = 1:md.nsteps
+                [hist_v(:,i)] = histcounts(dist_v(:,i),bin_v);
+                [hist_u(:,i)] = histcounts(dist_u(:,i),bin_u);
+            end
+            [Y{1:2}]=meshgrid(1:md.nsteps,bin_v(1:(nbins-1))); hist_v(:,1)=[]; Y{1}(:,1)=[]; Y{2}(:,1)=[];
+            subplot(3,1,2); surf(Y{1},Y{2},hist_v,'Facecolor','interp','edgecolor','none');
+                            view(2); axis tight; xlabel('time step'); ylabel('velocity');
+            [Y{1:2}]=meshgrid(1:md.nsteps,bin_u(1:(nbins-1))); hist_u(:,1)=[]; Y{1}(:,1)=[]; Y{2}(:,1)=[];
+            subplot(3,1,3); surf(Y{1},Y{2},hist_u,'Facecolor','interp','edgecolor','none');
+                            view(2); axis tight; xlabel('time step'); ylabel('displacement');
+            
+        end
+        
         function [bvk] = interpolate_bvk(bvk_1,bvk_2,n)
             % interpolates force constants and masses from bvk_1 and bvk_2 on n points (includes end points)
 
@@ -2915,7 +2950,15 @@ classdef am_lib
             end
         end
         
-
+        function [n] = count_lines(fname)
+            if ispc
+                [~,a] = system(sprintf('type %s | find /c /v ""',fname));
+            elseif or(ismac,isunix)
+                [~,a] = system(sprintf('wc -l %s',fname));
+            end
+            n = sscanf(a,'%i');
+        end
+        
         % aux aesthetic
        
         function [cmap] =  get_colormap(palette,n)
