@@ -736,11 +736,15 @@ classdef am_lib
             
         end
         
-        function [dc]         = get_displaced_cell(pc,bvk,uc,pp,kpt,amp,mode,nsteps)
-            % kpt = [0,0,1]; % must be commensurate with uc!!!
-            % nsteps = 10; amp = 1; mode = 1
+        function [dc,idc]     = get_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps)
+            % n=[4,4,4]; kpt=[0;1/2;1/2]; amp=4; mode=3; nsteps=31;
+            % [dc,idc] = get_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps); 
+            % % clf; F = plot_md_cell(dc); movie(F,3)
            
             import am_lib.*
+            
+            % get a supercell commensurate with the kpoint
+            uc = get_supercell(pc,diag(n)); [~,pp] = get_pairs(pc,uc,bvk.cutoff);
             
             % get phonon energies and eigenvectors at k-point; convert hw back to wierd units
             bz = get_fbz(pc,[1,1,1]); bz.k = kpt; bz = get_bvk_dispersion(bvk,bz); hw = bz.hw./am_lib.units_eV;
@@ -812,32 +816,26 @@ classdef am_lib
             figure(1); 
             subplot(2,1,1); plot([1:nsteps],KEr,'-',[1:nsteps],KE,'.'); legend('Ref. KE','KE');
             subplot(2,1,2); plot([1:nsteps],PEr,'-',[1:nsteps],PE,'.'); legend('Ref. PE','PE');
-        end
-        
-        function [idc]        = get_irreducible_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps)
-           % n=[2,2,2]; kpt=[0;1/2;1/2]; amp=2; mode=9; nsteps=31;
+            
+            % get "primitive" irreducible displaced cell
+            if nargout==2                
+                % displace according to normal phonon mode
+                dc = get_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps);
 
-           import am_lib.*
-           
-            % get a supercell commensurate with the kpoint
-            sc = get_supercell(pc,diag(n)); [~,sc_pp] = get_pairs(pc,sc,bvk.cutoff);
+                % get primitive cell basis commensurate with the displacement
+                [cc,c2d,d2c] = get_primitive_cell(dc);
 
-            % displace according to normal phonon mode
-            dc = get_displaced_cell(pc,bvk,sc,sc_pp,kpt,amp,mode,nsteps);
-
-            % get primitive cell basis commensurate with the displacement
-            [cc,c2d,d2c] = get_primitive_cell(dc);
-
-            % reduce dc size
-            idc_ = @(dc,cc_bas,c2d,d2c) struct('units',dc.units, ...
-                'bas',cc_bas,'symb',{{dc.symb{:}}},'mass',dc.mass, ...
-                'nspecies',sum(dc.species.'==[1:max(dc.species)],1),'natoms',numel(c2d), ...
-                'tau',mod_(matmul_(cc_bas\dc.bas,dc.tau(:,c2d,:))),...
-                'vel',     matmul_(cc_bas\dc.bas,dc.vel(:,c2d,:)), ...
-                'species',dc.species(c2d),'dt',dc.dt,'nsteps',dc.nsteps, ...
-                'KE',dc.KE*numel(cd)/dc.natoms,'PE',dc.PE*numel(cd)/dc.natoms, ...
-                'u2p',dc.u2p(c2d),'p2u',d2c(dc.p2u),'u2i',dc.u2i(c2d),'i2u',d2c(dc.i2u));
-            idc = idc_(dc,cc.bas,c2d,d2c);
+                % reduce dc size
+                idc_ = @(dc,cc_bas,c2d,d2c) struct('units',dc.units, ...
+                    'bas',cc_bas,'symb',{{dc.symb{:}}},'mass',dc.mass, ...
+                    'nspecies',sum(dc.species.'==[1:max(dc.species)],1),'natoms',numel(c2d), ...
+                    'tau',mod_(matmul_(cc_bas\dc.bas,dc.tau(:,c2d,:))),...
+                    'vel',     matmul_(cc_bas\dc.bas,dc.vel(:,c2d,:)), ...
+                    'species',dc.species(c2d),'dt',dc.dt,'nsteps',dc.nsteps, ...
+                    'KE',dc.KE*numel(cd)/dc.natoms,'PE',dc.PE*numel(cd)/dc.natoms, ...
+                    'u2p',dc.u2p(c2d),'p2u',d2c(dc.p2u),'u2i',dc.u2i(c2d),'i2u',d2c(dc.i2u));
+                idc = idc_(dc,cc.bas,c2d,d2c);
+            end
         end
         
         function [h] = plot_cell(pc)
@@ -875,13 +873,13 @@ classdef am_lib
             for i = 1:md.natoms; hold on; plot3_(md.bas*reshape(md.tau(:,i,:),3,[]),'.','markersize',5); end
 
             % plot first point
-            hold on; h = scatter3_(md.bas*md.tau(:,:,1),50*sqrt(md.mass(md.species)),md.species,'filled'); hold off;
+            hold on; h = scatter3_(md.bas*md.tau(:,:,1),50*sqrt(md.mass(md.species)),md.species(:),'filled','MarkerEdgeColor','k'); hold off;
             axis(fixaxis); drawnow; pause(0.1); F(md.nsteps) = struct('cdata',[],'colormap',[]); F(1) = getframe;
 
             if md.nsteps>1
             for i = 2:md.nsteps
                 delete(h); 
-                hold on; h = scatter3_(md.bas*md.tau(:,:,i),50*sqrt(md.mass(md.species)),md.species,'filled'); hold off; 
+                hold on; h = scatter3_(md.bas*md.tau(:,:,i),50*sqrt(md.mass(md.species)),md.species(:),'filled','MarkerEdgeColor','k'); hold off; 
                 axis(fixaxis); view(3); drawnow; F(i) = getframe;
             end
             end
@@ -2920,7 +2918,7 @@ classdef am_lib
         
 
         % aux aesthetic
-
+       
         function [cmap] =  get_colormap(palette,n)
 
 % color palettes
@@ -3314,9 +3312,8 @@ map_ = @(n,cmap) interp1([0:(size(cmap,1)-1)]./(size(cmap,1)-1),cmap,linspace(0,
 cmap = map_(n,cmap);
 
         end
-         
-    end
-    
+
+    end    
 end
 
 
