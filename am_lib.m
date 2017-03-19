@@ -82,9 +82,9 @@ classdef am_lib
             fid=fopen(fname,'w');
             fprintf(fid,'%s ','POSCAR'); r_(fid);
             fprintf(fid,'%12.8f ',1.0); r_(fid); % latpar
-            fprintf(fid,'%12.8f ',uc.bas(:,1)/uc.latpar); r_(fid);
-            fprintf(fid,'%12.8f ',uc.bas(:,2)/uc.latpar); r_(fid);
-            fprintf(fid,'%12.8f ',uc.bas(:,3)/uc.latpar); r_(fid);
+            fprintf(fid,'%12.8f ',uc.bas(:,1)); r_(fid);
+            fprintf(fid,'%12.8f ',uc.bas(:,2)); r_(fid);
+            fprintf(fid,'%12.8f ',uc.bas(:,3)); r_(fid);
             fprintf(fid,' %s ',uc.symb{:}); r_(fid);
             fprintf(fid,' %i ',uc.nspecies); r_(fid);
             fprintf(fid,'Direct '); r_(fid);
@@ -183,10 +183,10 @@ classdef am_lib
             fclose(fid);
         end
 
-        function [fd]    = load_force_position(natoms,fname)
+        function [md]    = load_md(uc,fname,dt)
             %
             % First, preprocess the outcar using the bash function below. Then,
-            % call load_force_position on the file produced.
+            % call load_md on the file produced.
             %
             % #!/bin/bash
             % # Preprocess outcar to remove the last run, which may not have finished
@@ -262,12 +262,28 @@ classdef am_lib
             % done
             % main_
 
+            import am_lib.*
+            
+            fprintf(' ... loading displacements vs forces'); tic;
+            
             % count number of lines in file and check that all runs completed properly
-            nlines = count_lines(fname); if mod(nlines,natoms)~=0; error('lines appear to be missing.'); end;
+            nlines = count_lines(fname); if mod(nlines,uc.natoms)~=0; error('lines appear to be missing.'); end;
 
             % open file and parse
-            fid = fopen(fname); fd = reshape(fscanf(fid,'%f'),6,natoms,nlines/natoms); fclose(fid);
+            fid = fopen(fname); fd = reshape(fscanf(fid,'%f'),6,uc.natoms,nlines/uc.natoms); fclose(fid);
+            
+            % convert to [uc-frac]
+            fd(1:3,:,:) = matmul_(inv(uc.bas),fd(1:3,:,:));
+            fd(4:6,:,:) = matmul_(inv(uc.bas),fd(4:6,:,:));
 
+            fd_ = @(uc,force,tau,vel,dt) struct('units','frac', ...
+                'bas',uc.bas,'symb',{{uc.symb{:}}},'mass',uc.mass,'nspecies',uc.nspecies, ...
+                'natoms',uc.natoms,'force',force,'tau',tau,'vel',vel,'species',uc.species, ...
+                'dt',dt,'nsteps',size(tau,3));
+            md = fd_(uc,fd(4:6,:,:),fd(1:3,:,:),cat(3,zeros(3,uc.natoms),diff(fd(1:3,:,:),1,3)/dt),dt);
+            
+            fprintf(' (%.f secs)\n',toc);
+            
             function [nlines] = count_lines(fname)
                 if ispc
                     [~,a] = system(sprintf('type %s | find /c /v ""',fname));
@@ -281,7 +297,7 @@ classdef am_lib
         function [en]    = load_band_energies(nbands,fname)
             %
             % First, preprocess the outcar using the bash function below. Then,
-            % call load_force_position on the file produced.
+            % call load_md on the file produced.
             %
             % #!/bin/bash
             % # Preprocess outcar to remove the last run, which may not have finished
@@ -1136,34 +1152,63 @@ classdef am_lib
         
         % phonons
 
-        function [bvk,pp] = get_bvk(cutoff,pc,uc,fname,flags)
+        function [bvk,pp] = get_bvk(cutoff,pc,uc,md)
             % for paper:
             % cutoff = 5; % Angstroms 
             % fname = 'infile.force_position.4.00-300'
             
             import am_lib.*
 
-            % continue earlier calc?
-            sfile = sprintf('am_bvk_%s.mat',fname);
-            if and(strfind(flags,'continue'),exist(sfile,'file')); load(sfile); return; end 
-
             % get irreducible shells
+            fprintf(' ... solving for pairs'); tic;
             [bvk,pp] = get_pairs(pc,uc,cutoff);
-
+            fprintf(' (%.f secs)\n',toc);
+            
+            % [cart] print shell results
+            vec_ = @(xy) uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),uc.bas); Z=[]; 
+            bar_ = @(x) repmat('-',[1,x]); fprintf('%s primitive shells %s\n', bar_(30), bar_(30) );
+            for m = 1:pp.pc_natoms
+                Y=[]; ex_ = uniquemask_(pp.i{m});
+                fprintf('atom %i: %i shells\n', m, sum(ex_));
+                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
+                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
+            for i = 1:pp.npairs(m)
+                if ex_(i)
+                    % record basic info
+                    xyp = [pp.c{m}(1);pp.o{m}(i,1)]; % uc indicies
+                    mn  = uc.u2p(xyp).'; % pc indicies
+                    ij  = uc.u2i(xyp).'; % ic indicies
+                    v   = vec_(xyp); d = normc_(v);
+                    ir  = pp.i{m}(i); % irreducible index 
+                    w   = sum(pp.i{m}==ir); % number of points in orbit
+                    % save stuff [ d(1), r(2,3,4), w(5), ij(6,7), mn(8,9), irres(10)]
+                    Y = [Y,[d;v;w;ij;mn;ir]];
+                end
+            end
+                fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Y(:,rankcol_(Y(1,:))) ); fprintf('\n');
+                Z=[Z,Y];
+            end
+            w = accumarray(Z(end,:).',Z(5,:).',[],@sum); Z = Z(:,uniquemask_(Z(end,:).')); Z(5,:) = w; 
+            fprintf('%s irreducible shells %s\n', bar_(29), bar_(29) );
+            fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
+            fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
+            fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Z(:,rankcol_(Z(1,:))) );
+            
             % force constant model
-            bvk = get_bvk_model(bvk,pp);
-
+            fprintf(' ... solving for symbolic force constants and dynamical matrix'); tic;
+            bvk = get_bvk_model(bvk,pp,uc);
+            fprintf(' (%.f secs)\n',toc);
+            
             % get force constants
-            bvk = get_bvk_force_constants(bvk,pp,fname);
+            fprintf(' ... solving for force constants '); tic;
+            bvk = get_bvk_force_constants(bvk,uc,pp,md);
+            fprintf('(%.f secs)\n',toc);
 
             % enforce asr
             bvk = set_bvk_acoustic_sum_rules(bvk,pp);
-            
-            % save outputs
-            save(sfile,'bvk','pp')
         end
 
-        function [bvk] = get_bvk_model(ip,pp)
+        function [bvk] = get_bvk_model(ip,pp,uc)
             % NOTE #1:
             % WTF? Should not flip bond here? If bond flips using:
             %
@@ -1179,7 +1224,6 @@ classdef am_lib
             digits(10);
 
             % get form of force constants for irreducible prototypical bonds
-            fprintf(' ... solving for symbolic force constants '); tic;
             for i = 1:ip.nshells
                 % use stabilzer group to determine crystallographic symmetry relations; A*B*C' equals kron(C,A)*B(:)
                 W = sum(kron_( pp.Q{1}(1:3,1:3,ip.s_ck(:,i)) , pp.Q{1}(1:3,1:3,ip.s_ck(:,i)))-eye(9),3);
@@ -1200,7 +1244,6 @@ classdef am_lib
                 % save important stuff (sort W to be in line with c, matlabFunction sorts D variables)
                 [sav.c{i},n] = sort(c(:).'); sav.W{i} = W(:,n); sav.phi{i} = phi;
             end
-            fprintf('(%.f secs)\n',toc);
 
             % create bvk structure
             bvk_ = @(pp,ip,sav) struct('units','cart','bas',pp.bas2pc*pp.bas, ...
@@ -1208,11 +1251,10 @@ classdef am_lib
                 'nbands',3*pp.pc_natoms,'nshells',size(sav.W,2),'W',{sav.W},'phi',{sav.phi},'d',ip.d,'v',ip.v,'xy',ip.xy);
             bvk = bvk_(pp,ip,sav);
 
-            % define function to get bond vector
-            vec_ = @(xy) uc2ws(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)),pp.bas); % [cart]
+            % [cart] define function to get bond vector
+            vec_ = @(xy) uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),pp.bas);
             
             % construct symbolic dynamical matrix
-            fprintf(' ... solving for symbolic dynamical matrix '); tic;
             D=sym(zeros(bvk.nbands)); kvec=sym('k%d',[3,1],'real'); mass=sym('m%d',[1,numel(pp.i2u)],'positive');
             for p = 1:pp.pc_natoms
             for j = 1:pp.npairs(p)
@@ -1229,7 +1271,6 @@ classdef am_lib
                 D(mp,np) = D(mp,np) + phi .* exp(sym(2i*pi * rij(:).','d') * kvec(:) );
             end
             end
-            fprintf('(%.f secs)\n',toc);
 
             % multiply by 1/sqrt(mass)
             mass = repelem(mass(pp.species(pp.p2u)),1,3); mass = 1./sqrt(mass.' * mass); D = D .* mass;
@@ -1270,33 +1311,23 @@ classdef am_lib
             end
         end
 
-        function [bvk] = get_bvk_force_constants(bvk,pp,fname_force_position)
+        function [bvk] = get_bvk_force_constants(bvk,uc,pp,md)
             % Extracts symmetry adapted force constants.
-            % get_bvk_force_constants(bvk,ip,load_poscar('infile.supercell'),'infile.force_position.4.04-300')
-            % reference supercell : [sc] = load_poscar('infile.supercell');
-            %
-            % NOTE #1: matching to an irreducible atom may not work if this
-            % instance of the irreducible atom has an orbit which is rotated, i.e.
-            % this irreducible atom is related through a space symmetry which is
-            % not pure translational. I will fix it when this case arises.
 
             import am_lib.*
 
-            % load force positions md( 1:3=positions, 4:6=forces , natoms , nsteps )
-            fprintf(' ... loading force vs positions '); tic; 
-            [fd] = load_force_position(pp.natoms,fname_force_position); nsteps = size(fd,3);
-            fprintf('(%.f secs)\n',toc);
-
-            % convert atomic coordinates [cart,ang] into displacements [cart,ang] by first converting to frac [unitless] and taking modulo
-            fd(1:3,:,:) = matmul_( pp.bas, mod_(matmul_(inv(pp.bas),fd(1:3,:,:)-pp.tau) +0.5)-0.5);
+            % [cart] get displacements and forces
+            u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
+            f = matmul_( md.bas, md.force );
 
             % loop over primitive types
-            phi=[]; fprintf(' ... solving for force constants '); tic;
+            phi=[]; 
             for m = 1:pp.pc_natoms
                 % get forces : f = [ (x,y,z), (1:natoms)*nsteps ] 
                 % get displacements : u [ (x,y,z)*orbits, (1:natoms)*nsteps ]
                 %  ... and solve for the generalized force constants: FC = - f / u 
-                fc = - reshape(fd(4:6,pp.c{m},:),3,pp.ncenters(m)*nsteps) / reshape(fd(1:3,pp.o{m},:),3*pp.npairs(m),pp.ncenters(m)*nsteps);
+                fc = - reshape( f(:,pp.c{m},:) ,3,pp.ncenters(m)*md.nsteps) /...
+                       reshape( u(:,pp.o{m},:) ,3*pp.npairs(m),pp.ncenters(m)*md.nsteps);
                 
                 % reshape % NOTE: imposing ASR here is pointless
                 % b/c the force 1-2 constants WILL change when the 2-1
@@ -1304,7 +1335,6 @@ classdef am_lib
                 % determine the fcs.
                 phi = cat(3,phi,reshape(fc,3,3,[]));
             end
-            fprintf('(%.f secs)\n',toc);
 
             % transform fc from orbit to irrep
             q = cat(1,pp.q{:}); phi = matmul_(matmul_(pp.Q{1}(1:3,1:3,q),phi),permute(pp.Q{1}(1:3,1:3,q),[2,1,3]));
@@ -1342,7 +1372,7 @@ classdef am_lib
 
         function [md]  = run_bvk_md(bvk,pp,uc,dt,nsteps,Q,T)
             % set time step [ps ~ 0.1], number of MDs steps, Nose-Hoover "mass" Q, and temperature T [K]
-            % dt = 0.1; nsteps = 10000; Q = 1; T = 300;
+            % dt = 0.1; nsteps = 10000; Q = 1; T = 300; [md] = run_bvk_md(bvk,pp,uc,dt,nsteps,Q,T)
 
             import am_lib.*
 
@@ -1360,10 +1390,10 @@ classdef am_lib
             end
 
             % allocate position and velocity arrays
-            tau = zeros(3,uc.natoms,nsteps); vel = zeros(3,uc.natoms,nsteps); force = zeros(3,uc.natoms);
+            tau = zeros(3,uc.natoms,nsteps); vel = zeros(3,uc.natoms,nsteps); force = zeros(3,uc.natoms,nsteps);
 
             % set initial value conditions: random displacement between +/- 0.001 [frac]
-            tau(:,:,1) = uc.tau + (.5-rand(3,uc.natoms))*0.01; vel(:,:,1) = zeros(3,uc.natoms); 
+            tau(:,:,1) = uc.tau + (.5-rand(3,uc.natoms))*0.001; vel(:,:,1) = zeros(3,uc.natoms); 
 
             % run md using verlet algorithm
             fprintf('%10s   %10s     %10s   %10s   %10s \n','step','temp','PE','KE','PE+KE');
@@ -1373,10 +1403,10 @@ classdef am_lib
                 u = uc.bas * (mod_(tau(:,:,j-1)-uc.tau+.5)-.5);
 
                 % 2) compute force [eV/Ang]
-                for m = 1:pp.pc_natoms; force(:,pp.c{m}) = - phi{m} * reshape(u(:,pp.o{m}), size(pp.o{m}).*[3,1]); end
+                for m = 1:pp.pc_natoms; force(:,pp.c{m},j) = - phi{m} * reshape(u(:,pp.o{m}), size(pp.o{m}).*[3,1]); end
 
                 % 3) compute potential energy [eV/Ang * Ang -> eV]
-                PE(j) = - u(:).'*force(:);
+                PE(j) = - u(:).'*flatten_(force(:,:,j));
 
                 % 4) compute kinetic energy [ need a change of units here? amu * (Ang/ps)^2 -> 1.036382E-4 eV ]
                 KE(j) = sum(uc.mass(uc.species).*normc_(uc.bas*vel(:,:,j-1))/2); 
@@ -1385,14 +1415,14 @@ classdef am_lib
                 nosehoover = vel(:,:,j-1)/Q * ( KE(j) - 3*uc.natoms*k_boltz*T );
 
                 % 6) get acceleration in [frac]
-                accel = uc.bas \ force ./ repmat(uc.mass(uc.species),3,1);
+                accel = uc.bas \ force(:,:,j) ./ repmat(uc.mass(uc.species),3,1);
 
                 % update md [frac]: x' = x + v * dt; v' = v + a * dt; Nose-Hoover dv/dt becomes a - p_eta / Q * v;
                 tau(:,:,j) = mod_( tau(:,:,j-1) + dt * vel(:,:,j-1) );
                 vel(:,:,j) =       vel(:,:,j-1) + dt * ( accel  - nosehoover );
 
                 % print
-                if mod(j,50)==0
+                if mod(50,1)==0
                     fprintf('%10i   %10f K   %10f   %10f   %10f \n',j, KE(j)/(3*uc.natoms)/k_boltz,PE(j),KE(j),PE(j)+KE(j));
                     %
                     figure(1); set(gcf,'color','white'); 
@@ -1402,11 +1432,11 @@ classdef am_lib
             end
 
             % define md creation function
-            md_ = @(uc,tau,vel,dt,KE,PE) struct('header','md simulation',...
-                'bas',uc.bas,'symb',{{uc.symb{:}}},...
-                'nspecies',uc.nspecies,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
-                'species',uc.species,'mass',uc.mass,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE);
-            md = md_(uc,tau,vel,dt,KE,PE);
+            md_ = @(uc,force,tau,vel,dt) struct('units','frac',...
+                'bas',uc.bas,'symb',{{uc.symb{:}}},'mass',uc.mass,'nspecies',uc.nspecies, ...
+                'natoms',uc.natoms,'force',force,'tau',tau,'vel',vel,'species',uc.species, ...
+                'dt',dt,'nsteps',size(tau,3));
+            md = md_(uc,tau,vel,dt);
 
             % plot positions, position and velocity histograms
             hist_v = zeros(uc.natoms,nsteps); hist_u = zeros(uc.natoms,nsteps);
@@ -1547,7 +1577,7 @@ classdef am_lib
             tb = tb_(pp,ip,sav,nbands);
 
             % define function to get bond vector
-            vec_ = @(xy) uc2ws(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)),pp.bas);
+            vec_ = @(xy) uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),pp.bas);
             
             % construct symbolic dynamical matrix
             fprintf(' ... solving for symbolic tight binding hamiltonian '); tic;
@@ -1964,37 +1994,6 @@ classdef am_lib
         
             % save "primitive" pairs
             pp = pp_(uc,c_id,o_id,i_id,q_id,iq_id,Q);
-            
-        
-            % print results
-            vec_ = @(xy) uc2ws(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)),pp.bas); Z=[]; 
-            bar_ = @(x) repmat('-',[1,x]); fprintf('%s primitive shells %s\n', bar_(30), bar_(30) );
-            for m = 1:pp.pc_natoms
-                Y=[]; ex_ = uniquemask_(pp.i{m});
-                fprintf('atom %i: %i shells\n', m, sum(ex_));
-                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
-                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
-            for i = 1:pp.npairs(m)
-                if ex_(i)
-                    % record basic info
-                    xyp = [pp.c{m}(1);pp.o{m}(i,1)]; % uc indicies
-                    mn  = uc.u2p(xyp).'; % pc indicies
-                    ij  = uc.u2i(xyp).'; % ic indicies
-                    v   = vec_(xyp); d = normc_(v);
-                    ir  = pp.i{m}(i); % irreducible index 
-                    w   = sum(pp.i{m}==ir); % number of points in orbit
-                    % save stuff [ d(1), r(2,3,4), w(5), ij(6,7), mn(8,9), irres(10)]
-                    Y = [Y,[d;v;w;ij;mn;ir]];
-                end
-            end
-                fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Y(:,rankcol_(Y(1,:))) ); fprintf('\n');
-                Z=[Z,Y];
-            end
-            w = accumarray(Z(end,:).',Z(5,:).',[],@sum); Z = Z(:,uniquemask_(Z(end,:).')); Z(5,:) = w; 
-            fprintf('%s irreducible shells %s\n', bar_(29), bar_(29) );
-            fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
-            fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
-            fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Z(:,rankcol_(Z(1,:))) );
         end
 
         function [it,pt] = get_triplets(pc,uc,cutoff)
