@@ -389,11 +389,11 @@ classdef am_lib
             check3_ = @(A) all(all(abs(A)<am_lib.tiny,1),2);
             
             % define function to sort atoms and species into a unique order (reference)
-            X_ = @(tau,species) sortcol_([species;mod_(tau)]); X = X_(pc.tau,pc.species);
+            X_ = @(tau,species) sortcol_([species;mod_(tau)]); X = X_(pc.tau(:,:,1),pc.species);
 
             % get vectors that preserve periodic boundary conditions
             N=1; T=mod_(pc.tau(:,pc.species==pc.species(N))-pc.tau(:,N)); nTs=size(T,2); T_ck=false(1,nTs);
-            for j = 1:nTs; T_ck(j) = check3_( X_(pc.tau(1:3,:)-T(:,j),pc.species)-X ); end
+            for j = 1:nTs; T_ck(j) = check3_( X_(pc.tau(1:3,:,1)-T(:,j),pc.species)-X ); end
             T=[T(:,T_ck),eye(3)]; T=T(:,rankcol_(normc_(T))); 
 
             if nargout == 1; return; end
@@ -635,7 +635,7 @@ classdef am_lib
             uc.u2i = u2i; uc.i2u = i2u;
 
             % save bas2pc and tau2pc to convert [uc-frac] to [pc-frac]
-            uc.bas2pc = pc.bas/uc.bas; uc.tau2pc = inv(uc.bas2pc);
+            uc.bas2pc = pc.bas/uc.bas; uc.tau2pc = pc.bas\uc.bas;
             
             % print basic symmetry info
             [~,H,~,R] = get_symmetries(pc);
@@ -656,7 +656,7 @@ classdef am_lib
             
             % build permutation matrix for atoms related by translations
             T = get_symmetries(uc); nTs=size(T,2); PM=zeros(uc.natoms,nTs);
-            for i = [1:nTs]; PM(:,i)=rankcol_( [mod_(uc.tau+T(1:3,i));uc.species] ); end
+            for i = [1:nTs]; PM(:,i)=rankcol_( [mod_(uc.tau(:,:,1)+T(1:3,i));uc.species] ); end
 
             % construct a sparse binary representation 
             A=zeros(uc.natoms); A(sub2ind([1,1]*uc.natoms,repmat([1:uc.natoms].',nTs,1),PM(:)))=1; A=frref_(A); A=A(~all(A==0,2),:);
@@ -668,8 +668,8 @@ classdef am_lib
             for j = 1:nTs; inds(3)=j; if abs(det(T(:,inds))+eye(3)*eps) > am_lib.eps; break; end; end
             B=T(:,inds); if det(B)<0; B=fliplr(B); end
             
-            % set identifiers (see NOTE)
-            p2u = member_(B*mod_(B\uc.tau(:,findrow_(A))),uc.tau).'; u2p = ([1:size(A,1)]*A);
+            % set identifiers (see NOTE: cannot simply using p2u = findrow_(A)!)
+            p2u = member_(mod_(B*uniquecol_(mod_(B\uc.tau(:,:,1)))),mod_(uc.tau(:,:,1))).'; u2p = ([1:size(A,1)]*A);
 
             % define primitive cell creation function and make structure
             pc_ = @(uc,B,p2u) struct('units','frac','bas',uc.bas*B, ...
@@ -736,6 +736,31 @@ classdef am_lib
             
         end
 
+        function [dc]         = get_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps)
+           % n=[2,2,2]; kpt=[0;1/2;1/2]; amp=2; mode=9; nsteps=31;
+
+           import am_lib.*
+           
+            % get a supercell commensurate with the kpoint
+            sc = get_supercell(pc,diag(n)); [~,sc_pp] = get_pairs(pc,sc,bvk.cutoff);
+
+            % displace according to normal phonon mode
+            dc = get_bvk_displacement(bvk,sc_pp,sc,pc,nsteps,kpt,amp,mode);
+
+            % get primitive cell basis commensurate with the displacement
+            [cc,c2d,d2c] = get_primitive_cell(dc);
+
+            % reduce dc size
+            dc_ = @(dc,cc_bas,c2d,d2c) struct('units',dc.units, ...
+                'bas',cc_bas,'symb',{{dc.symb{:}}},'mass',dc.mass, ...
+                'nspecies',sum(dc.species.'==[1:max(dc.species)],1),'natoms',numel(c2d), ...
+                'tau',mod_(matmul_(tau2pc,dc.tau(:,c2d,:))),'vel',matmul_(tau2pc,dc.vel(:,c2d,:)), ...
+                'species',dc.species(c2d),'dt',dc.dt,'nsteps',dc.nsteps, ...
+                'KE',dc.KE*numel(cd)/dc.natoms,'PE',dc.PE*numel(cd)/dc.natoms, ...
+                'u2p',dc.u2p(c2d),'p2u',d2c(dc.p2u),'u2i',dc.u2i(c2d),'i2u',d2c(dc.i2u));
+            dc = dc_(dc,cc.bas,c2d,d2c);
+        end
+        
         function [h] = plot_cell(pc)
             
             import am_lib.*
@@ -743,19 +768,8 @@ classdef am_lib
             % initialize figure
             set(gcf,'color','w'); hold on;
             
-            % primitive cell
-            tau = pc.tau; species = pc.species;
-            
-            % % get symmetries
-            % [~,~,~,R] = get_symmetries(pc);
-            % 
-            % % generate atoms via space group
-            % apply_sym_ = @(R,tau) reshape(matmul_(R(1:3,1:3,:),tau),3,[]);
-            % X = cat(1,apply_sym_(R,pc.tau),repelem(pc.species,1,size(R,3)));
-            % X = uniquecol_(X); tau = X(1:3,:); species = X(4,:);
-            
             % plot atoms
-            h = scatter3_(pc.bas*tau,50*sqrt(pc.mass(species)),species,'filled');
+            h = scatter3_(pc.bas*pc.tau,50*sqrt(pc.mass(pc.species)),pc.species,'filled');
             
             % plot pc boundaries
             plothull_(pc.bas*[0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1]);
@@ -1082,14 +1096,12 @@ classdef am_lib
 
             % create bvk structure
             bvk_ = @(pp,ip,sav) struct('units','cart','bas',pp.bas2pc*pp.bas, ...
-                'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
+                'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'cutoff',pp.cutoff,'natoms',pp.pc_natoms,...
                 'nbands',3*pp.pc_natoms,'nshells',size(sav.W,2),'W',{sav.W},'phi',{sav.phi},'d',ip.d,'v',ip.v,'xy',ip.xy);
             bvk = bvk_(pp,ip,sav);
 
             % define function to get bond vector
-            % vec_ = @(xy) pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)); % [cart]
             vec_ = @(xy) uc2ws(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)),pp.bas); % [cart]
-            % vec_ = @(xy) pp.tau2pc*(mod_(pp.bas\(pp.tau(:,xy(2,:)) - pp.tau(:,xy(1,:)))+.5)-.5); % [pc-frac]
             
             % construct symbolic dynamical matrix
             fprintf(' ... solving for symbolic dynamical matrix '); tic;
@@ -1332,7 +1344,8 @@ classdef am_lib
             tau=zeros(3,uc.natoms,nsteps);vel=zeros(3,uc.natoms,nsteps);F=zeros(3,uc.natoms);
             
             % displace according to the phonon mode
-            t=[0:(nsteps-1)]/(nsteps-1); shape_ = @(A) reshape(A,3,uc.natoms); 
+            shape_ = @(A) reshape(A,3,uc.natoms); 
+            if nsteps==1; t=0; else; t=[0:(nsteps-1)]/(nsteps-1); end; 
             for i = 1:nsteps
                 % build q_sk vector
                 q_sk = zeros(bvk.nbands,1); q_sk(mode,1) = amp * exp(2i*pi*t(i));
@@ -1360,14 +1373,15 @@ classdef am_lib
             end
 
             % set time step :  sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz = 1/ps]
-            dt=(nsteps-1)/(hw(:) * am_lib.units_THz);
+            dt = (nsteps-1)/(hw(mode) * am_lib.units_THz);
 
             % create displaced structure
-            md_ = @(uc,tau,vel,dt,KE,PE) struct('units','frac', ...
+            dc_ = @(uc,tau,vel,dt,KE,PE) struct('units','frac', ...
                 'bas',uc.bas,'symb',{{uc.symb{:}}},'mass',uc.mass, ...
                 'nspecies',uc.nspecies,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
-                'species',uc.species,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE);
-            dc = md_(uc,tau,vel,dt,KE,PE);
+                'species',uc.species,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE,...
+                'u2p',uc.u2p,'p2u',uc.p2u,'u2i',uc.u2i,'i2u',uc.i2u);
+            dc = dc_(uc,tau,vel,dt,KE,PE);
 
             figure(1); 
             subplot(2,1,1); plot([1:nsteps],KEr,'-',[1:nsteps],KE,'.'); legend('Ref. KE','KE');
@@ -1426,7 +1440,8 @@ classdef am_lib
             M = repelem(uc.mass(uc.species).',3,1);
             q2u = real(U.*E); q2u=q2u./normc_(q2u); q2u=q2u./sqrt(M);
         end
-       
+
+        
         % electrons
 
         function [tb,pp] = get_tb(pc,uc,cutoff,spdf,nskips,Ef,fname,flags)
@@ -1497,7 +1512,7 @@ classdef am_lib
 
             % create bvk structure
             tb_ = @(pp,ip,sav,nbands) struct('units','cart','bas',pp.bas2pc*pp.bas, ...
-                'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'natoms',pp.pc_natoms,...
+                'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'cutoff',pp.cutoff,'natoms',pp.pc_natoms,...
                 'nbands',nbands,'nshells',size(sav.W,2),'W',{sav.W},'vsk',{sav.vsk},'xy',ip.xy,'d',ip.d,'v',ip.v);
             tb = tb_(pp,ip,sav,nbands);
 
@@ -1820,7 +1835,7 @@ classdef am_lib
             
             % step 2: [PM, V, ip2pp, and pp2ip]
 
-                % get all possible pairs which have bond legnths below the cutoff 
+                % get all possible pairs which have bond lengths below the cutoff 
                 d_cart_ = @(dX) normc_(uc2ws(uc.bas*dX,uc.bas));
                 [Y{1:2}]=ndgrid(1:uc.natoms,uc.p2u); x=[Y{2}(:),Y{1}(:)].';
                 ex_ = d_cart_(uc.tau(:,x(2,:))-uc.tau(:,x(1,:)))<cutoff;
@@ -1838,7 +1853,7 @@ classdef am_lib
                 %     position whereone of the coordinates may be -0.6666
                 %     and the other 0.3334. Applying mod takes -0.6666 to
                 %     0.3334 causing a difference of 0.001.        
-                G_ = @(tau) tau - mod_(tau); tau = mod_(matmul_(uc.bas2pc,tau-G_(tau(:,:,:,1))));
+                G_ = @(tau) tau - mod_(tau); tau = mod_(matmul_(inv(uc.tau2pc),tau-G_(tau(:,:,:,1))));
                 P1 = member_(tau(:,:,:,1)/10,uc.tau/10);
                 P2 = member_(tau(:,:,:,2)/10,uc.tau/10);
 
@@ -1854,7 +1869,7 @@ classdef am_lib
             % step 3: [xy, qi, iqi]
                 
                 % get symmetry which takes irrep to orbit
-                qi = findrow_(PM==PM(ip2pp(pp2ip),E)); iqi = I(qi); % i=2; X=perm_(PM(p2i==i,:).',MT(:,qi(p2i==i))).'
+                qi = findrow_(PM==PM(ip2pp(pp2ip),E)); iqi = I(qi);
 
                 % get uc indicies, vectors, and stabilizers
                 xy = V(:,PM(:,E)); v = uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),uc.bas); s_ck = [PM==PM(:,E)].';
@@ -1862,7 +1877,7 @@ classdef am_lib
                 % create "irreducible" structure
                 ip_ = @(uc,s_ck,xy,d,v) struct('units','cart','bas',uc.bas2pc*uc.bas, ...
                     'symb',{uc.symb},'mass',uc.mass,'natoms',numel(uc.p2u),'species',uc.species(uc.p2u),...
-                    'nshells',size(xy,2),'s_ck',s_ck,'xy',xy,'d',d,'v',v);
+                    'cutoff',cutoff,'nshells',size(xy,2),'s_ck',s_ck,'xy',xy,'d',d,'v',v);
                 ip = ip_(uc,s_ck(:,ip2pp),xy(:,ip2pp),normc_(v(:,ip2pp)),v(:,ip2pp));
             
             % step 4: [c_id, o_id, i_id, q_id]
@@ -1902,7 +1917,7 @@ classdef am_lib
                 'bas',uc.bas,'bas2pc',uc.bas2pc,'tau2pc',uc.tau2pc,...
                 'symb',{uc.symb},'mass',uc.mass,'natoms',uc.natoms,'tau',uc.bas*uc.tau,'species',uc.species,...
                 'u2p',uc.u2p,'u2i',uc.u2i,'p2u',uc.p2u,'i2u',uc.i2u, ...
-                'pc_natoms',numel(uc.p2u),...
+                'cutoff',cutoff,'pc_natoms',numel(uc.p2u),...
                 'npairs',cellfun(@(x)size(x,1),o_id),...
                 'ncenters',cellfun(@(x)size(x,2),o_id), ...
                 'c',{c_id},'o',{o_id},'i',{i_id},'q',{q_id},'iq',{iq_id},...
@@ -2013,7 +2028,7 @@ classdef am_lib
 
                 % create "irreducible" structure
                 it_ = @(uc,s_ck,xyz) struct('units','cart','bas',uc.bas2pc*uc.bas, ...
-                    'symb',{uc.symb},'mass',uc.mass,'natoms',numel(uc.p2u),'species',uc.species(uc.p2u),...
+                    'cutoff',cutoff,'symb',{uc.symb},'mass',uc.mass,'natoms',numel(uc.p2u),'species',uc.species(uc.p2u),...
                     'nshells',size(xyz,2),'s_ck',s_ck,'xyz',xyz);
                 it = it_(uc,s_ck(:,it2pt),xyz(:,it2pt));
 
@@ -2054,7 +2069,7 @@ classdef am_lib
                 'bas',uc.bas,'bas2pc',uc.bas2pc,'tau2pc',uc.tau2pc,...
                 'symb',{uc.symb},'mass',uc.mass,'natoms',uc.natoms,'tau',uc.bas*uc.tau,'species',uc.species,...
                 'u2p',uc.u2p,'u2i',uc.u2i,'p2u',uc.p2u,'i2u',uc.i2u, ...
-                'pc_natoms',numel(uc.p2u),...
+                'cutoff',cutoff,'pc_natoms',numel(uc.p2u),...
                 'npairs',cellfun(@(x)size(x,1),o_id),...
                 'ncenters',cellfun(@(x)size(x,2),o_id), ...
                 'c',{c_id},'o',{o_id},'i',{i_id},'q',{q_id},'iq',{iq_id},...
