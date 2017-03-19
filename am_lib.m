@@ -735,8 +735,86 @@ classdef am_lib
             uc.i2u = uc.p2u(pc.i2p);
             
         end
+        
+        function [dc]         = get_displaced_cell(pc,bvk,uc,pp,kpt,amp,mode,nsteps)
+            % kpt = [0,0,1]; % must be commensurate with uc!!!
+            % nsteps = 10; amp = 1; mode = 1
+           
+            import am_lib.*
+            
+            % get phonon energies and eigenvectors at k-point; convert hw back to wierd units
+            bz = get_fbz(pc,[1,1,1]); bz.k = kpt; bz = get_bvk_dispersion(bvk,bz); hw = bz.hw./am_lib.units_eV;
+            
+            % get phonon eigenvector in unit cell based on primitive cell dynamical matrix
+            [q2u] = get_bvk_normal_transform(bvk,uc,bz); 
 
-        function [dc]         = get_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps)
+            % select a mode
+            fprintf('Energies [meV]\n');fprintf('%5.2f \n',bz.hw*1E3);
+            fprintf('Mode selected: %i \n',mode);
+
+            % build force constant matrices
+            for m = 1:pp.pc_natoms
+                phi{m} = zeros(3,3*pp.npairs(m));
+            for j = 1:pp.npairs(m)
+                % get indicies
+                i = pp.i{m}(j); iq = pp.iq{m}(j);
+                % get irrep force constant indicies
+                iphi = reshape(bvk.W{i}*bvk.fc{i}(:),3,3);
+                % rotate force constants from irrep to orbit
+                phi{m}(1:3,[1:3]+3*(j-1)) = pp.Q{1}(1:3,1:3,iq) * permute(iphi,pp.Q{2}(:,iq)) * pp.Q{1}(1:3,1:3,iq).';
+            end
+            end
+
+            % initialize all arrays 
+            PEr=zeros(1,nsteps); KEr=zeros(1,nsteps); PE=zeros(1,nsteps); KE=zeros(1,nsteps);
+            tau=zeros(3,uc.natoms,nsteps);vel=zeros(3,uc.natoms,nsteps);F=zeros(3,uc.natoms);
+            
+            % displace according to the phonon mode
+            shape_ = @(A) reshape(A,3,uc.natoms); 
+            if nsteps==1; t=0; else; t=[0:(nsteps-1)]/(nsteps-1); end; 
+            for i = 1:nsteps
+                % build q_sk vector
+                q_sk = zeros(bvk.nbands,1); q_sk(mode,1) = amp * exp(2i*pi*t(i));
+
+                % get displacement and velocities in [cart]
+                u = shape_(real( q2u*(q_sk(:)       ) ));
+                v = shape_(imag( q2u*(q_sk(:).*hw(:)) ));
+
+                % save positions and velocities in [frac]
+                tau(:,:,i) = uc.tau + bvk.bas \ u;
+                vel(:,:,i) =          bvk.bas \ v;
+
+                % evaluate forces F on each atom : fc [eV/Ang^2] * u [Ang]
+                for m = 1:pp.pc_natoms; F(:,pp.c{m}) = - phi{m} * reshape(u(:,pp.o{m}), size(pp.o{m}).*[3,1]); end
+
+                % get potential energy :: sqrt( D [Hz] = fc [eV/Ang^2] * 1/(amu) ) * hbar / eV
+                PEr(i) = - u(:).'*F(:);
+                % get kinetic energy [eV]
+                KEr(i)= sum(v.^2,1) * uc.mass(uc.species).'/2;
+
+                % get potential energy (Ziman Eq. 1.6.17)
+                PE(i) = real( real(   q_sk(:)).'*hw(:) )^2;
+                % get kinetic energy (Ziman Eq. 1.6.17)
+                KE(i) = real( real(1i*q_sk(:)).'*hw(:) )^2/2;
+            end
+
+            % set time step :  sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz = 1/ps]
+            dt = (nsteps-1)/(hw(mode) * am_lib.units_THz);
+
+            % create displaced structure
+            dc_ = @(uc,tau,vel,dt,KE,PE) struct('units','frac', ...
+                'bas',uc.bas,'symb',{{uc.symb{:}}},'mass',uc.mass, ...
+                'nspecies',uc.nspecies,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
+                'species',uc.species,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE,...
+                'u2p',uc.u2p,'p2u',uc.p2u,'u2i',uc.u2i,'i2u',uc.i2u);
+            dc = dc_(uc,tau,vel,dt,KE,PE);
+
+            figure(1); 
+            subplot(2,1,1); plot([1:nsteps],KEr,'-',[1:nsteps],KE,'.'); legend('Ref. KE','KE');
+            subplot(2,1,2); plot([1:nsteps],PEr,'-',[1:nsteps],PE,'.'); legend('Ref. PE','PE');
+        end
+        
+        function [idc]        = get_irreducible_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps)
            % n=[2,2,2]; kpt=[0;1/2;1/2]; amp=2; mode=9; nsteps=31;
 
            import am_lib.*
@@ -745,13 +823,13 @@ classdef am_lib
             sc = get_supercell(pc,diag(n)); [~,sc_pp] = get_pairs(pc,sc,bvk.cutoff);
 
             % displace according to normal phonon mode
-            dc = get_bvk_displacement(bvk,sc_pp,sc,pc,nsteps,kpt,amp,mode);
+            dc = get_displaced_cell(pc,bvk,sc,sc_pp,kpt,amp,mode,nsteps);
 
             % get primitive cell basis commensurate with the displacement
             [cc,c2d,d2c] = get_primitive_cell(dc);
 
             % reduce dc size
-            dc_ = @(dc,cc_bas,c2d,d2c) struct('units',dc.units, ...
+            idc_ = @(dc,cc_bas,c2d,d2c) struct('units',dc.units, ...
                 'bas',cc_bas,'symb',{{dc.symb{:}}},'mass',dc.mass, ...
                 'nspecies',sum(dc.species.'==[1:max(dc.species)],1),'natoms',numel(c2d), ...
                 'tau',mod_(matmul_(cc_bas\dc.bas,dc.tau(:,c2d,:))),...
@@ -759,7 +837,7 @@ classdef am_lib
                 'species',dc.species(c2d),'dt',dc.dt,'nsteps',dc.nsteps, ...
                 'KE',dc.KE*numel(cd)/dc.natoms,'PE',dc.PE*numel(cd)/dc.natoms, ...
                 'u2p',dc.u2p(c2d),'p2u',d2c(dc.p2u),'u2i',dc.u2i(c2d),'i2u',d2c(dc.i2u));
-            dc = dc_(dc,cc.bas,c2d,d2c);
+            idc = idc_(dc,cc.bas,c2d,d2c);
         end
         
         function [h] = plot_cell(pc)
@@ -780,6 +858,9 @@ classdef am_lib
         end
         
         function [F] = plot_md_cell(md)
+            % n=[2,2,2]; kpt=[0;1/2;1/2]; amp=2; mode=9; nsteps=31;
+            % idc = get_irreducible_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps); clf
+            % F  = plot_md_cell(idc); % movie(F,3)
             
             import am_lib.*
             
@@ -788,10 +869,10 @@ classdef am_lib
 
             % plot cell boundaries
             plothull_(md.bas*[0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1]); 
-            daspect([1 1 1]); box on; axis tight; fixaxis=axis;
+            daspect([1 1 1]); box on; axis tight; view(3); fixaxis=axis;
 
             % plot paths for each atom
-            for i = 1:md.natoms; hold on; plot3_(md.bas*reshape(md.tau(:,i,:),3,[]),'-','linewidth',2); end
+            for i = 1:md.natoms; hold on; plot3_(md.bas*reshape(md.tau(:,i,:),3,[]),'.','markersize',5); end
 
             % plot first point
             hold on; h = scatter3_(md.bas*md.tau(:,:,1),50*sqrt(md.mass(md.species)),md.species,'filled'); hold off;
@@ -801,7 +882,7 @@ classdef am_lib
             for i = 2:md.nsteps
                 delete(h); 
                 hold on; h = scatter3_(md.bas*md.tau(:,:,i),50*sqrt(md.mass(md.species)),md.species,'filled'); hold off; 
-                axis(fixaxis); drawnow; F(i) = getframe;
+                axis(fixaxis); view(3); drawnow; F(i) = getframe;
             end
             end
         end
@@ -1337,84 +1418,6 @@ classdef am_lib
                 subplot(2,2,3); histogram(hist_v(:,i),linspace(0,max(hist_v(:)),100)); ylim([0 uc.natoms/10]); drawnow; 
                 subplot(2,2,4); histogram(hist_u(:,i),linspace(0,max(hist_u(:)),100)); ylim([0 uc.natoms/10]); drawnow; 
             end
-        end
-
-        function [dc]  = get_bvk_displacement(bvk,pp,uc,pc,nsteps,kpt,amp,mode)
-            % kpt = [0,0,1]; % must be commensurate with uc!!!
-            % nsteps = 10; amp = 1; mode = 1
-           
-            import am_lib.*
-            
-            % get phonon energies and eigenvectors at k-point; convert hw back to wierd units
-            bz = get_fbz(pc,[1,1,1]); bz.k = kpt; bz = get_bvk_dispersion(bvk,bz); hw = bz.hw./am_lib.units_eV;
-            
-            % get phonon eigenvector in unit cell based on primitive cell dynamical matrix
-            [q2u] = get_bvk_normal_transform(bvk,uc,bz); 
-
-            % select a mode
-            fprintf('Energies [meV]\n');fprintf('%5.2f \n',bz.hw*1E3);
-            fprintf('Mode selected: %i \n',mode);
-
-            % build force constant matrices
-            for m = 1:pp.pc_natoms
-                phi{m} = zeros(3,3*pp.npairs(m));
-            for j = 1:pp.npairs(m)
-                % get indicies
-                i = pp.i{m}(j); iq = pp.iq{m}(j);
-                % get irrep force constant indicies
-                iphi = reshape(bvk.W{i}*bvk.fc{i}(:),3,3);
-                % rotate force constants from irrep to orbit
-                phi{m}(1:3,[1:3]+3*(j-1)) = pp.Q{1}(1:3,1:3,iq) * permute(iphi,pp.Q{2}(:,iq)) * pp.Q{1}(1:3,1:3,iq).';
-            end
-            end
-
-            % initialize all arrays 
-            PEr=zeros(1,nsteps); KEr=zeros(1,nsteps); PE=zeros(1,nsteps); KE=zeros(1,nsteps);
-            tau=zeros(3,uc.natoms,nsteps);vel=zeros(3,uc.natoms,nsteps);F=zeros(3,uc.natoms);
-            
-            % displace according to the phonon mode
-            shape_ = @(A) reshape(A,3,uc.natoms); 
-            if nsteps==1; t=0; else; t=[0:(nsteps-1)]/(nsteps-1); end; 
-            for i = 1:nsteps
-                % build q_sk vector
-                q_sk = zeros(bvk.nbands,1); q_sk(mode,1) = amp * exp(2i*pi*t(i));
-
-                % get displacement and velocities in [cart]
-                u = shape_(real( q2u*(q_sk(:)       ) ));
-                v = shape_(imag( q2u*(q_sk(:).*hw(:)) ));
-
-                % save positions and velocities in [frac]
-                tau(:,:,i) = uc.tau + bvk.bas \ u;
-                vel(:,:,i) =          bvk.bas \ v;
-
-                % evaluate forces F on each atom : fc [eV/Ang^2] * u [Ang]
-                for m = 1:pp.pc_natoms; F(:,pp.c{m}) = - phi{m} * reshape(u(:,pp.o{m}), size(pp.o{m}).*[3,1]); end
-
-                % get potential energy :: sqrt( D [Hz] = fc [eV/Ang^2] * 1/(amu) ) * hbar / eV
-                PEr(i) = - u(:).'*F(:);
-                % get kinetic energy [eV]
-                KEr(i)= sum(v.^2,1) * uc.mass(uc.species).'/2;
-
-                % get potential energy (Ziman Eq. 1.6.17)
-                PE(i) = real( real(   q_sk(:)).'*hw(:) )^2;
-                % get kinetic energy (Ziman Eq. 1.6.17)
-                KE(i) = real( real(1i*q_sk(:)).'*hw(:) )^2/2;
-            end
-
-            % set time step :  sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz = 1/ps]
-            dt = (nsteps-1)/(hw(mode) * am_lib.units_THz);
-
-            % create displaced structure
-            dc_ = @(uc,tau,vel,dt,KE,PE) struct('units','frac', ...
-                'bas',uc.bas,'symb',{{uc.symb{:}}},'mass',uc.mass, ...
-                'nspecies',uc.nspecies,'natoms',uc.natoms,'tau',tau,'vel',vel, ...
-                'species',uc.species,'dt',dt,'nsteps',size(tau,3),'KE',KE,'PE',PE,...
-                'u2p',uc.u2p,'p2u',uc.p2u,'u2i',uc.u2i,'i2u',uc.i2u);
-            dc = dc_(uc,tau,vel,dt,KE,PE);
-
-            figure(1); 
-            subplot(2,1,1); plot([1:nsteps],KEr,'-',[1:nsteps],KE,'.'); legend('Ref. KE','KE');
-            subplot(2,1,2); plot([1:nsteps],PEr,'-',[1:nsteps],PE,'.'); legend('Ref. PE','PE');
         end
 
         function [bvk] = interpolate_bvk(bvk_1,bvk_2,n)
