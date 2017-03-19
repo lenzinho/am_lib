@@ -664,12 +664,12 @@ classdef am_lib
             % set basis (the three smallest vectors which preserve periodic boundary conditions)
             inds=[0,0,0];
             for j = 1:nTs; if any(abs(T(:,j))>am_lib.eps); inds(1)=j; break; end; end
-            for j = 1:nTs; if any(abs( cross(T(:,2),T(:,j)) )>am_lib.eps); inds(2)=j; break; end; end
+            for j = 1:nTs; if any(abs(cross(T(:,2),T(:,j)))>am_lib.eps); inds(2)=j; break; end; end
             for j = 1:nTs; inds(3)=j; if abs(det(T(:,inds))+eye(3)*eps) > am_lib.eps; break; end; end
             B=T(:,inds); if det(B)<0; B=fliplr(B); end
             
             % set identifiers (see NOTE: cannot simply using p2u = findrow_(A)!)
-            p2u = member_(mod_(B*uniquecol_(mod_(B\uc.tau(:,:,1)))),mod_(uc.tau(:,:,1))).'; u2p = ([1:size(A,1)]*A);
+            p2u = member_(mod_(B*mod_(B\uc.tau(:,findrow_(A),1))),mod_(uc.tau(:,:,1))).'; u2p = ([1:size(A,1)]*A);
 
             % define primitive cell creation function and make structure
             pc_ = @(uc,B,p2u) struct('units','frac','bas',uc.bas*B, ...
@@ -754,7 +754,8 @@ classdef am_lib
             dc_ = @(dc,cc_bas,c2d,d2c) struct('units',dc.units, ...
                 'bas',cc_bas,'symb',{{dc.symb{:}}},'mass',dc.mass, ...
                 'nspecies',sum(dc.species.'==[1:max(dc.species)],1),'natoms',numel(c2d), ...
-                'tau',mod_(matmul_(tau2pc,dc.tau(:,c2d,:))),'vel',matmul_(tau2pc,dc.vel(:,c2d,:)), ...
+                'tau',mod_(matmul_(cc_bas\dc.bas,dc.tau(:,c2d,:))),...
+                'vel',     matmul_(cc_bas\dc.bas,dc.vel(:,c2d,:)), ...
                 'species',dc.species(c2d),'dt',dc.dt,'nsteps',dc.nsteps, ...
                 'KE',dc.KE*numel(cd)/dc.natoms,'PE',dc.PE*numel(cd)/dc.natoms, ...
                 'u2p',dc.u2p(c2d),'p2u',d2c(dc.p2u),'u2i',dc.u2i(c2d),'i2u',d2c(dc.i2u));
@@ -775,6 +776,34 @@ classdef am_lib
             plothull_(pc.bas*[0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1]);
 
             hold off; daspect([1 1 1]); box on;
+            
+        end
+        
+        function [F] = plot_md_cell(md)
+            
+            import am_lib.*
+            
+            % initialize figure
+            set(gcf,'color','w'); hold on;
+
+            % plot cell boundaries
+            plothull_(md.bas*[0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1]); 
+            daspect([1 1 1]); box on; axis tight; fixaxis=axis;
+
+            % plot paths for each atom
+            for i = 1:md.natoms; hold on; plot3_(md.bas*reshape(md.tau(:,i,:),3,[]),'-','linewidth',2); end
+
+            % plot first point
+            hold on; h = scatter3_(md.bas*md.tau(:,:,1),50*sqrt(md.mass(md.species)),md.species,'filled'); hold off;
+            axis(fixaxis); drawnow; pause(0.1); F(md.nsteps) = struct('cdata',[],'colormap',[]); F(1) = getframe;
+
+            if md.nsteps>1
+            for i = 2:md.nsteps
+                delete(h); 
+                hold on; h = scatter3_(md.bas*md.tau(:,:,i),50*sqrt(md.mass(md.species)),md.species,'filled'); hold off; 
+                axis(fixaxis); drawnow; F(i) = getframe;
+            end
+            end
         end
         
         
@@ -960,7 +989,7 @@ classdef am_lib
             P = [-1,-1,-1,-1,-1,-1,-1,-1,-1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1;...
                  -1,-1,-1,0,0,0,1,1,1,-1,-1,-1,0,0,1,1,1,-1,-1,-1,0,0,0,1,1,1;...
                  -1,0,1,-1,0,1,-1,0,1,-1,0,1,-1,1,-1,0,1,-1,0,1,-1,0,1,-1,0,1]/2;
-            P = uc2ws(fbz.recbas*P,fbz.recbas); P = uniquecol_(rnd_(P));
+            P = uc2ws(fbz.recbas*P,fbz.recbas); P = uniquecol_(P);
 
             % get the wigner-seitz planes corresponding to each point
             N = P./normc_(P); nplanes=size(P,2); NP=zeros(4,nplanes);
@@ -975,7 +1004,7 @@ classdef am_lib
             for i = find(ex_); X(:,i) = NP(1:3,ijk(:,i)).'\NP(4,ijk(:,i)).'; end
 
             % shift to wigner seitz cell and get unique values [relax the edge by ~0.99999x]
-            X = uc2ws(X*0.999,fbz.recbas)/0.999; X = uniquecol_(rnd_(X));
+            X = uc2ws(X*0.999,fbz.recbas)/0.999; X = uniquecol_(X);
 
             % plot convex hull 
             plothull_(X);
@@ -2468,7 +2497,7 @@ classdef am_lib
         function [C] = uniquecol_(A)
             % get unique values with numeric precision
             import am_lib.rnd_
-            C = unique(rnd_(A).' ,'rows').'; 
+            [~,inds] = unique(rnd_(A).','rows','stable'); C=A(:,inds);
         end
         
         function [C] = uniquemask_(A)
