@@ -366,6 +366,8 @@ classdef am_lib
             % main_
             %
             
+            import am_lib.*
+            
             % count number of lines in file and check that all runs completed properly
             nlines = count_lines(fname); if mod(nlines,nbands)~=0; error('lines appear to be missing.'); end;
 
@@ -838,7 +840,7 @@ classdef am_lib
             end
         end
         
-        function [h] = plot_cell(pc)
+        function [h]          = plot_cell(pc)
             
             import am_lib.*
             
@@ -855,7 +857,7 @@ classdef am_lib
             
         end
         
-        function [F] = plot_md_cell(md)
+        function [F]          = plot_md_cell(md)
             % n=[2,2,2]; kpt=[0;1/2;1/2]; amp=2; mode=9; nsteps=31;
             % idc = get_irreducible_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps); clf
             % F  = plot_md_cell(idc); % movie(F,3)
@@ -1136,7 +1138,7 @@ classdef am_lib
         
         % phonons
 
-        function [bvk,pp] = get_bvk(cutoff,pc,uc,md)
+        function [bvk,pp] = get_bvk(pc,uc,md,cutoff)
             % for paper:
             % cutoff = 5; % Angstroms 
             % fname = 'infile.force_position.4.00-300'
@@ -1149,34 +1151,7 @@ classdef am_lib
             fprintf(' (%.f secs)\n',toc);
             
             % [cart] print shell results
-                vec_ = @(xy) uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),uc.bas); Z=[]; 
-                bar_ = @(x) repmat('-',[1,x]); fprintf('%s primitive shells %s\n', bar_(30), bar_(30) );
-                for m = 1:pp.pc_natoms
-                    Y=[]; ex_ = uniquemask_(pp.i{m});
-                    fprintf('atom %i: %i shells\n', m, sum(ex_));
-                    fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
-                    fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
-                for i = 1:pp.npairs(m)
-                    if ex_(i)
-                        % record basic info
-                        xyp = [pp.c{m}(1);pp.o{m}(i,1)]; % uc indicies
-                        mn  = uc.u2p(xyp).'; % pc indicies
-                        ij  = uc.u2i(xyp).'; % ic indicies
-                        v   = vec_(xyp); d = normc_(v);
-                        ir  = pp.i{m}(i); % irreducible index 
-                        w   = sum(pp.i{m}==ir); % number of points in orbit
-                        % save stuff [ d(1), r(2,3,4), w(5), ij(6,7), mn(8,9), irres(10)]
-                        Y = [Y,[d;v;w;ij;mn;ir]];
-                    end
-                end
-                    fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Y(:,rankcol_(Y(1,:))) ); fprintf('\n');
-                    Z=[Z,Y];
-                end
-                w = accumarray(Z(end,:).',Z(5,:).',[],@sum); Z = Z(:,uniquemask_(Z(end,:).')); Z(5,:) = w; 
-                fprintf('%s irreducible shells %s\n', bar_(29), bar_(29) );
-                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
-                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
-                fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Z(:,rankcol_(Z(1,:))) );
+            print_pairs(uc,pp)
             
             % force constant model
             fprintf(' ... solving for symbolic force constants and dynamical matrix'); tic;
@@ -1192,36 +1167,8 @@ classdef am_lib
             bvk = set_bvk_acoustic_sum_rules(bvk,pp);
             
             % get correlation for dft vs bvk forces on atoms
-                % build force constants
-                for m = 1:pp.pc_natoms
-                    phi{m} = zeros(3,3*pp.npairs(m));
-                for j = 1:pp.npairs(m)
-                    % get indicies
-                    i = pp.i{m}(j); iq = pp.iq{m}(j);
-                    % get irrep force constant indicies
-                    iphi = reshape(bvk.W{i}*bvk.fc{i}(:),3,3);
-                    % rotate force constants from irrep to orbit
-                    phi{m}(1:3,[1:3]+3*(j-1)) = pp.Q{1}(1:3,1:3,iq) * permute(iphi,pp.Q{2}(:,iq)) * pp.Q{1}(1:3,1:3,iq).';
-                end
-                end
+            plot_bvk_vs_aimd(uc,pp,bvk,md);
 
-                % [cart]
-                u = matmul_(uc.bas,mod_(md.tau-uc.tau+.5)-.5);
-                f = matmul_(uc.bas,md.force);
-
-                f_phi = zeros(3,md.natoms,md.nsteps);
-                for j = 1:md.nsteps
-                    for m = 1:pp.pc_natoms
-                        f_phi(1:3,pp.c{m},j) = - phi{m} * reshape(u(:,pp.o{m},j), size(pp.o{m}).*[3,1]);
-                    end
-                end
-
-                % plot correlation for dft vs bvk forces on atoms
-                plot(f_phi(:),f(:),'.'); daspect([1 1 1]); 
-                maxis=max(abs(axis)); axis([-1 1 -1 1].*maxis); line([-1 1].*maxis, [-1 1].*maxis)
-                xlabel('dft force [eV/Ang]'); ylabel('bvk force [eV/Ang]');
-
-            
         end
 
         function [bvk] = get_bvk_model(ip,pp,uc)
@@ -1349,7 +1296,7 @@ classdef am_lib
                 % b/c the force 1-2 constants WILL change when the 2-1
                 % which comes later is considered. needs to simultaneously
                 % determine the fcs.
-                phi = cat(3,phi,reshape(fc,3,3,[]));
+                phi = double(cat(3,phi,reshape(fc,3,3,[])));
             end
 
             % transform fc from orbit to irrep
@@ -1469,7 +1416,79 @@ classdef am_lib
             md = md_(uc,f,tau,v,dt);
         end
 
-        function [T,KE,PE]  = md_parse(uc,md)
+        function [bvk] = interpolate_bvk(bvk_1,bvk_2,n)
+            % interpolates force constants and masses from bvk_1 and bvk_2 on n points (includes end points)
+
+            import am_lib.*
+            
+            bvk_ = @(bvk,mass,fc) struct('units','cart','bas',bvk.bas,'recbas',bvk.recbas,'natoms',bvk.natoms,'mass',mass, ...
+                'nshells',bvk.nshells,'W',{bvk.W},'shell',{bvk.shell},'nbands',bvk.nbands,'D',bvk.D,'fc',{fc});
+
+            fc_interp = nlinspace( [bvk_1.fc{:}] , [bvk_2.fc{:}] , n );
+            mu_interp = nlinspace( [bvk_1.mass]  , [bvk_2.mass]  , n );
+
+            % get dimensions
+            for i = 1:numel(bvk_1.fc); m(i) = numel(bvk_1.fc{i}); end; E = cumsum(m); S = E - m + 1;
+
+            % create bvks cells
+            for i = 1:n
+                for j = 1:numel(E); fc{j} = fc_interp(S(j):E(j),i).'; end
+                bvk(i) = bvk_(bvk_1,mu_interp(:,i).',fc);
+            end
+        end
+
+        function         plot_bvk_dispersion(bvk,bzp)
+            % pp and uc are optional: numerical vs symbolic evaluation.
+            
+            import am_lib.*
+            
+            % get phonon band structure along path
+            bzp = get_bvk_dispersion(bvk,bzp);
+
+            % and plot the results
+            fig_ = @(h)       set(h,'color','white');
+            axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
+
+            fig_(gcf);
+            plot(bzp.x,sort(real(bzp.hw)*1E3),'-k',bzp.x,-sort(abs(imag(bzp.hw))),':r');
+            axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [meV]'); xlabel('Wavevector k');
+        end
+
+        function [h]   = plot_bvk_vs_aimd(uc,pp,bvk,md)
+            
+            import am_lib.*
+            
+            % build force constants
+            for m = 1:pp.pc_natoms
+                phi{m} = zeros(3,3*pp.npairs(m));
+            for j = 1:pp.npairs(m)
+                % get indicies
+                i = pp.i{m}(j); iq = pp.iq{m}(j);
+                % get irrep force constant indicies
+                iphi = reshape(bvk.W{i}*bvk.fc{i}(:),3,3);
+                % rotate force constants from irrep to orbit
+                phi{m}(1:3,[1:3]+3*(j-1)) = pp.Q{1}(1:3,1:3,iq) * permute(iphi,pp.Q{2}(:,iq)) * pp.Q{1}(1:3,1:3,iq).';
+            end
+            end
+            % get displacement and forces in [cart]
+            u = matmul_(uc.bas,mod_(md.tau-uc.tau+.5)-.5);
+            f = matmul_(uc.bas,md.force);
+            % compute forces on every atom at every step
+            f_phi = zeros(3,md.natoms,md.nsteps);
+            for j = 1:md.nsteps
+                for m = 1:pp.pc_natoms
+                    f_phi(1:3,pp.c{m},j) = - phi{m} * reshape(u(:,pp.o{m},j), size(pp.o{m}).*[3,1]);
+                end
+            end
+            % plot correlation for dft vs bvk forces on atoms
+            % [N,X,Y]=histcounts2(f_phi(:),f(:)); [Z{1:2}]=ndgrid(X(1:(end-1)),Y(1:(end-1))); contourf(Z{1},Z{2},log(N))
+            h = scatter(f_phi(:),f(:),[],flatten_(repelem(permute(1:md.nsteps,[3,2,1]),3,md.natoms,1)),'.');
+            maxis=max(abs(axis)); axis([-1 1 -1 1].*maxis); line([-1 1].*maxis,[-1 1].*maxis); 
+            daspect([1 1 1]); box on; colormap(flipud(colormap('parula')));
+            xlabel('dft force [eV/Ang]'); ylabel('bvk force [eV/Ang]');  
+        end
+
+        function [T,KE,PE] = plot_md_stats(uc,md)
             
             import am_lib.*
             
@@ -1517,59 +1536,6 @@ classdef am_lib
                             view(2); axis tight; xlabel('time step'); ylabel('displacement [Ang]');
         end
         
-        function [bvk] = interpolate_bvk(bvk_1,bvk_2,n)
-            % interpolates force constants and masses from bvk_1 and bvk_2 on n points (includes end points)
-
-            import am_lib.*
-            
-            bvk_ = @(bvk,mass,fc) struct('units','cart','bas',bvk.bas,'recbas',bvk.recbas,'natoms',bvk.natoms,'mass',mass, ...
-                'nshells',bvk.nshells,'W',{bvk.W},'shell',{bvk.shell},'nbands',bvk.nbands,'D',bvk.D,'fc',{fc});
-
-            fc_interp = nlinspace( [bvk_1.fc{:}] , [bvk_2.fc{:}] , n );
-            mu_interp = nlinspace( [bvk_1.mass]  , [bvk_2.mass]  , n );
-
-            % get dimensions
-            for i = 1:numel(bvk_1.fc); m(i) = numel(bvk_1.fc{i}); end; E = cumsum(m); S = E - m + 1;
-
-            % create bvks cells
-            for i = 1:n
-                for j = 1:numel(E); fc{j} = fc_interp(S(j):E(j),i).'; end
-                bvk(i) = bvk_(bvk_1,mu_interp(:,i).',fc);
-            end
-        end
-
-        function         plot_bvk_dispersion(bvk,bzp)
-            % pp and uc are optional: numerical vs symbolic evaluation.
-            
-            import am_lib.*
-            
-            % get phonon band structure along path
-            bzp = get_bvk_dispersion(bvk,bzp);
-
-            % and plot the results
-            fig_ = @(h)       set(h,'color','white');
-            axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
-
-            fig_(gcf);
-            plot(bzp.x,sort(real(bzp.hw)*1E3),'-k',bzp.x,-sort(abs(imag(bzp.hw))),':r');
-            axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [meV]'); xlabel('Wavevector k');
-        end
-
-        function [q2u] = get_bvk_normal_transform(bvk,uc,bz)
-            % get q2u linear operator to convert normal phonon coordinates to
-            % displacements and velocities (vectorized Wallace Eq. 10.41, p. 113): 
-            % U = q2u [ 1:3 * uc.natoms , bvk.nbands * ibz.nks ]  * q_ks
-            
-            import am_lib.*
-
-            % expand primitive eigenvectors to unit cell
-            u2p = flatten_([1:3].'+3*(uc.u2p-1));
-            U = reshape(bz.U(u2p,:),3*uc.natoms,bvk.nbands*bz.nks); 
-            E = repelem(exp(+2i*pi*(uc.tau2pc*uc.tau).'*bz.k),3,bvk.nbands);
-            M = repelem(uc.mass(uc.species).',3,1);
-            q2u = real(U.*E); q2u=q2u./normc_(q2u); q2u=q2u./sqrt(M);
-        end
-
         
         % electrons
 
@@ -2219,6 +2185,40 @@ classdef am_lib
             fprintf('%10.5f %10.5f %10.5f  %10.5f %10.5f %10.5f   %4i   %3i-%3i-%3i   %3i-%3i-%3i   %4i\n', Z(2:end,rankcol_(Z(1,:)))); 
         end
         
+        function print_pairs(uc,pp)
+            
+            import am_lib.*
+            
+            vec_ = @(xy) uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),uc.bas); Z=[]; 
+            bar_ = @(x) repmat('-',[1,x]); fprintf('%s primitive shells %s\n', bar_(30), bar_(30) );
+            for m = 1:pp.pc_natoms
+                Y=[]; ex_ = uniquemask_(pp.i{m});
+                fprintf('atom %i: %i shells\n', m, sum(ex_));
+                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
+                fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
+            for i = 1:pp.npairs(m)
+                if ex_(i)
+                    % record basic info
+                    xyp = [pp.c{m}(1);pp.o{m}(i,1)]; % uc indicies
+                    mn  = uc.u2p(xyp).'; % pc indicies
+                    ij  = uc.u2i(xyp).'; % ic indicies
+                    v   = vec_(xyp); d = normc_(v);
+                    ir  = pp.i{m}(i); % irreducible index 
+                    w   = sum(pp.i{m}==ir); % number of points in orbit
+                    % save stuff [ d(1), r(2,3,4), w(5), ij(6,7), mn(8,9), irres(10)]
+                    Y = [Y,[d;v;w;ij;mn;ir]];
+                end
+            end
+                fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Y(:,rankcol_(Y(1,:))) ); fprintf('\n');
+                Z=[Z,Y];
+            end
+            w = accumarray(Z(end,:).',Z(5,:).',[],@sum); Z = Z(:,uniquemask_(Z(end,:).')); Z(5,:) = w; 
+            fprintf('%s irreducible shells %s\n', bar_(29), bar_(29) );
+            fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
+            fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
+            fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Z(:,rankcol_(Z(1,:))) );
+        end
+        
     end
     
     % aux library
@@ -2341,6 +2341,24 @@ classdef am_lib
                 tetrahedron(:,5) = [4,5,6,8];
                 tetrahedron(:,6) = [4,5,7,8];
             end
+        end
+
+        
+        % aux phonons
+
+        function [q2u] = get_bvk_normal_transform(bvk,uc,bz)
+            % get q2u linear operator to convert normal phonon coordinates to
+            % displacements and velocities (vectorized Wallace Eq. 10.41, p. 113): 
+            % U = q2u [ 1:3 * uc.natoms , bvk.nbands * ibz.nks ]  * q_ks
+            
+            import am_lib.*
+
+            % expand primitive eigenvectors to unit cell
+            u2p = flatten_([1:3].'+3*(uc.u2p-1));
+            U = reshape(bz.U(u2p,:),3*uc.natoms,bvk.nbands*bz.nks); 
+            E = repelem(exp(+2i*pi*(uc.tau2pc*uc.tau).'*bz.k),3,bvk.nbands);
+            M = repelem(uc.mass(uc.species).',3,1);
+            q2u = real(U.*E); q2u=q2u./normc_(q2u); q2u=q2u./sqrt(M);
         end
 
         
