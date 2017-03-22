@@ -749,10 +749,14 @@ classdef am_lib
             uc = get_supercell(pc,diag(n)); [~,pp] = get_pairs(pc,uc,bvk.cutoff);
             
             % get phonon energies and eigenvectors at k-point; convert hw back to wierd units
-            bz = get_fbz(pc,[1,1,1]); bz.k = kpt; bz = get_bvk_dispersion(bvk,bz); hw = bz.hw./am_lib.units_eV;
+            bz = get_fbz(pc,[1,1,1]); bz.k = kpt; bz = get_bvk_dispersion(bvk,bz); hw = real(bz.hw)./am_lib.units_eV;
             
             % get phonon eigenvector in unit cell based on primitive cell dynamical matrix
-            [q2u] = get_bvk_normal_transform(bvk,uc,bz); 
+            q2u = expand_bvk_eigenvectors(bvk,uc,bz); 
+            
+            % get normalized real part and apply mass weight
+%             q2u = real(q2u); q2u=q2u./normc_(q2u);
+            M = repelem(uc.mass(uc.species).',3,1); q2u=q2u./sqrt(M);
 
             % select a mode
             fprintf('Energies [meV]\n');fprintf('%5.2f \n',bz.hw*1E3);
@@ -774,7 +778,7 @@ classdef am_lib
             % initialize all arrays 
             PEr=zeros(1,nsteps); KEr=zeros(1,nsteps); PE=zeros(1,nsteps); KE=zeros(1,nsteps);
             tau=zeros(3,uc.natoms,nsteps);vel=zeros(3,uc.natoms,nsteps);F=zeros(3,uc.natoms);
-            
+
             % displace according to the phonon mode
             shape_ = @(A) reshape(A,3,uc.natoms); 
             if nsteps==1; t=0; else; t=[0:(nsteps-1)]/(nsteps-1); end; 
@@ -783,8 +787,8 @@ classdef am_lib
                 q_sk = zeros(bvk.nbands,1); q_sk(mode,1) = amp * exp(2i*pi*t(i));
 
                 % get displacement and velocities in [cart]
-                u = shape_(real( q2u*(q_sk(:)       ) ));
-                v = shape_(imag( q2u*(q_sk(:).*hw(:)) ));
+                u = real(shape_(q2u*(q_sk(:)       )));
+                v = imag(shape_(q2u*(q_sk(:).*hw(:))));
 
                 % save positions and velocities in [frac]
                 tau(:,:,i) = uc.tau + bvk.bas \ u;
@@ -793,15 +797,13 @@ classdef am_lib
                 % evaluate forces F on each atom : fc [eV/Ang^2] * u [Ang]
                 for m = 1:pp.pc_natoms; F(:,pp.c{m}) = - phi{m} * reshape(u(:,pp.o{m}), size(pp.o{m}).*[3,1]); end
 
-                % get potential energy :: sqrt( D [Hz] = fc [eV/Ang^2] * 1/(amu) ) * hbar / eV
+                % get kinetic and potential energy : sqrt( D [Hz] = fc [eV/Ang^2] * 1/(amu) ) * hbar / eV
                 PEr(i) = - u(:).'*F(:);
-                % get kinetic energy [eV]
                 KEr(i)= sum(v.^2,1) * uc.mass(uc.species).'/2;
 
-                % get potential energy (Ziman Eq. 1.6.17)
-                PE(i) = real( real(   q_sk(:)).'*hw(:) )^2;
-                % get kinetic energy (Ziman Eq. 1.6.17)
-                KE(i) = real( real(1i*q_sk(:)).'*hw(:) )^2/2;
+                % get kinetic and potential energy (Ziman Eq. 1.6.17)
+                PE(i) = (real(q_sk(:)).'*hw(:))^2;
+                KE(i) = (imag(q_sk(:)).'*hw(:))^2/2;
             end
 
             % set time step :  sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz = 1/ps]
@@ -2346,19 +2348,40 @@ classdef am_lib
         
         % aux phonons
 
-        function [q2u] = get_bvk_normal_transform(bvk,uc,bz)
-            % get q2u linear operator to convert normal phonon coordinates to
+        function [q2u] = expand_bvk_eigenvectors(bvk,uc,bz)
+            % Expand primitive cell eigenvectors onto the unit cell; bz
+            % must be the full mesh with the same dimensions as the
+            % super unitcell (relative to that of the primitive cell).
+            %  
+            % Use the expanded eigenvectors to convert normal phonon coordinates to
             % displacements and velocities (vectorized Wallace Eq. 10.41, p. 113): 
             % U = q2u [ 1:3 * uc.natoms , bvk.nbands * ibz.nks ]  * q_ks
+            %
+            % Note: Hermitian matrices eigendecomposed as A = U E U* for 
+            % a unitary matrix U and eigenvalues E -- meaning: 
+            %       q2u'*q2u = q2u*q2u' = Identity 
             
             import am_lib.*
 
+            % orthonormalize U
+            U = bz.U;
+            for i = 1:bz.nks
+                [~,~,a]=unique(rnd_(bz.hw(:,i)));
+                for j = 1:max(a)
+                    U(:,a==j,i)=orth(U(:,a==j,i));
+                end
+            end
+            
             % expand primitive eigenvectors to unit cell
             u2p = flatten_([1:3].'+3*(uc.u2p-1));
-            U = reshape(bz.U(u2p,:),3*uc.natoms,bvk.nbands*bz.nks); 
-            E = repelem(exp(+2i*pi*(uc.tau2pc*uc.tau).'*bz.k),3,bvk.nbands);
-            M = repelem(uc.mass(uc.species).',3,1);
-            q2u = real(U.*E); q2u=q2u./normc_(q2u); q2u=q2u./sqrt(M);
+            U = reshape(bz.U(u2p,:),3*uc.natoms,bvk.nbands*bz.nks);%*sqrt(pc.natoms/uc.natoms);
+            E = repelem(exp(+2i*pi*(uc.tau2pc*uc.tau).'*bz.k),3,bvk.nbands);%/sqrt(3*uc.natoms);
+            q2u = U.*E * sqrt(bvk.natoms/uc.natoms);
+
+            % % apply a phase shift to maximize displacements when 
+            % rads_ = @(x) atan2( normc_(imag(x)) , normc_(real(x)) );
+            % q2u = q2u .* exp( -1i * rads_(q2u) );
+            % rads_(q2u)
         end
 
         
