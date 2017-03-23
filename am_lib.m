@@ -755,9 +755,9 @@ classdef am_lib
             
             % get normal transformations from uc eigenvector
             U   = expand_bvk_eigenvectors(bvk,uc,bz); 
-            q2u = U  ./ normc_(real(U))   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
-            u2q = U' ./ normc_(real(U)).' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
-
+            q2u = (U)  ./ normc_(real(U))   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
+            u2q = (U)' ./ normc_(real(U)).' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+            
             % select a mode
             fprintf('Energies [meV]\n');fprintf('%5.2f \n',bz.hw*1E3);
             if isempty(mode)
@@ -781,20 +781,20 @@ classdef am_lib
             u = single(zeros(3,uc.natoms,nsteps));
             v = single(zeros(3,uc.natoms,nsteps));
             f = single(zeros(3,uc.natoms,nsteps));
+            q_sk  = zeros(bvk.nbands,nsteps);
 
             % convert phonon energies back to wierd units
             hw = real(bz.hw)./am_lib.units_eV; hw(hw(:)<1E-8)=1E-8;
             
             % displace according to the phonon mode
             shp_ = @(A) reshape(A,3,uc.natoms); t = 2*pi*[0:(nsteps-1)]/(nsteps-1)/hw(mode);
-            q_sk = zeros(bvk.nbands,nsteps); mi_ = @(x) x;% ./ sqrt(uc.mass(uc.species));
             for i = 1:nsteps
                 % build q_sk vector
                 q_sk(mode,i) = amp * exp(1i*t(i)*hw(mode));
 
                 % get displacement and velocities in [cart : Ang & Ang/fs]
-                u(:,:,i) = real(mi_(shp_( q2u * real( q_sk(:,i)./hw(:) ) )));
-                v(:,:,i) = real(mi_(shp_( q2u * imag( q_sk(:,i)        ) )));
+                u(:,:,i) = real(shp_( q2u * real( q_sk(:,i)./hw(:) ) ));
+                v(:,:,i) = real(shp_( q2u * imag( q_sk(:,i)        ) ));
 
                 % evaluate forces F on each atom : fc [eV/Ang^2] * u [Ang]
                 for m = 1:pp.pc_natoms
@@ -802,6 +802,8 @@ classdef am_lib
                             - phi{m}*reshape(u(:,pp.o{m},i),size(pp.o{m}).*[3,1]); 
                 end
             end
+            
+            normc_(matmul_(uc.bas,v(:,:,end)))
 
             % get normal modes
             q_sk_r = (u2q*reshape(u,[],nsteps)).*hw(:);
@@ -1514,7 +1516,7 @@ classdef am_lib
             
             % get energies
             PE(:,1) = -dot(reshape(u,[],md.nsteps),reshape(f,[],md.nsteps),1)/2; 
-            KE(:,1) = reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2; % divide by two for double counting?
+            KE(:,1) = reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2; 
             
             % get temperature : amu * (Ang/fs)^2/ k_B = 1.20267E6 K
             k_boltz = 8.6173303E-5; T = 2/3*KE/uc.natoms/k_boltz;   
@@ -1522,18 +1524,19 @@ classdef am_lib
             % perform normal-mode analysis
             if nargin == 4
                 % convert phonon energies back to wierd units
-                hw  = real(fbz.hw)./am_lib.units_eV; hw(hw(:)<1E-3)=1E-3;
+                hw = real(fbz.hw)./am_lib.units_eV; hw(hw(:)<1E-8)=1E-8;
 
-                % get phonon eigenvector in unit cell based on primitive cell dynamical matrix
-                q2u = expand_bvk_eigenvectors(bvk,uc,fbz); q2u = q2u./normc_(real(q2u));
+                % get normal transformations from uc eigenvector
+                U   = expand_bvk_eigenvectors(bvk,uc,fbz); 
+                q2u = real(U)  ./ normc_(real(U))   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
+                u2q = real(U)' ./ normc_(real(U)).' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
 
-                % get normal coordinates
-                m_ = @(x) x .* sqrt(uc.mass(uc.species));
-                q_sk_r = (q2u\reshape(m_(u),[],md.nsteps)).*hw(:);
-                q_sk_i = (q2u\reshape(m_(v),[],md.nsteps));
-                q_sk = q_sk_r + 1i*q_sk_i;
+                % get normal modes
+                q_sk_r = (u2q*reshape(u,[],md.nsteps)).*hw(:);
+                q_sk_i = (u2q*reshape(v,[],md.nsteps));
+                q_sk   = q_sk_r + 1i*q_sk_i;
 
-                % get energies
+                % get potential energy
                 PE(:,2) = dot(real(q_sk),real(q_sk),1)/2;
                 KE(:,2) = dot(imag(q_sk),imag(q_sk),1)/2;
 
