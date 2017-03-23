@@ -753,11 +753,6 @@ classdef am_lib
             % get phonon energies and eigenvectors at k-point
             bz = get_fbz(pc,[1,1,1]); bz.k = kpt; bz = get_bvk_dispersion(bvk,bz); 
             
-            % get normal transformations from uc eigenvector
-            U   = expand_bvk_eigenvectors(bvk,uc,bz); 
-            q2u = (U)  ./ normc_(real(U))   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
-            u2q = (U)' ./ normc_(real(U)).' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
-            
             % select a mode
             fprintf('Energies [meV]\n');fprintf('%5.2f \n',bz.hw*1E3);
             if isempty(mode)
@@ -786,11 +781,16 @@ classdef am_lib
             % convert phonon energies back to wierd units
             hw = real(bz.hw)./am_lib.units_eV; hw(hw(:)<1E-8)=1E-8;
             
+            % get normal transformations from uc eigenvector
+            U   = expand_bvk_eigenvectors(bvk,uc,bz); 
+            q2u = real(U)  ./ normc_(real(U))   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
+            u2q = real(U)' ./ normc_(real(U)).' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+            
             % displace according to the phonon mode
             shp_ = @(A) reshape(A,3,uc.natoms); t = 2*pi*[0:(nsteps-1)]/(nsteps-1)/hw(mode);
             for i = 1:nsteps
                 % build q_sk vector
-                q_sk(mode,i) = amp * exp(1i*t(i)*hw(mode));
+                q_sk(mode,i) = amp * exp(-1i*t(i)*hw(mode));
 
                 % get displacement and velocities in [cart : Ang & Ang/fs]
                 u(:,:,i) = real(shp_( q2u * real( q_sk(:,i)./hw(:) ) ));
@@ -803,8 +803,6 @@ classdef am_lib
                 end
             end
             
-            normc_(matmul_(uc.bas,v(:,:,end)))
-
             % get normal modes
             q_sk_r = (u2q*reshape(u,[],nsteps)).*hw(:);
             q_sk_i = (u2q*reshape(v,[],nsteps));
@@ -831,10 +829,10 @@ classdef am_lib
             f   = matmul_(inv(uc.bas),f);
             
             % create displaced structure
-            dc_ = @(uc,force,tau,vel,dt) struct('units','frac',...
+            dc_ = @(uc,f,tau,v,dt) struct('units','frac',...
                 'bas',uc.bas,'tau2pc',uc.tau2pc,'bas2pc',uc.bas2pc,...
                 'symb',{{uc.symb{:}}},'mass',uc.mass,'nspecies',uc.nspecies, ...
-                'natoms',uc.natoms,'force',force,'tau',tau,'vel',vel,'species',uc.species, ...
+                'natoms',uc.natoms,'force',f,'tau',tau,'vel',v,'species',uc.species, ...
                 'dt',dt,'nsteps',size(tau,3),'u2p',uc.u2p,'p2u',uc.p2u,'u2i',uc.u2i,'i2u',uc.i2u);
             dc = dc_(uc,f,tau,v,dt);
             
@@ -1516,7 +1514,7 @@ classdef am_lib
             
             % get energies
             PE(:,1) = -dot(reshape(u,[],md.nsteps),reshape(f,[],md.nsteps),1)/2; 
-            KE(:,1) = reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2; 
+            KE(:,1) =  reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2;
             
             % get temperature : amu * (Ang/fs)^2/ k_B = 1.20267E6 K
             k_boltz = 8.6173303E-5; T = 2/3*KE/uc.natoms/k_boltz;   
@@ -1527,15 +1525,21 @@ classdef am_lib
                 hw = real(fbz.hw)./am_lib.units_eV; hw(hw(:)<1E-8)=1E-8;
 
                 % get normal transformations from uc eigenvector
-                U   = expand_bvk_eigenvectors(bvk,uc,fbz); 
-                q2u = real(U)  ./ normc_(real(U))   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
-                u2q = real(U)' ./ normc_(real(U)).' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+                U = expand_bvk_eigenvectors(bvk,uc,fbz);  N = normc_(real(U)); 
+                q2u = (U)  ./ N   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
+                u2q = (U)' ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
 
                 % get normal modes
                 q_sk_r = (u2q*reshape(u,[],md.nsteps)).*hw(:);
                 q_sk_i = (u2q*reshape(v,[],md.nsteps));
                 q_sk   = q_sk_r + 1i*q_sk_i;
-
+% 
+%                 figure(2)
+%                 plot(q_sk.'); daspect([1 1 1])
+%                 surf(real(q_sk_r))
+%                 
+%                 return
+                
                 % get potential energy
                 PE(:,2) = dot(real(q_sk),real(q_sk),1)/2;
                 KE(:,2) = dot(imag(q_sk),imag(q_sk),1)/2;
@@ -2424,8 +2428,8 @@ classdef am_lib
             
             % expand primitive eigenvectors to unit cell
             u2p = flatten_([1:3].'+3*(uc.u2p-1));
-            U = reshape(bz.U(u2p,:),3*uc.natoms,bvk.nbands*bz.nks);%*sqrt(pc.natoms/uc.natoms);
-            E = repelem(exp(+2i*pi*(uc.tau2pc*uc.tau).'*bz.k),3,bvk.nbands);%/sqrt(3*uc.natoms);
+            U = reshape(bz.U(u2p,:),3*uc.natoms,bvk.nbands*bz.nks);
+            E = repelem(exp(+2i*pi*(uc.tau2pc*uc.tau).'*bz.k),3,bvk.nbands);
             q2u = U.*E * sqrt(bvk.natoms/uc.natoms);
 
             % % apply a phase shift to maximize displacements when 
