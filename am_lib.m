@@ -278,15 +278,19 @@ classdef am_lib
             fd(4:6,:,:) = matmul_(inv(uc.bas),fd(4:6,:,:));
 
             fd_ = @(uc,force,tau,vel,dt) struct('units','frac', ...
-                'bas',uc.bas,'symb',{{uc.symb{:}}},'mass',uc.mass,'nspecies',uc.nspecies, ...
+                'bas',uc.bas,'bas2pc',uc.bas2pc,'tau2pc',uc.tau2pc,...
+                'symb',{{uc.symb{:}}},'mass',uc.mass,'nspecies',uc.nspecies, ...
                 'natoms',uc.natoms,'force',force,'tau',tau,'vel',vel,'species',uc.species, ...
                 'dt',dt,'nsteps',size(tau,3));
             md = fd_(uc,fd(4:6,:,:),fd(1:3,:,:),cat(3,zeros(3,uc.natoms),(mod_(diff(fd(1:3,:,:),1,3)+.5)-.5)/dt),dt);
             
+            % match to uc for saftey
+            md = match_cell(md,uc);
+            
             fprintf(' (%.f secs)\n',toc);
 
         end
-        
+
         function [en]    = load_band_energies(nbands,fname)
             %
             % First, preprocess the outcar using the bash function below. Then,
@@ -852,6 +856,27 @@ classdef am_lib
                     'species',dc.species(c2d),'dt',dc.dt,'nsteps',dc.nsteps, ...
                     'u2p',dc.u2p(c2d),'p2u',d2c(dc.p2u),'u2i',dc.u2i(c2d),'i2u',d2c(dc.i2u));
                 idc = idc_(dc,cc,pc,c2d,d2c);
+            end
+        end
+        
+        function [uc,inds]     = match_cell(uc,uc_ref)
+            
+            import am_lib.*
+            
+            % find closest atom
+            [~,inds] = min(reshape(normc_( ...
+                mod_(osum_(-uc.tau(:,:,1),uc_ref.tau(:,:,1))+.5)-.5 ),...
+                                                    uc.natoms,uc.natoms) );
+
+            % shuffle uc atoms so that order matchs uc_ref
+            for f = {'tau','species'}
+                if isfield(uc,f); uc.(f{:}) = uc.(f{:})(:,inds,:); end
+            end
+            for f = {'u2p','u2i'}
+                if isfield(uc,f); uc.(f{:}) = uc.(f{:})(inds); end
+            end
+            for f = {'p2u','i2u'}
+                if isfield(uc,f); uc.(f{:}) = inds(uc.(f{:})); end
             end
         end
         
@@ -1510,10 +1535,11 @@ classdef am_lib
             % [cart] get displacements and forces
             u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
             f = matmul_( md.bas, md.force );
-            v = matmul_( md.bas, md.vel );
+            v = matmul_( md.bas, md.vel ) * sqrt(103.6382);
             
-            % get energies
+            % get potentoal energy : [eV/Ang * Ang] = [eV]
             PE(:,1) = -dot(reshape(u,[],md.nsteps),reshape(f,[],md.nsteps),1)/2; 
+            % get kinetic energy : [amu * (Ang/fs)^2 ] = 103.6382 [eV]
             KE(:,1) =  reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2;
             
             % get temperature : amu * (Ang/fs)^2/ k_B = 1.20267E6 K
@@ -1526,27 +1552,17 @@ classdef am_lib
 
                 % get normal transformations from uc eigenvector
                 U = expand_bvk_eigenvectors(bvk,uc,fbz);  N = normc_(real(U)); 
-                q2u = (U)  ./ N   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
-                u2q = (U)' ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+                % q2u = real(U)  ./ N   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
+                u2q = real(U)' ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
 
                 % get normal modes
                 q_sk_r = (u2q*reshape(u,[],md.nsteps)).*hw(:);
                 q_sk_i = (u2q*reshape(v,[],md.nsteps));
-                q_sk   = q_sk_r + 1i*q_sk_i;
-% 
-%                 figure(2)
-%                 plot(q_sk.'); daspect([1 1 1])
-%                 surf(real(q_sk_r))
-%                 
-%                 return
-                
+                q_sk   = (q_sk_r) + 1i*(q_sk_i);
+
                 % get potential energy
                 PE(:,2) = dot(real(q_sk),real(q_sk),1)/2;
                 KE(:,2) = dot(imag(q_sk),imag(q_sk),1)/2;
-
-                plot(1:md.nsteps,KE(:,1),'-',1:md.nsteps,KE(:,2),'o',...
-                     1:md.nsteps,PE(:,1),'-',1:md.nsteps,PE(:,2),'o')
-                legend('KE','KE normal','PE','PE normal')
             end
                 
             % if no output is requested, plot and print stuff
@@ -1555,19 +1571,23 @@ classdef am_lib
                 Z = [[1:md.nsteps].',T(:,1),PE(:,1),KE(:,1),KE(:,1)+PE(:,1)];
                 fprintf('%10s   %10s   %10s   %10s   %10s \n','step [#]','T [K]','PE [eV]','KE [eV]','PE+KE [eV]');
                 if md.nsteps<100; fprintf('%10i   %10f   %10f   %10f   %10f \n',Z(1:end,:).'); else
-                                  fprintf('%10i   %10f   %10f   %10f   %10f \n',Z(1:50:end,:).'); end    
+                                  fprintf('%10i   %10f   %10f   %10f   %10f \n',Z(1:99,:).');
+                                  fprintf('%10i   %10f   %10f   %10f   %10f \n',Z(100:50:end,:).');
+                end    
                               
                 % plot energies
                 set(gcf,'color','w');
                 if nargin == 4
-                subplot(3,1,1); plot(1:md.nsteps,KE(:,1),'-',1:md.nsteps,KE(:,2),'o',1:md.nsteps,KE(:,1)+PE(:,1),'^',...
-                                     1:md.nsteps,PE(:,1),'-',1:md.nsteps,PE(:,2),'o',1:md.nsteps,KE(:,2)+PE(:,2),':');
-                                legend('KE','KE normal','KE+PE','PE','PE normal','KE+PE normal');
-                                xlabel('time step'); ylabel('energy [eV]');
+                subplot(3,4,1:3); plot(1:md.nsteps,KE(:,1),'-',1:md.nsteps,PE(:,1),'--',1:md.nsteps,KE(:,1)+PE(:,1),':',...
+                                     1:md.nsteps,KE(:,2),'-',1:md.nsteps,PE(:,2),'--',1:md.nsteps,KE(:,2)+PE(:,2),':');
+                                legend('KE','PE','KE+PE','nPE','nPE','nKE+nPE');
+                                xlabel('time step'); ylabel('energy [eV]'); axis tight;
+                subplot(3,4,4); plot3(repelem([1:md.nsteps].',1,fbz.nks*bvk.nbands),real(q_sk).',imag(q_sk).'); 
+                                view([1 0 0]); box on; ax=axis; maxax=max(abs(ax(3:6))); axis([ax(1:2),[-1 1 -1 1].*maxax]); daspect([md.nsteps/maxax 1 1]);
                 else
                 subplot(3,1,1); plot(1:md.nsteps,KE(:,1),'-',1:md.nsteps,KE(:,2),'o',1:md.nsteps,KE(:,1)+PE(:,1),'^');
                                 legend('KE','PE','KE+PE');
-                                xlabel('time step'); ylabel('energy [eV]');
+                                xlabel('time step'); ylabel('energy [eV]'); axis tight;
                 end
 
                 % plot position and velocity histograms
