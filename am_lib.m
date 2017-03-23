@@ -753,9 +753,10 @@ classdef am_lib
             % get phonon energies and eigenvectors at k-point
             bz = get_fbz(pc,[1,1,1]); bz.k = kpt; bz = get_bvk_dispersion(bvk,bz); 
             
-            % get uc eigenvector; normalize real part (1/2 factor for non-zone-center)
-            % Note: by normalizing real part, q2u is no longer unitary, i.e. inv(q2u) ~= q2u*
-            q2u = expand_bvk_eigenvectors(bvk,uc,bz); q2u = q2u./normc_(real(q2u));
+            % get normal transformations from uc eigenvector
+            U   = expand_bvk_eigenvectors(bvk,uc,bz); 
+            q2u = U  ./ normc_(real(U))   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
+            u2q = U' ./ normc_(real(U)).' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
 
             % select a mode
             fprintf('Energies [meV]\n');fprintf('%5.2f \n',bz.hw*1E3);
@@ -786,7 +787,7 @@ classdef am_lib
             
             % displace according to the phonon mode
             shp_ = @(A) reshape(A,3,uc.natoms); t = 2*pi*[0:(nsteps-1)]/(nsteps-1)/hw(mode);
-            q_sk = zeros(bvk.nbands,nsteps); mi_ = @(x) x ./ sqrt(uc.mass(uc.species));
+            q_sk = zeros(bvk.nbands,nsteps); mi_ = @(x) x;% ./ sqrt(uc.mass(uc.species));
             for i = 1:nsteps
                 % build q_sk vector
                 q_sk(mode,i) = amp * exp(1i*t(i)*hw(mode));
@@ -802,22 +803,22 @@ classdef am_lib
                 end
             end
 
-%             m_ = @(x) x .* sqrt(uc.mass(uc.species));
-%             q_sk_r = (q2u\reshape(m_(u),[],nsteps)).*hw(:);
-%             q_sk_i = (q2u\reshape(m_(v),[],nsteps));
-%             q_sk_v2= q_sk_r + 1i*q_sk_i;
-%             
-%             % get potential energy
-%             PE(:,1) = -dot(reshape(u,[],nsteps),reshape(f,[],nsteps),1)/2; 
-%             KE(:,1) = reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2;
-%             PE(:,2) = dot(real(q_sk),real(q_sk),1)/2;
-%             KE(:,2) = dot(imag(q_sk),imag(q_sk),1)/2;
-%             PE(:,3) = dot(real(q_sk_v2),real(q_sk_v2),1)/2;
-%             KE(:,3) = dot(imag(q_sk_v2),imag(q_sk_v2),1)/2;
-%             
-%             plot(1:nsteps,KE(:,1),'-',1:nsteps,KE(:,2),'o',1:nsteps,KE(:,3),'.',...
-%                  1:nsteps,PE(:,1),'-',1:nsteps,PE(:,2),'o',1:nsteps,KE(:,3),'.')
-%             legend('KE','KE normal','KE normal 2','PE','PE normal','PE normal 2')
+            % get normal modes
+            q_sk_r = (u2q*reshape(u,[],nsteps)).*hw(:);
+            q_sk_i = (u2q*reshape(v,[],nsteps));
+            q_sk_v2= q_sk_r + 1i*q_sk_i;
+            
+            % get potential energy
+            PE(:,1) = -dot(reshape(u,[],nsteps),reshape(f,[],nsteps),1)/2; 
+            KE(:,1) = reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2;
+            PE(:,2) = dot(real(q_sk),real(q_sk),1)/2;
+            KE(:,2) = dot(imag(q_sk),imag(q_sk),1)/2;
+            PE(:,3) = dot(real(q_sk_v2),real(q_sk_v2),1)/2;
+            KE(:,3) = dot(imag(q_sk_v2),imag(q_sk_v2),1)/2;
+            
+            plot(1:nsteps,KE(:,1),'',1:nsteps,KE(:,2),'v',1:nsteps,KE(:,3),'^',...
+                 1:nsteps,PE(:,1),'-',1:nsteps,PE(:,2),'v',1:nsteps,PE(:,3),'^');
+            legend('KE','KE normal','KE normal 2','PE','PE normal','PE normal 2'); axis tight;
 
             % set time step in [fs] : need to correct units?
             dt = (t(2)-t(1));
