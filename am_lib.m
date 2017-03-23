@@ -504,15 +504,15 @@ classdef am_lib
             %    trace:          +3   -3   -1    0   +1   +2   +1    0   -1   -2
             %    determinant:    +1   -1   +1   +1   +1   +1   -1   -1   -1   -1
             %
-            %  The Mathematical Theory of Symmetry in Solids: Representation Theory for
+            %  The Mathematical Theory of Symmetry in Solids:  Representation Theory for
             %  Point Groups and Space Groups. 1 edition. Oxford?: New York: Oxford University
             %  Press, 2010. page 138, chartab 3.8.
             %
             %  Applied Group Theory: For Physicists and Chemists. Reissue edition.
             %  Mineola, New York: Dover Publications, 2015. page 20.
             % 
-            %  Casas, Ignasi, and Juan J. Pérez. ?Modification to Flow Chart to
-            %  Determine Point Groups.? Journal of Chemical Education 69, no. 1
+            %  Casas, Ignasi, and Juan J. Perez. Modification to Flow Chart to
+            %  Determine Point Groups. Journal of Chemical Education 69, no. 1
             %  (January 1, 1992): 83. doi:10.1021/ed069p83.2.
             % 
             %  Breneman, G. L. ?Crystallographic Symmetry Point Group Notation
@@ -753,12 +753,10 @@ classdef am_lib
             % get phonon energies and eigenvectors at k-point
             bz = get_fbz(pc,[1,1,1]); bz.k = kpt; bz = get_bvk_dispersion(bvk,bz); 
             
-            % get phonon eigenvector in unit cell based on primitive cell dynamical matrix
-            q2u = expand_bvk_eigenvectors(bvk,uc,bz); 
-            
-            % get normalized real part
-            q2u = real(q2u); q2u=q2u./normc_(q2u);
-            
+            % get uc eigenvector; normalize real part (1/2 factor for non-zone-center)
+            % Note: by normalizing real part, q2u is no longer unitary, i.e. inv(q2u) ~= q2u*
+            q2u = expand_bvk_eigenvectors(bvk,uc,bz); q2u = q2u./normc_(real(q2u));
+
             % select a mode
             fprintf('Energies [meV]\n');fprintf('%5.2f \n',bz.hw*1E3);
             if isempty(mode)
@@ -777,45 +775,52 @@ classdef am_lib
                 phi{m}(1:3,[1:3]+3*(j-1)) = pp.Q{1}(1:3,1:3,iq) * permute(iphi,pp.Q{2}(:,iq)) * pp.Q{1}(1:3,1:3,iq).';
             end
             end
-
+            
             % initialize all arrays [cart]
-            u = zeros(3,uc.natoms,nsteps);
-            v = zeros(3,uc.natoms,nsteps);
-            f = zeros(3,uc.natoms,nsteps);
+            u = single(zeros(3,uc.natoms,nsteps));
+            v = single(zeros(3,uc.natoms,nsteps));
+            f = single(zeros(3,uc.natoms,nsteps));
 
-            % convert phonon energies from eV to [GHz 1/fs]
-            hw = real(bz.hw)./am_lib.units_eV;%.*am_lib.units_GHz;
+            % convert phonon energies back to wierd units
+            hw = real(bz.hw)./am_lib.units_eV; hw(hw(:)<1E-8)=1E-8;
             
             % displace according to the phonon mode
             shp_ = @(A) reshape(A,3,uc.natoms); t = 2*pi*[0:(nsteps-1)]/(nsteps-1)/hw(mode);
+            q_sk = zeros(bvk.nbands,nsteps); mi_ = @(x) x ./ sqrt(uc.mass(uc.species));
             for i = 1:nsteps
                 % build q_sk vector
-                q_sk = zeros(bvk.nbands,1); q_sk(mode,1) = amp * exp(1i*t(i)*hw(mode));
+                q_sk(mode,i) = amp * exp(1i*t(i)*hw(mode));
 
                 % get displacement and velocities in [cart : Ang & Ang/fs]
-                u(:,:,i) = real(shp_( q2u * real( q_sk(:)        ))) ./sqrt(uc.mass(uc.species));
-                v(:,:,i) = real(shp_( q2u * imag( q_sk(:).*hw(:) ))) ./sqrt(uc.mass(uc.species));
+                u(:,:,i) = real(mi_(shp_( q2u * real( q_sk(:,i)./hw(:) ) )));
+                v(:,:,i) = real(mi_(shp_( q2u * imag( q_sk(:,i)        ) )));
 
                 % evaluate forces F on each atom : fc [eV/Ang^2] * u [Ang]
                 for m = 1:pp.pc_natoms
                     f(:,pp.c{m},i) = ...
                             - phi{m}*reshape(u(:,pp.o{m},i),size(pp.o{m}).*[3,1]); 
                 end
-                
-                % get kinetic and potential energy : amu * (Ang/fs)^2 = 103.6382 eV
-                KEr(i)= sum(v(:,:,i).^2,1) * uc.mass(uc.species).'/2;
-                PEr(i)= -flatten_(u(:,:,i)).'*flatten_(f(:,:,i))/2; % factor of 1/2 because of double counting?
-                KE(i) = abs(imag(q_sk(:)).'*hw(:))^2/2;
-                PE(i) = abs(real(q_sk(:)).'*hw(:))^2/2;
             end
-            
-            plot(1:nsteps,KEr,'.',1:nsteps,KE,'-',1:nsteps,PEr,'o',1:nsteps,PE,':')
-            legend('mv^2/2','KE','u*f','PE');
-            
-            return;
 
-            % set time step in [fs] : need to scale by phonon energy
-            dt = (t(2)-t(1));% (nsteps-1)/(hw(mode) * am_lib.units_GHz);
+%             m_ = @(x) x .* sqrt(uc.mass(uc.species));
+%             q_sk_r = (q2u\reshape(m_(u),[],nsteps)).*hw(:);
+%             q_sk_i = (q2u\reshape(m_(v),[],nsteps));
+%             q_sk_v2= q_sk_r + 1i*q_sk_i;
+%             
+%             % get potential energy
+%             PE(:,1) = -dot(reshape(u,[],nsteps),reshape(f,[],nsteps),1)/2; 
+%             KE(:,1) = reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2;
+%             PE(:,2) = dot(real(q_sk),real(q_sk),1)/2;
+%             KE(:,2) = dot(imag(q_sk),imag(q_sk),1)/2;
+%             PE(:,3) = dot(real(q_sk_v2),real(q_sk_v2),1)/2;
+%             KE(:,3) = dot(imag(q_sk_v2),imag(q_sk_v2),1)/2;
+%             
+%             plot(1:nsteps,KE(:,1),'-',1:nsteps,KE(:,2),'o',1:nsteps,KE(:,3),'.',...
+%                  1:nsteps,PE(:,1),'-',1:nsteps,PE(:,2),'o',1:nsteps,KE(:,3),'.')
+%             legend('KE','KE normal','KE normal 2','PE','PE normal','PE normal 2')
+
+            % set time step in [fs] : need to correct units?
+            dt = (t(2)-t(1));
             
             % convert [cart] to [frac] and u to tau
             tau = matmul_(inv(uc.bas),u)+uc.tau;
@@ -1497,7 +1502,7 @@ classdef am_lib
             xlabel('dft force [eV/Ang]'); ylabel('bvk force [eV/Ang]');  
         end
 
-        function [T,KE,PE,q_sk] = plot_md_stats(uc,md)
+        function [T,KE,PE,q_sk] = plot_md_stats(uc,md,fbz,bvk)
             
             import am_lib.*
             
@@ -1506,78 +1511,77 @@ classdef am_lib
             f = matmul_( md.bas, md.force );
             v = matmul_( md.bas, md.vel );
             
-            % get kinetic energy : amu * (Ang/fs)^2 -> 103.6382 eV ]
-            KE(:,1) = uc.mass(uc.species) * reshape(sum(v.^2,1),[],md.nsteps)/2;% * 103.6382;
-            
-            % get potential energy
-            PE(:,1) = dot(-reshape(u,[],md.nsteps),reshape(f,[],md.nsteps),1);
+            % get energies
+            PE(:,1) = -dot(reshape(u,[],md.nsteps),reshape(f,[],md.nsteps),1)/2; 
+            KE(:,1) = reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2; % divide by two for double counting?
             
             % get temperature : amu * (Ang/fs)^2/ k_B = 1.20267E6 K
-            k_boltz = 8.6173303E-5; T = 2/3*KE/uc.natoms/k_boltz;
-            
-            % show every few md steps
-            Z = [[1:md.nsteps].',T(:),PE(:),KE(:),KE(:)+PE(:)];
-            fprintf('%10s   %10s   %10s   %10s   %10s \n','step [#]','T [K]','PE [eV]','KE [eV]','PE+KE [eV]');
-            if md.nsteps<100; fprintf('%10i   %10f   %10f   %10f   %10f \n',Z(1:end,:).'); else
-                              fprintf('%10i   %10f   %10f   %10f   %10f \n',Z(1:50:end,:).'); end
-
-            % print
-            set(gcf,'color','w');
-            subplot(3,1,1); plot([1:md.nsteps],[KE(:,1),PE(:,1),KE(:,1)+PE(:,1)]); 
-                            legend('KE','PE','KE+PE'); axis tight; 
-                            xlabel('time step'); ylabel('energy [eV]');
-
-            return;
-
-            % plot position and velocity histograms
-            nbins  = 101;
-            dist_v = reshape(normc_(v),uc.natoms,md.nsteps); 
-            dist_u = reshape(normc_(u),uc.natoms,md.nsteps); 
-            bin_v  = linspace(0,max(dist_v(:)),nbins);
-            bin_u  = linspace(0,max(dist_u(:)),nbins);
-            hist_v = zeros(nbins-1,md.nsteps);
-            hist_u = zeros(nbins-1,md.nsteps);
-            for i = 1:md.nsteps
-                [hist_v(:,i)] = histcounts(dist_v(:,i),bin_v);
-                [hist_u(:,i)] = histcounts(dist_u(:,i),bin_u);
-            end
-            [Y{1:2}]=meshgrid(1:md.nsteps,bin_v(1:(nbins-1))); hist_v(:,1)=[]; Y{1}(:,1)=[]; Y{2}(:,1)=[];
-            subplot(3,1,2); surf(Y{1},Y{2},hist_v,'Facecolor','interp','edgecolor','none');
-                            view(2); axis tight; xlabel('time step'); ylabel('velocity [Ang/fs]');
-            [Y{1:2}]=meshgrid(1:md.nsteps,bin_u(1:(nbins-1))); hist_u(:,1)=[]; Y{1}(:,1)=[]; Y{2}(:,1)=[];
-            subplot(3,1,3); surf(Y{1},Y{2},hist_u,'Facecolor','interp','edgecolor','none');
-                            view(2); axis tight; xlabel('time step'); ylabel('displacement [Ang]');
-                            
+            k_boltz = 8.6173303E-5; T = 2/3*KE/uc.natoms/k_boltz;   
 
             % perform normal-mode analysis
-                % get dispersion on fbz
-                [fbz] = get_zones(pc,n,flags); bz = get_bvk_dispersion(bvk,fbz);
+            if nargin == 4
+                % convert phonon energies back to wierd units
+                hw  = real(fbz.hw)./am_lib.units_eV; hw(hw(:)<1E-3)=1E-3;
 
-                % expand primitive cell eigenvectors onto md cell
-                q2u = expand_bvk_eigenvectors(bvk,uc,bz);
-                % q2u = real(q2u); q2u=q2u./normc_(q2u);
+                % get phonon eigenvector in unit cell based on primitive cell dynamical matrix
+                q2u = expand_bvk_eigenvectors(bvk,uc,fbz); q2u = q2u./normc_(real(q2u));
 
-                % define function to get mass-weighed displacements and forces in [cart] 
-                m_ = @(x) u .* sqrt(uc.mass(uc.species));
+                % get normal coordinates
+                m_ = @(x) x .* sqrt(uc.mass(uc.species));
+                q_sk_r = (q2u\reshape(m_(u),[],md.nsteps)).*hw(:);
+                q_sk_i = (q2u\reshape(m_(v),[],md.nsteps));
+                q_sk = q_sk_r + 1i*q_sk_i;
 
-                % build q_sk [nbands * nks] the normal coordinate via regularization 
-                hw4q2u = real(bz.hw)./am_lib.units_eV; hw4q2u(hw4q2u(:)<1E-8)=1E4;
-                % n=size(q2u,2); E=1E-6*eye(n);Z=zeros(n,md.nsteps); 
-                % q_sk_r =                [q2u;E]\[reshape(u,[],md.nsteps);Z];
-                % q_sk_i = 1./hw4q2u(:).*([q2u;E]\[reshape(v,[],md.nsteps);Z]);
-                q_sk_r =  q2u\reshape(m_(u),[],md.nsteps);
-                q_sk_i = (q2u\reshape(m_(v),[],md.nsteps))./hw4q2u(:);
-                q_sk   = q_sk_r + 1i*q_sk_i;
+                % get energies
+                PE(:,2) = dot(real(q_sk),real(q_sk),1)/2;
+                KE(:,2) = dot(imag(q_sk),imag(q_sk),1)/2;
+
+                plot(1:md.nsteps,KE(:,1),'-',1:md.nsteps,KE(:,2),'o',...
+                     1:md.nsteps,PE(:,1),'-',1:md.nsteps,PE(:,2),'o')
+                legend('KE','KE normal','PE','PE normal')
+            end
                 
-                % get energies back in wierd atomic units
-                hw = real(bz.hw)./am_lib.units_eV; 
-
-                % compute potential and kinetic energies using the normal modes
-                for i = 1:md.nsteps
-                    % get kinetic and potential energy (Ziman Eq. 1.6.17)
-                    PE(i,2) = (abs(q_sk_r(:,i)).'*hw(:))^2;
-                    KE(i,2) = (abs(q_sk_i(:,i)).'*hw(:))^2/2;
+            % if no output is requested, plot and print stuff
+            if nargout == 0
+                % print a few time steps
+                Z = [[1:md.nsteps].',T(:,1),PE(:,1),KE(:,1),KE(:,1)+PE(:,1)];
+                fprintf('%10s   %10s   %10s   %10s   %10s \n','step [#]','T [K]','PE [eV]','KE [eV]','PE+KE [eV]');
+                if md.nsteps<100; fprintf('%10i   %10f   %10f   %10f   %10f \n',Z(1:end,:).'); else
+                                  fprintf('%10i   %10f   %10f   %10f   %10f \n',Z(1:50:end,:).'); end    
+                              
+                % plot energies
+                set(gcf,'color','w');
+                if nargin == 4
+                subplot(3,1,1); plot(1:md.nsteps,KE(:,1),'-',1:md.nsteps,KE(:,2),'o',1:md.nsteps,KE(:,1)+PE(:,1),'^',...
+                                     1:md.nsteps,PE(:,1),'-',1:md.nsteps,PE(:,2),'o',1:md.nsteps,KE(:,2)+PE(:,2),':');
+                                legend('KE','KE normal','KE+PE','PE','PE normal','KE+PE normal');
+                                xlabel('time step'); ylabel('energy [eV]');
+                else
+                subplot(3,1,1); plot(1:md.nsteps,KE(:,1),'-',1:md.nsteps,KE(:,2),'o',1:md.nsteps,KE(:,1)+PE(:,1),'^');
+                                legend('KE','PE','KE+PE');
+                                xlabel('time step'); ylabel('energy [eV]');
                 end
+
+                % plot position and velocity histograms
+                nbins  = 101;
+                dist_v = reshape(normc_(v),uc.natoms,md.nsteps); 
+                dist_u = reshape(normc_(u),uc.natoms,md.nsteps); 
+                bin_v  = linspace(0,max(dist_v(:)),nbins);
+                bin_u  = linspace(0,max(dist_u(:)),nbins);
+                hist_v = zeros(nbins-1,md.nsteps);
+                hist_u = zeros(nbins-1,md.nsteps);
+                for i = 1:md.nsteps
+                    [hist_v(:,i)] = histcounts(dist_v(:,i),bin_v);
+                    [hist_u(:,i)] = histcounts(dist_u(:,i),bin_u);
+                end
+                [Y{1:2}]=meshgrid(1:md.nsteps,bin_v(1:(nbins-1))); hist_v(:,1)=[]; Y{1}(:,1)=[]; Y{2}(:,1)=[];
+                subplot(3,1,2); surf(Y{1},Y{2},hist_v,'Facecolor','interp','edgecolor','none');
+                                view(2); axis tight; xlabel('time step'); ylabel('velocity [Ang/fs]');
+                [Y{1:2}]=meshgrid(1:md.nsteps,bin_u(1:(nbins-1))); hist_u(:,1)=[]; Y{1}(:,1)=[]; Y{2}(:,1)=[];
+                subplot(3,1,3); surf(Y{1},Y{2},hist_u,'Facecolor','interp','edgecolor','none');
+                                view(2); axis tight; xlabel('time step'); ylabel('displacement [Ang]');
+                
+            end
         end
         
         
