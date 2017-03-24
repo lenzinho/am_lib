@@ -1580,6 +1580,7 @@ classdef am_lib
                 p_sk = (v2p*reshape(v,[],md.nsteps));
 
                 % get energies (Wallace p 115 eq 10.53)
+                % Note: both modes +/- on either side of Gamma are getting excited
                 PE(:,2) = dot(abs(q_sk).*hw(:),abs(q_sk).*hw(:),1)/2;
                 KE(:,2) = dot(abs(p_sk)       ,abs(p_sk)       ,1)/2;
             end
