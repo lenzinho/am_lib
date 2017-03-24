@@ -785,10 +785,12 @@ classdef am_lib
             % convert phonon energies back to wierd units
             hw = real(bz.hw)./am_lib.units_eV; hw(hw(:)<1E-8)=1E-8;
             
-            % get normal transformations from uc eigenvector
-            U   = expand_bvk_eigenvectors(bvk,uc,bz); 
-            q2u = real(U)  ./ normc_(real(U))   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
-            u2q = real(U)' ./ normc_(real(U)).' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+            % get normal transformations from uc eigenvector 
+            % (Wallace p 113 10.40, Wallace p 115 eq 10.48)
+            U   = expand_bvk_eigenvectors(bvk,uc,bz); N = normc_(real(U)); 
+            q2u = U   ./ N   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
+            u2q = U'  ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+            v2p = U.' ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
             
             % displace according to the phonon mode
             shp_ = @(A) reshape(A,3,uc.natoms); t = 2*pi*[0:(nsteps-1)]/(nsteps-1)/hw(mode);
@@ -797,8 +799,9 @@ classdef am_lib
                 q_sk(mode,i) = amp * exp(-1i*t(i)*hw(mode));
 
                 % get displacement and velocities in [cart : Ang & Ang/fs]
-                u(:,:,i) = real(shp_( q2u * real( q_sk(:,i)./hw(:) ) ));
-                v(:,:,i) = real(shp_( q2u * imag( q_sk(:,i)        ) ));
+                % (Wallace p 113 10.40)
+                u(:,:,i) = real(shp_( real(q2u) * ( q_sk(:,i)       ) ));
+                v(:,:,i) = imag(shp_( real(q2u) * ( q_sk(:,i).*hw(:)) ));
 
                 % evaluate forces F on each atom : fc [eV/Ang^2] * u [Ang]
                 for m = 1:pp.pc_natoms
@@ -807,22 +810,19 @@ classdef am_lib
                 end
             end
             
-            % get normal modes
-            q_sk_r = (u2q*reshape(u,[],nsteps)).*hw(:);
-            q_sk_i = (u2q*reshape(v,[],nsteps));
-            q_sk_v2= q_sk_r + 1i*q_sk_i;
+            % get normal modes (Wallace p 115 eq 10.49)
+            q_sk = (u2q*reshape(u,[],nsteps));
+            p_sk = (v2p*reshape(v,[],nsteps));
             
-            % get potential energy
+            % get energies (Wallace p 115 eq 10.53)
             PE(:,1) = -dot(reshape(u,[],nsteps),reshape(f,[],nsteps),1)/2; 
             KE(:,1) = reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2;
-            PE(:,2) = dot(real(q_sk),real(q_sk),1)/2;
-            KE(:,2) = dot(imag(q_sk),imag(q_sk),1)/2;
-            PE(:,3) = dot(real(q_sk_v2),real(q_sk_v2),1)/2;
-            KE(:,3) = dot(imag(q_sk_v2),imag(q_sk_v2),1)/2;
+            PE(:,2) = dot(abs(q_sk).*hw(:),abs(q_sk).*hw(:),1)/2;
+            KE(:,2) = dot(abs(p_sk)       ,abs(p_sk)       ,1)/2;
             
-            plot(1:nsteps,KE(:,1),'',1:nsteps,KE(:,2),'v',1:nsteps,KE(:,3),'^',...
-                 1:nsteps,PE(:,1),'-',1:nsteps,PE(:,2),'v',1:nsteps,PE(:,3),'^');
-            legend('KE','KE normal','KE normal 2','PE','PE normal','PE normal 2'); axis tight;
+            plot(1:nsteps,KE(:,1),'-',1:nsteps,PE(:,1),'-',1:nsteps,KE(:,1)+PE(:,1),'-',...
+                 1:nsteps,KE(:,2),'.',1:nsteps,PE(:,2),'.',1:nsteps,KE(:,2)+PE(:,2),'.');
+            legend('KE','PE','KE+PE','nKE','nPE','nKE+nPE'); axis tight;
 
             % set time step in [fs] : need to correct units YES. am_lib.units_GHz
             % TO DO need to correct units
@@ -839,7 +839,7 @@ classdef am_lib
             
             % convert [cart] to [frac] and u to tau
             tau = matmul_(inv(uc.bas),u)+uc.tau;
-            v   = matmul_(inv(uc.bas),v) * sqrt(103.6382);
+            v   = matmul_(inv(uc.bas),v) / sqrt(103.6382);
             f   = matmul_(inv(uc.bas),f);
             
             % create displaced structure
@@ -853,7 +853,7 @@ classdef am_lib
             % get "primitive" irreducible displaced cell
             if nargout==2
                 % get primitive cell basis commensurate with the displacement
-                [cc,c2d,d2c] = get_primitive_cell(dc);
+                [cc,c2d,d2c] = get_primitive_cell(dc); cc.bas = double(cc.bas);
 
                 % reduce dc size
                 idc_ = @(dc,cc,pc,c2d,d2c) struct('units',dc.units, ...
@@ -869,7 +869,7 @@ classdef am_lib
             end
         end
         
-        function [uc,inds]     = match_cell(uc,uc_ref)
+        function [uc,inds]    = match_cell(uc,uc_ref)
             
             import am_lib.*
             
@@ -1066,8 +1066,9 @@ classdef am_lib
         end
         
         function [bzs]         = get_bz_surf(pc,n,vy,vx)
-            % surf: v1 and v2 are in cart
-            % n=[101,101]; 
+            % bzs=get_bz_surf(pc,[101,101],[1;0;0],[0;1;0]);
+            % bzs=get_bvk_dispersion(bvk,bzs);
+            % plot_bz_surf(bzs,1)
             
             import am_lib.*
             
@@ -1164,6 +1165,9 @@ classdef am_lib
         end
         
         function plot_bz_surf(bzs,band)
+            % bzs=get_bz_surf(pc,[101,101],[1;0;0],[0;1;0]);
+            % bzs=get_bvk_dispersion(bvk,bzs);
+            % plot_bz_surf(bzs,1)
             
             import am_lib.*
 
@@ -1366,6 +1370,9 @@ classdef am_lib
         end
 
         function [bz]  = get_bvk_dispersion(bvk,bz)
+            
+            import am_lib.* 
+            
             % get eigenvalues
             bz.hw = zeros(bvk.nbands,bz.nks); bz.U = zeros(bvk.nbands,bvk.nbands,bz.nks);
             fprintf(' ... computing dispersion '); tic; 
@@ -1374,9 +1381,9 @@ classdef am_lib
                 % input = num2cell([bvk.fc{:},bz.k(:,i).',bvk.mass]); % [pc-frac]
                 input = num2cell([bvk.fc{:},(bz.recbas*bz.k(:,i)).',bvk.mass]); % [cart]
                 % ... and evaluate (U are column vectors)
-                [bz.U(:,:,i),bz.hw(:,i)] = eig(bvk.D(input{:}),'vector'); 
+                [bz.U(:,:,i),bz.hw(:,i)] = eig( force_hermiticity_(bvk.D(input{:})) ,'vector'); 
                 % correct units
-                bz.hw(:,i) = sqrt(real(bz.hw(:,i))) * am_lib.units_eV;
+                bz.hw(:,i) = sqrt(abs(bz.hw(:,i))) .* sign(bz.hw(:,i)) * am_lib.units_eV;
                 % sort energies
                 [bz.hw(:,i),inds]=sort(bz.hw(:,i)); bz.U(:,:,i)=bz.U(:,inds,i);
             end
@@ -1542,15 +1549,17 @@ classdef am_lib
             
             import am_lib.*
             
-            % [cart] get displacements and forces
+            % match uc to md
+            uc = match_cell(uc,md);
+            
+            % [cart] get displacements and forces; [amu * (Ang/fs)^2 ] = 103.6382 [eV]
             u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
             f = matmul_( md.bas, md.force );
             v = matmul_( md.bas, md.vel ) * sqrt(103.6382);
             
             % get potentoal energy : [eV/Ang * Ang] = [eV]
             PE(:,1) = -dot(reshape(u,[],md.nsteps),reshape(f,[],md.nsteps),1)/2; 
-            % get kinetic energy : [amu * (Ang/fs)^2 ] = 103.6382 [eV], units
-            % incorporated above in v to make Re and Im parts of q_sk ~ equal
+            % get kinetic energy : [amu * (Ang/fs)^2 ] = 103.6382 [eV] (incorporate above in to v)
             KE(:,1) =  reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2;
             
             % get temperature : amu * (Ang/fs)^2/ k_B = 1.20267E6 K
@@ -1559,21 +1568,20 @@ classdef am_lib
             % perform normal-mode analysis
             if nargin == 4
                 % convert phonon energies back to wierd units
-                hw = real(fbz.hw)./am_lib.units_eV; hw(hw(:)<1E-8)=1E-8;
+                hw = real(fbz.hw)./am_lib.units_eV;
+                
+                % get normal transformations from uc eigenvector (Wallace p 115 eq 10.48)
+                U   = expand_bvk_eigenvectors(bvk,uc,fbz); N = normc_(real(U));
+                u2q = U' ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+                v2p = U.'./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
 
-                % get normal transformations from uc eigenvector
-                U = expand_bvk_eigenvectors(bvk,uc,fbz);  N = normc_(real(U)); 
-                % q2u = real(U)  ./ N   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
-                u2q = real(U)' ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+                % get normal modes (Wallace p 115 eq 10.49)
+                q_sk = (u2q*reshape(u,[],md.nsteps));
+                p_sk = (v2p*reshape(v,[],md.nsteps));
 
-                % get normal modes
-                q_sk_r = (u2q*reshape(u,[],md.nsteps)).*hw(:);
-                q_sk_i = (u2q*reshape(v,[],md.nsteps));
-                q_sk   = (q_sk_r) + 1i*(q_sk_i);
-
-                % get potential energy
-                PE(:,2) = dot(real(q_sk),real(q_sk),1)/2;
-                KE(:,2) = dot(imag(q_sk),imag(q_sk),1)/2;
+                % get energies (Wallace p 115 eq 10.53)
+                PE(:,2) = dot(abs(q_sk).*hw(:),abs(q_sk).*hw(:),1)/2;
+                KE(:,2) = dot(abs(p_sk)       ,abs(p_sk)       ,1)/2;
             end
                 
             % if no output is requested, plot and print stuff
@@ -1589,11 +1597,11 @@ classdef am_lib
                 % plot energies
                 set(gcf,'color','w');
                 if nargin == 4
-                subplot(3,4,1:3); plot(1:md.nsteps,KE(:,1),'-',1:md.nsteps,PE(:,1),'--',1:md.nsteps,KE(:,1)+PE(:,1),':',...
-                                     1:md.nsteps,KE(:,2),'-',1:md.nsteps,PE(:,2),'--',1:md.nsteps,KE(:,2)+PE(:,2),':');
-                                legend('KE','PE','KE+PE','nPE','nPE','nKE+nPE');
+                subplot(3,4,1:3); plot(1:md.nsteps,KE(:,1),'-',1:md.nsteps,PE(:,1),'-',1:md.nsteps,KE(:,1)+PE(:,1),'-',...
+                                       1:md.nsteps,KE(:,2),'.',1:md.nsteps,PE(:,2),'.',1:md.nsteps,KE(:,2)+PE(:,2),'.');
+                                legend('KE','PE','KE+PE','nKE','nPE','nKE+nPE');
                                 xlabel('time step'); ylabel('energy [eV]'); axis tight;
-                subplot(3,4,4); plot3(repelem([1:md.nsteps].',1,fbz.nks*bvk.nbands),real(q_sk).',imag(q_sk).'); 
+                subplot(3,4,4); plot3(repelem([1:md.nsteps].',1,fbz.nks*bvk.nbands),real(q_sk.*hw(:)).',real(p_sk).'); 
                                 view([1 0 0]); box on; ax=axis; maxax=max(abs(ax(3:6))); axis([ax(1:2),[-1 1 -1 1].*maxax]); daspect([md.nsteps/maxax 1 1]);
                 else
                 subplot(3,1,1); plot(1:md.nsteps,KE(:,1),'-',1:md.nsteps,KE(:,2),'o',1:md.nsteps,KE(:,1)+PE(:,1),'^');
@@ -2445,6 +2453,58 @@ classdef am_lib
             % Note: Hermitian matrices eigendecomposed as A = U E U* for 
             % a unitary matrix U and eigenvalues E -- meaning: 
             %       q2u'*q2u = q2u*q2u' = Identity 
+            %
+            % Q: Are the eigenvectors of a hermitian matrix unitary? 
+            % A: It appears to be so. Check with:
+            %
+            %        for i = 1:bz.nks; 
+            %               uni(i) = max(max(abs(inv(bz.U(:,:,i))-bz.U(:,:,i)'))); 
+            %        end; semilogy(uni)
+            %
+            % Q: Does U diagonalize D? 
+            % A: Yes, U does diagonalize D when D is constructed properly including
+            %    1/sqrt(M) factors! Otherwise it will leave it in block diagonal form
+            %    with each block spanning the dimensions of the primitive cell basis.
+            %    Check with:
+            %
+            %         n=[5;5;5];
+            %         [bz,~] = get_zones(pc,n,''); bz = get_bvk_dispersion(bvk,bz); 
+            %         U   = expand_bvk_eigenvectors(bvk,uc,bz); N = normc_(real(U));
+            %         q2u = real(U)  ./ N   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
+            %         u2q = real(U)' ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+            % 
+            %         M = repelem(uc.mass(uc.species),1,3);
+            %         D = zeros(3*uc.natoms,3*uc.natoms);
+            %         for m = 1:pp.pc_natoms
+            %             for i = 1:pp.ncenters(m)
+            %             for j = 1:pp.npairs(m)
+            %                 x  = pp.c{m}(i);   xp = [1:3]+3*(x-1); ir = pp.i{m}(j);
+            %                 y  = pp.o{m}(j,i); yp = [1:3]+3*(y-1); iq = pp.iq{m}(j);
+            % 
+            %                 iphi = reshape(bvk.W{ir}*bvk.fc{ir}(:),3,3);
+            % 
+            %                 D(xp,yp) = D(xp,yp) + ...
+            %                     pp.Q{1}(1:3,1:3,iq) * permute(iphi,pp.Q{2}(:,iq)) * pp.Q{1}(1:3,1:3,iq)';
+            %             end
+            %             end
+            %         end
+            %         D = diag(1./sqrt(M)) * D * diag(1./sqrt(M));
+            %         spy(abs(U'*D*U)>1E-8); view(2);  axis tight;
+            %         spy(abs(u2q*D*q2u)>1E-4); view(2);  axis tight;
+            %
+            % Q: Are the eigenvalues obtained from the diagonalization the same?
+            % A: The values are the same as that obtained by diagonalizing the
+            %    primitive cell dynamical matrix. Eigenvenvalues obtained from the unit
+            %    cell dynamical matrix are the same but sorted in a different order.
+            %    Check with:
+            % 
+            %       plot(bz.hw(:)./am_lib.units_eV,real(sqrt(real(diag(U'*D*U)))),'.');
+            %
+            % Q: Does real(U) span a complete basis? 
+            % A: No. While U does span a complete basis, the rank of real(U) is reduced and
+            %    the null space of real(U) is increased by the same amount relative to
+            %    that of U, indicating that real(U) vectors overlap on a smaller manifold.
+            %
             
             import am_lib.*
 
@@ -2457,16 +2517,26 @@ classdef am_lib
             %     end
             % end
             
-            % expand primitive eigenvectors to unit cell
-            u2p = flatten_([1:3].'+3*(uc.u2p-1));
-            U = reshape(bz.U(u2p,:),3*uc.natoms,bvk.nbands*bz.nks);
-            E = repelem(exp(+2i*pi*(uc.tau2pc*uc.tau).'*bz.k),3,bvk.nbands);
-            q2u = U.*E * sqrt(bvk.natoms/uc.natoms);
+            % find closest primitive lattice vector
+            % G_ = @(tau) tau - inv(uc.tau2pc)*mod_(uc.tau2pc*tau); 
+            G_ = @(tau) tau;
 
-            % % apply a phase shift to maximize displacements when 
-            % rads_ = @(x) atan2( normc_(imag(x)) , normc_(real(x)) );
-            % q2u = q2u .* exp( -1i * rads_(q2u) );
-            % rads_(q2u)
+            % expand primitive eigenvectors to unit cell
+            % NOTE: exp in must ABSTOLUTELY be positive, i.e. +2i*pi and NOT -2i*pi
+            u2p = flatten_([1:3].'+3*(uc.u2p-1));
+            U = reshape(bz.U(u2p,:,:),3*uc.natoms,bvk.nbands*bz.nks);
+            E = repelem(exp(2i*pi*(uc.tau2pc*G_(uc.tau)).'*bz.k),3,bvk.nbands);
+            q2u = U .* E * sqrt(bvk.natoms/uc.natoms);
+            
+            % % explicit
+            % q2u = zeros(uc.natoms,bvk.nbands*bz.nks);
+            % for i = 1:uc.natoms
+            %     y = 0;  x = i; xp = [1:3] + 3*(x-1); 
+            %     m = uc.u2p(x); mp = [1:3] + 3*(m-1);
+            % for j = 1:bz.nks; for k = 1:bvk.nbands; y = y+1;
+            %     q2u(xp,y) = bz.U(mp,k,j) * exp(-2i*pi*dot(uc.tau2pc*G_(uc.tau(:,x)),bz.k(:,j))) * sqrt(bvk.natoms/uc.natoms);
+            % end;end
+            % end
         end
 
         
@@ -2932,6 +3002,26 @@ classdef am_lib
             end
         end
 
+        function [A] = force_hermiticity_(A)
+            A = (A'+A)/2;
+        end
+        
+        function [A] = force_symmetricity_(A)
+            A = (A.'+A)/2;
+        end
+        
+        function [c] = hermiticity_(A)
+            c = max(max(abs(A'-A)));
+        end
+        
+        function [c] = unitaricity_(A)
+            c = max(max(abs(inv(A)-A')));
+        end
+        
+        function [c] = symmetricity_(A)
+            c = max(max(abs(A-A.')));
+        end
+        
         function [h] = plot3_(A,varargin)
            h = plot3(A(1,:),A(2,:),A(3,:),varargin{:});
         end
