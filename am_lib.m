@@ -824,12 +824,22 @@ classdef am_lib
                  1:nsteps,PE(:,1),'-',1:nsteps,PE(:,2),'v',1:nsteps,PE(:,3),'^');
             legend('KE','KE normal','KE normal 2','PE','PE normal','PE normal 2'); axis tight;
 
-            % set time step in [fs] : need to correct units?
-            dt = (t(2)-t(1));
+            % set time step in [fs] : need to correct units YES. am_lib.units_GHz
+            % TO DO need to correct units
+            % TO DO need to correct units
+            % TO DO need to correct units
+            % TO DO need to correct units
+            % TO DO need to correct units
+            % TO DO need to correct units
+            dt = (t(2)-t(1)); 
+            
+            
+%             plot(flatten_(diff(u(:,:,[1:2]+5),1,3)./dt)./flatten_(v(:,:,5)),'.');
+%             return
             
             % convert [cart] to [frac] and u to tau
             tau = matmul_(inv(uc.bas),u)+uc.tau;
-            v   = matmul_(inv(uc.bas),v);
+            v   = matmul_(inv(uc.bas),v) * sqrt(103.6382);
             f   = matmul_(inv(uc.bas),f);
             
             % create displaced structure
@@ -1539,7 +1549,8 @@ classdef am_lib
             
             % get potentoal energy : [eV/Ang * Ang] = [eV]
             PE(:,1) = -dot(reshape(u,[],md.nsteps),reshape(f,[],md.nsteps),1)/2; 
-            % get kinetic energy : [amu * (Ang/fs)^2 ] = 103.6382 [eV]
+            % get kinetic energy : [amu * (Ang/fs)^2 ] = 103.6382 [eV], units
+            % incorporated above in v to make Re and Im parts of q_sk ~ equal
             KE(:,1) =  reshape(sum(uc.mass(uc.species).*dot(v,v,1),2),1,[])/2;
             
             % get temperature : amu * (Ang/fs)^2/ k_B = 1.20267E6 K
