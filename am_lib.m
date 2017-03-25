@@ -748,6 +748,13 @@ classdef am_lib
             % n=[4,4,4]; kpt=[0;1/2;1/2]; amp=4; mode=3; nsteps=31;
             % [dc,idc] = get_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps); 
             % % clf; F = plot_md_cell(dc); movie(F,3)
+            %
+            % Q: Are the units for dt correct?
+            % A: Yes! Check with: 
+            %
+            %       plot(flatten_(diff(u(:,:,:),1,3)./dt), ...
+            %               flatten_(v(:,:,2:end)+v(:,:,1:(end-1)))/2,'.');
+            %
            
             import am_lib.*
             
@@ -787,6 +794,10 @@ classdef am_lib
             
             % get normal transformations from uc eigenvector 
             % (Wallace p 113 10.40, Wallace p 115 eq 10.48)
+            % I think there is something wrong with the way the normal mode
+            % is being generated. Two modes are getting excited at +/-
+            % about gamma. It seems like it's a standing wave rather than a
+            % propagating wave ...  
             U   = expand_bvk_eigenvectors(bvk,uc,bz); N = normc_(real(U)); 
             q2u = U   ./ N   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
             u2q = U'  ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
@@ -800,8 +811,8 @@ classdef am_lib
 
                 % get displacement and velocities in [cart : Ang & Ang/fs]
                 % (Wallace p 113 10.40)
-                u(:,:,i) = real(shp_( real(q2u) * ( q_sk(:,i)       ) ));
-                v(:,:,i) = imag(shp_( real(q2u) * ( q_sk(:,i).*hw(:)) ));
+                u(:,:,i) = shp_( real(q2u) * real( q_sk(:,i)        ) );
+                v(:,:,i) = shp_( real(q2u) * imag( q_sk(:,i).*hw(:) ) );
 
                 % evaluate forces F on each atom : fc [eV/Ang^2] * u [Ang]
                 for m = 1:pp.pc_natoms
@@ -809,6 +820,14 @@ classdef am_lib
                             - phi{m}*reshape(u(:,pp.o{m},i),size(pp.o{m}).*[3,1]); 
                 end
             end
+            
+    %%%%
+            
+    x=[0:1000]/1000; k=1/2;
+    plot(x,real(exp(2i*pi*x*k)),x,real(exp(-2i*pi*x*k)),...
+         x,imag(exp(2i*pi*x*k)),x,imag(exp(-2i*pi*x*k)))
+            
+    %%%%
             
             % get normal modes (Wallace p 115 eq 10.49)
             q_sk = (u2q*reshape(u,[],nsteps));
@@ -824,19 +843,9 @@ classdef am_lib
                  1:nsteps,KE(:,2),'.',1:nsteps,PE(:,2),'.',1:nsteps,KE(:,2)+PE(:,2),'.');
             legend('KE','PE','KE+PE','nKE','nPE','nKE+nPE'); axis tight;
 
-            % set time step in [fs] : need to correct units YES. am_lib.units_GHz
-            % TO DO need to correct units
-            % TO DO need to correct units
-            % TO DO need to correct units
-            % TO DO need to correct units
-            % TO DO need to correct units
-            % TO DO need to correct units
+            % set time step in [fs]
             dt = (t(2)-t(1)); 
-            
-            
-%             plot(flatten_(diff(u(:,:,[1:2]+5),1,3)./dt)./flatten_(v(:,:,5)),'.');
-%             return
-            
+
             % convert [cart] to [frac] and u to tau
             tau = matmul_(inv(uc.bas),u)+uc.tau;
             v   = matmul_(inv(uc.bas),v) / sqrt(103.6382);
@@ -1571,16 +1580,15 @@ classdef am_lib
                 hw = real(fbz.hw)./am_lib.units_eV;
                 
                 % get normal transformations from uc eigenvector (Wallace p 115 eq 10.48)
-                U   = expand_bvk_eigenvectors(bvk,uc,fbz); N = normc_(real(U));
-                u2q = U' ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
-                v2p = U.'./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+                U   = expand_bvk_eigenvectors(bvk,uc,fbz);
+                u2q = U'  .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+                v2p = U.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
 
                 % get normal modes (Wallace p 115 eq 10.49)
                 q_sk = (u2q*reshape(u,[],md.nsteps));
                 p_sk = (v2p*reshape(v,[],md.nsteps));
 
                 % get energies (Wallace p 115 eq 10.53)
-                % Note: both modes +/- on either side of Gamma are getting excited
                 PE(:,2) = dot(abs(q_sk).*hw(:),abs(q_sk).*hw(:),1)/2;
                 KE(:,2) = dot(abs(p_sk)       ,abs(p_sk)       ,1)/2;
             end
