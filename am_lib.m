@@ -68,7 +68,7 @@ classdef am_lib
     
     properties (Constant)
         tiny = 1E-4; % precision of atomic coordinates
-        eps = 1E-10; % numerical precision
+        eps = 1E-8; % numerical precision
         units_eV = 0.06465555; % sqrt( [eV/Ang^2] * [1/amu] ) --> 0.06465555 [eV]
         units_THz = 98.22906;  % sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz=1/ps]
         units_GHz = 98229.06;  % sqrt( [eV/Ang^2] * [1/amu] ) --> 98229.06 [GHz=1/fs]
@@ -755,7 +755,43 @@ classdef am_lib
             %       plot(flatten_(diff(u(:,:,:),1,3)./dt), ...
             %               flatten_(v(:,:,2:end)+v(:,:,1:(end-1)))/2,'.');
             %
-           
+            % Q: How do traveling waves work?
+            % A: Check it out using the code below:
+            % 
+            %         clc
+            %         N = 50;
+            %         x = [0:(N-1)]/(N-1);
+            %         t = [0:(N-1)]/(N-1);
+            % 
+            %         f = 1;
+            %         k = 2;
+            %         E1 = exp(2i*pi*(+k*x.'+f*t));
+            %         E2 = exp(2i*pi*(-k*x.'+f*t));
+            %         for i = 1:N
+            %         plot(x,real(E1(:,i)),...
+            %              x,real(E2(:,i)),...
+            %              x,real(E1(:,i)+E2(:,i))/2); 
+            %         ylim([-1 1]); line([0 1],[0 0]); drawnow; 
+            %         end
+            % 
+            % Q: What is the reason for producing two phonon excitations
+            %    when fourier transforming real displacements?
+            % A: Real part of the phonon corresponds to the displacement,
+            %    however for a phonon with wavevector k and -k, the real
+            %    parts are identical: 
+            % 
+            %     +k = [0;0;+1/2]     -k = [0;0;-1/2]
+            %    0.0000 + 0.0000i    0.0000 - 0.0000i
+            %    0.0000 + 0.0000i    0.0000 - 0.0000i
+            %    0.0000 + 0.0000i    0.0000 - 0.0000i
+            %   -0.5525 - 0.4015i   -0.5525 + 0.4015i
+            %   -0.1480 - 0.1076i   -0.1480 + 0.1076i
+            %   -0.0000 - 0.0000i   -0.0000 + 0.0000i
+            %    0.5525 + 0.4015i    0.5525 - 0.4015i
+            %    0.1480 + 0.1076i    0.1480 - 0.1076i
+            %   -0.0000 + 0.0000i   -0.0000 + 0.0000i
+            %
+
             import am_lib.*
             
             % get a supercell commensurate with the kpoint
@@ -787,7 +823,6 @@ classdef am_lib
             u = single(zeros(3,uc.natoms,nsteps));
             v = single(zeros(3,uc.natoms,nsteps));
             f = single(zeros(3,uc.natoms,nsteps));
-            q_sk  = zeros(bvk.nbands,nsteps);
 
             % convert phonon energies back to wierd units
             hw = real(bz.hw)./am_lib.units_eV; hw(hw(:)<1E-8)=1E-8;
@@ -798,21 +833,23 @@ classdef am_lib
             % is being generated. Two modes are getting excited at +/-
             % about gamma. It seems like it's a standing wave rather than a
             % propagating wave ...  
-            U   = expand_bvk_eigenvectors(bvk,uc,bz); N = normc_(real(U)); 
-            q2u = U   ./ N   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
-            u2q = U'  ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
-            v2p = U.' ./ N.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+            U   = expand_bvk_eigenvectors(bvk,uc,bz);
+            q2u = U   ./ repelem(sqrt(uc.mass(uc.species)).',3,1);
+            u2q = U'  .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+            v2p = U.' .* repelem(sqrt(uc.mass(uc.species)).',3,1).';
+            
+            % build q_sk wave vector
+            t = 2*pi*[0:(nsteps-1)]/(nsteps-1)/hw(mode); 
+            q_sk(bvk.nbands,nsteps) = 0; 
+            q_sk(mode,:) = amp * exp(1i*t(:)*hw(mode));
             
             % displace according to the phonon mode
-            shp_ = @(A) reshape(A,3,uc.natoms); t = 2*pi*[0:(nsteps-1)]/(nsteps-1)/hw(mode);
+            shp_ = @(A) reshape(A,3,uc.natoms); 
             for i = 1:nsteps
-                % build q_sk vector
-                q_sk(mode,i) = amp * exp(-1i*t(i)*hw(mode));
-
                 % get displacement and velocities in [cart : Ang & Ang/fs]
                 % (Wallace p 113 10.40)
-                u(:,:,i) = shp_( real(q2u) * real( q_sk(:,i)        ) );
-                v(:,:,i) = shp_( real(q2u) * imag( q_sk(:,i).*hw(:) ) );
+                u(:,:,i) = real(shp_( q2u * ( q_sk(:,i)            ) ));
+                v(:,:,i) = real(shp_( q2u * ( q_sk(:,i).*hw(:).*1i ) ));
 
                 % evaluate forces F on each atom : fc [eV/Ang^2] * u [Ang]
                 for m = 1:pp.pc_natoms
@@ -821,13 +858,10 @@ classdef am_lib
                 end
             end
             
-    %%%%
             
-    x=[0:1000]/1000; k=1/2;
-    plot(x,real(exp(2i*pi*x*k)),x,real(exp(-2i*pi*x*k)),...
-         x,imag(exp(2i*pi*x*k)),x,imag(exp(-2i*pi*x*k)))
-            
-    %%%%
+%             surf(squeeze(normc_(u)),'edgecolor','none')
+%             
+%             return
             
             % get normal modes (Wallace p 115 eq 10.49)
             q_sk = (u2q*reshape(u,[],nsteps));
@@ -916,32 +950,35 @@ classdef am_lib
             
         end
         
-        function [F]          = plot_md_cell(md)
+        function [F]          = plot_md_cell(md,varargin)
             % n=[2,2,2]; kpt=[0;1/2;1/2]; amp=2; mode=9; nsteps=31;
             % idc = get_irreducible_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps); clf
             % F  = plot_md_cell(idc); % movie(F,3)
             
             import am_lib.*
             
+            if varargin{1}=='view'; v_xyz = varargin{2}; else; v_xyz = 3; end
+            
             % initialize figure
             set(gcf,'color','w'); hold on;
 
             % plot cell boundaries
             plothull_(md.bas*[0,1,0,1,0,1,0,1;0,0,1,1,0,0,1,1;0,0,0,0,1,1,1,1]); 
-            daspect([1 1 1]); box on; axis tight; view(3); fixaxis=axis;
+            daspect([1 1 1]); box on; axis tight; view(v_xyz); fixaxis=axis;
 
+            % get coordinates in [cart]
+            tau = matmul_(md.bas,md.tau);
+            
             % plot paths for each atom
-            for i = 1:md.natoms; hold on; plot3_(md.bas*reshape(md.tau(:,i,:),3,[]),'.','markersize',5); end
+            hold on; plot3_(reshape(tau(:,:,:),3,[]),'.','markersize',5); 
 
             % plot first point
-            hold on; h = scatter3_(md.bas*md.tau(:,:,1),50*sqrt(md.mass(md.species)),md.species(:),'filled','MarkerEdgeColor','k'); hold off;
-            axis(fixaxis); drawnow; pause(0.1); F(md.nsteps) = struct('cdata',[],'colormap',[]); F(1) = getframe;
-
+            hold on; h = scatter3_(tau(:,:,1),50*sqrt(md.mass(md.species)),md.species(:),'filled','MarkerEdgeColor','k'); hold off;
+            axis(fixaxis); drawnow; F(md.nsteps) = struct('cdata',[],'colormap',[]); F(1) = getframe;
+    
             if md.nsteps>1
-            for i = 2:md.nsteps
-                delete(h); 
-                hold on; h = scatter3_(md.bas*md.tau(:,:,i),50*sqrt(md.mass(md.species)),md.species(:),'filled','MarkerEdgeColor','k'); hold off; 
-                axis(fixaxis); view(3); drawnow; F(i) = getframe;
+            for i = 2:md.nsteps 
+                [h.XData,h.YData,h.ZData] = deal(tau(1,:,i),tau(2,:,i),tau(3,:,i)); F(i) = getframe;
             end
             end
         end
@@ -1390,7 +1427,7 @@ classdef am_lib
                 % input = num2cell([bvk.fc{:},bz.k(:,i).',bvk.mass]); % [pc-frac]
                 input = num2cell([bvk.fc{:},(bz.recbas*bz.k(:,i)).',bvk.mass]); % [cart]
                 % ... and evaluate (U are column vectors)
-                [bz.U(:,:,i),bz.hw(:,i)] = eig( force_hermiticity_(bvk.D(input{:})) ,'vector'); 
+                [bz.U(:,:,i),bz.hw(:,i)] = eig( force_hermiticity_(bvk.D(input{:})) ,'vector');
                 % correct units
                 bz.hw(:,i) = sqrt(abs(bz.hw(:,i))) .* sign(bz.hw(:,i)) * am_lib.units_eV;
                 % sort energies
@@ -1859,7 +1896,8 @@ classdef am_lib
                 % define input ...
                 input = num2cell([tb.vsk{:},[bz.recbas*bz.k(:,i)].']);
                 % ... and evaluate (V are column vectors)
-                [bz.V(:,:,i),bz.E(:,i)] = eig(tb.H(input{:}),'vector'); 
+                % [bz.V(:,:,i),bz.E(:,i)] = eig(tb.H(input{:}),'vector'); 
+                [bz.V(:,:,i),bz.E(:,i)] = eig_(tb.H(input{:})); 
             end
         end
 
@@ -2450,7 +2488,7 @@ classdef am_lib
         
         % aux phonons
 
-        function [q2u] = expand_bvk_eigenvectors(bvk,uc,bz)
+        function [q2u]  = expand_bvk_eigenvectors(bvk,uc,bz)
             % Expand primitive cell eigenvectors onto the unit cell; bz
             % must be the full mesh with the same dimensions as the
             % super unitcell (relative to that of the primitive cell).
@@ -2547,7 +2585,6 @@ classdef am_lib
             % end;end
             % end
         end
-
         
         % aux electrons
 
@@ -2912,7 +2949,7 @@ classdef am_lib
                 end
             end
         end
-
+        
         function [A] = frref_(A)
             %frref_   Fast reduced row echelon form.
             %   R = frref_(A) produces the reduced row echelon form of A.
@@ -3018,17 +3055,74 @@ classdef am_lib
         function [A] = force_symmetricity_(A)
             A = (A.'+A)/2;
         end
+
+        function [c] = diagonalicity_(A)
+            c = max(max(abs(diag(diag(A))-A)));
+        end
         
         function [c] = hermiticity_(A)
             c = max(max(abs(A'-A)));
         end
         
         function [c] = unitaricity_(A)
-            c = max(max(abs(inv(A)-A')));
+            c = max(max(abs( A'*A - eye(size(A)) )));
         end
         
         function [c] = symmetricity_(A)
             c = max(max(abs(A-A.')));
+        end
+        
+        function [U,E] = eig_(D)
+            % diagonalize and get nice eigenvectors for Hermitian or symmetric matrices D
+            % confirm input matrix is hermitian
+            
+            import am_lib.*
+            
+            % Assure that D is Hermitian or real-symmetric.
+            assert(hermiticity_(D)<am_lib.eps,'D is not Hermitian.');
+
+            % get eigenvectors
+            [U,E]=eig(force_hermiticity_(D),'vector');
+            
+            % nullify numerically negligible components
+            ex_ = abs(U(:))<am_lib.eps; U(ex_) = 0;
+
+            % rotate each column vector in complex space to make the first value be real
+            th = angle(U); [~,I]=max(abs(th)); U = U .* exp(-1i*perm_(th,I));
+            
+            % maximize vectors 1-norm within degenerate subspaces
+            [~,~,unq_]=unique(rnd_(E));
+            for j = 1:max(unq_)
+                unq_list = find(unq_==j).';
+                if numel(unq_list)>1
+                for a = unq_list
+                    ex_ = unq_list(unq_list~=a);
+                    [m,p]=max(abs(U(:,a)));
+                    if m > am_lib.eps
+                        U(:,ex_) = U(:,ex_) - U(:,a) .* U(p,ex_)/U(p,a);
+                    else
+                        U(:,a) = 0;
+                    end
+                end
+                end
+            end
+
+            % nullify numerically negligible components
+            ex_ = abs(U(:))<am_lib.eps; U(ex_) = 0;
+
+            % rotate each column vector in complex space to make the first value be real
+            th = angle(U); [~,I]=max(abs(th)); U = U .* exp(-1i*perm_(th,I));
+
+            % nullify numerically negligible components
+            ex_ = abs(imag(U(:)))<am_lib.eps; U(ex_) = real(U(ex_));
+            ex_ = abs(real(U(:)))<am_lib.eps; U(ex_) = imag(U(ex_));
+
+            % normalize each colum vector
+            U = U./normc_(U);
+
+            % confirm properties of new eigenvectors
+            assert(unitaricity_(U)<am_lib.eps, 'U is not unitary.');
+            assert(any(~abs(diag(U'*D*U)-E)<am_lib.eps), 'E is mismatched.');
         end
         
         function [h] = plot3_(A,varargin)
