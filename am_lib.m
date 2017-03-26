@@ -468,12 +468,96 @@ classdef am_lib
             end
             
             % find identity 
-            E = find(all(MT==[1:nSs].',1)); 
+            if nargout>1; E = find(all(MT==[1:nSs].',1)); end
 
             % get inverse indicies
-            I = [MT==E]*[1:nSs].';
+            if nargout>2; I = [MT==E]*[1:nSs].'; end
         end
 
+        function [irrep,CT,s2c] = get_irreps(S)
+            % s2c = identifies the class to which the symmetry r belongs
+            
+            import am_lib.*
+            
+            % get regular rep G by putting identity along diagonal of multiplciation table
+            [MT,~,I] = get_multiplication_table(S); nGs = size(MT,2);
+            G = double(perm_(MT,I)==permute([1:nGs],[1,3,2])); 
+
+            % initialize decomposition loop
+            U = eye(nGs); inds = ones(nGs,1); ninds = 1;
+
+            % three loops is enough to decompose the irrep
+            while true
+                % loop over cycle structures
+                for j = 1:max(inds)
+                    ex_ = inds==j;
+
+                    H = dixon_decomposition_( G(ex_,ex_,:) );
+                    [Vp,~] = eig(H);
+                    for ig = 1:nGs
+                        G(ex_,ex_,ig) = Vp\G(ex_,ex_,ig)*Vp;
+                    end
+                    U(:,ex_) = (U(:,ex_)*Vp);
+                end
+
+                inds = [1:nGs]*merge_(double(sum(abs(G),3)>am_lib.eps)); 
+                if ninds == max(inds); break; else
+                    ninds = max(inds);
+                end
+            end
+
+            % get character table
+            CT = zeros(nGs,max(inds));
+            for i = 1:max(inds); for j = 1:nGs
+                CT(j,i) = trace(G(inds==i,inds==i,j));
+            end; end
+
+            % get irreducible irreps
+            [CT,ir] = unique(round(CT).','rows'); CT=CT.';
+
+            % get irreducible classes
+            [CT,~,s2c] = unique(round(CT),'rows','stable'); CT=CT.';
+
+            % get irreducible representations
+            nirreps = numel(ir); irrep = cell(1,nirreps);
+            for i = 1:nirreps
+                irrep{i} = G(inds==ir(i),inds==ir(i),1:nGs); 
+                for j = 1:nGs
+                    irrep{i}(:,:,j) = diag(sort(eig(irrep{i}(:,:,j))));
+                end
+            end
+
+
+            function H = dixon_decomposition_(rr)
+                nbases=size(rr,1);
+                nsyms =size(rr,3);
+
+                for r = 1:nbases
+                for s = 1:nbases
+                    Hrs = zeros(nbases);
+                    if     r==s
+                        Hrs(r,s) = 1;
+                    elseif r>s
+                        Hrs(r,s) = 1;
+                        Hrs(s,r) = 1;
+                    elseif r<s
+                        Hrs(r,s) = sqrt(-1);
+                        Hrs(s,r) =-sqrt(-1);
+                    end
+
+                    H(1:nbases,1:nbases) = 0;
+                    for q = 1:nsyms
+                    H = H + rr(:,:,q)' * Hrs * rr(:,:,q);
+                    end
+                    H = H / nsyms;
+
+                    if any(abs( H(1,1)*eye(nbases)-H ) >am_lib.eps); return; end
+                end
+                end
+                H = eye(nbases);
+            end
+        end
+        
         function [C]     = get_connectivity_chart(PM)
 
             import am_lib.*
@@ -749,7 +833,7 @@ classdef am_lib
             % Note: can set mode=[] for interactive selection
             % n=[4;4;4]; kpt=[0;0;1/4]; amp=10; mode=6; nsteps=51;
             % [~,md] = get_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps); 
-            % clf; [F]=plot_md_cell(md,'view',[0;1;0]); % save_poscar(md,'POSCAR_test')
+            % clf; [F]=plot_md_cell(md,'view',[0;1;0]); movie(F,3); % save_poscar(md,'POSCAR_test')
             %
             % Q: What effect does the kpt have on vibrational wave?
             % A: Gamma-center and zone boundary points are standing waves.
@@ -953,9 +1037,9 @@ classdef am_lib
         end
         
         function [F]          = plot_md_cell(md,varargin)
-            % n=[2,2,2]; kpt=[0;1/2;1/2]; amp=2; mode=9; nsteps=31;
-            % idc = get_irreducible_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps); clf
-            % F  = plot_md_cell(idc); % movie(F,3)
+            % n=[4;4;4]; kpt=[0;0;1/4]; amp=10; mode=6; nsteps=51;
+            % [~,md] = get_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps); 
+            % clf; [F]=plot_md_cell(md,'view',[0;1;0]); movie(F,3); % save_poscar(md,'POSCAR_test')
             
             import am_lib.*
             
@@ -2367,7 +2451,7 @@ classdef am_lib
     
     % aux library
     
-    methods (Static)%, Access = protected)
+    methods (Static)%, Access = protected)       
         
         % structure
         
@@ -2807,7 +2891,7 @@ classdef am_lib
             C = sortrowsc(rnd_(A).',[1:size(A,1)]).'; 
         end                 
 
-        function [C] = uniquecol_(A)
+        function [C,inds] = uniquecol_(A)
             % get unique values with numeric precision
             import am_lib.rnd_
             [~,inds] = unique(rnd_(A).','rows','stable'); C=A(:,inds);
@@ -3058,6 +3142,29 @@ classdef am_lib
             A = (A.'+A)/2;
         end
 
+        function [a] = trace_(A)
+            [m]=size(A,3);[n]=size(A,4);
+            A = zeros(m,n);
+            for i = 1:m; for j = 1:n
+                a(i,j) = trace(A(:,:,i,j));
+            end; end
+               
+        end
+        
+        function [A] = orth_(U,E)
+            % orthonormalize eigencolumns of A within each degenerate
+            % subspace using eigenvalues E 
+            if nargin == 2
+                % [~,~,a]=unique(rnd_(E));
+                a = cumsum([0;diff(sort(rnd_(E(:))))~=0])+1;
+                for j = 1:max(a)
+                    U(:,a==j)=orth(U(:,a==j));
+                end
+            else 
+                A = orth(U);
+            end
+        end
+        
         function [c] = diagonalicity_(A)
             c = max(max(abs(diag(diag(A))-A)));
         end
@@ -3081,16 +3188,12 @@ classdef am_lib
             import am_lib.*
             
             % Assure that D is Hermitian or real-symmetric.
-            assert(hermiticity_(D)<am_lib.eps,'D is not Hermitian.');
+%             assert(hermiticity_(D)<am_lib.eps,'D is not Hermitian.');
+%             force_hermiticity_(D)
+
 
             % get eigenvectors
-            [U,E]=eig(force_hermiticity_(D),'vector');
-            
-            % nullify numerically negligible components
-            ex_ = abs(U(:))<am_lib.eps; U(ex_) = 0;
-
-            % rotate each column vector in complex space to make the first value be real
-            th = angle(U); [~,I]=max(abs(th)); U = U .* exp(-1i*perm_(th,I));
+            [U,E]=eig(D,'vector');
             
             % maximize vectors 1-norm within degenerate subspaces
             [~,~,unq_]=unique(rnd_(E));
@@ -3123,7 +3226,7 @@ classdef am_lib
             U = U./normc_(U);
 
             % confirm properties of new eigenvectors
-            assert(unitaricity_(U)<am_lib.eps, 'U is not unitary.');
+%             assert(unitaricity_(U)<am_lib.eps, 'U is not unitary.');
             assert(any(~abs(diag(U'*D*U)-E)<am_lib.eps), 'E is mismatched.');
         end
         
