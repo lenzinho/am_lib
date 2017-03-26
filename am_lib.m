@@ -79,18 +79,20 @@ classdef am_lib
         % vasp
 
         function           save_poscar(uc,fname)
-            r_ = @(fid) fprintf(fid,'\n');
-            fid=fopen(fname,'w');
-            fprintf(fid,'%s ','POSCAR'); r_(fid);
-            fprintf(fid,'%12.8f ',1.0); r_(fid); % latpar
-            fprintf(fid,'%12.8f ',uc.bas(:,1)); r_(fid);
-            fprintf(fid,'%12.8f ',uc.bas(:,2)); r_(fid);
-            fprintf(fid,'%12.8f ',uc.bas(:,3)); r_(fid);
-            fprintf(fid,' %s ',uc.symb{:}); r_(fid);
-            fprintf(fid,' %i ',uc.nspecies); r_(fid);
-            fprintf(fid,'Direct '); r_(fid);
-            fprintf(fid,'%12.8f %12.8f %12.8f \n',uc.tau);
-            fclose(fid);
+            n = size(uc.tau,3);
+            for i = 1:n
+                fid=fopen(sprintf('%s_%06i',fname,i),'w');
+                fprintf(fid,'%s \n',sprintf('POSCAR %i of %i',i,n)); 
+                fprintf(fid,'%12.8f \n',1.0);  % latpar
+                fprintf(fid,'%12.8f %12.8f %12.8f \n',uc.bas(:,1)); 
+                fprintf(fid,'%12.8f %12.8f %12.8f \n',uc.bas(:,2)); 
+                fprintf(fid,'%12.8f %12.8f %12.8f \n',uc.bas(:,3)); 
+                fprintf(fid,' %s ',uc.symb{:}); fprintf(fid,'\n');
+                fprintf(fid,' %i ',uc.nspecies); fprintf(fid,'\n');
+                fprintf(fid,'Direct \n'); 
+                fprintf(fid,'%12.8f %12.8f %12.8f \n',uc.tau(:,:,i));
+                fclose(fid);
+            end
         end
 
         function [uc]    = load_poscar(fname)
@@ -745,9 +747,14 @@ classdef am_lib
         
         function [dc,idc]     = get_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps)
             % Note: can set mode=[] for interactive selection
-            % n=[4,4,4]; kpt=[0;1/2;1/2]; amp=4; mode=3; nsteps=31;
-            % [dc,idc] = get_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps); 
-            % % clf; F = plot_md_cell(dc); movie(F,3)
+            % n=[4;4;4]; kpt=[0;0;1/4]; amp=10; mode=6; nsteps=51;
+            % [~,md] = get_displaced_cell(pc,bvk,n,kpt,amp,mode,nsteps); 
+            % clf; [F]=plot_md_cell(md,'view',[0;1;0]); % save_poscar(md,'POSCAR_test')
+            %
+            % Q: What effect does the kpt have on vibrational wave?
+            % A: Gamma-center and zone boundary points are standing waves.
+            %    Positive and negative k-points correspond to waves
+            %    traveling in opposite directions.
             %
             % Q: Are the units for dt correct?
             % A: Yes! Check with: 
@@ -858,11 +865,6 @@ classdef am_lib
                 end
             end
             
-            
-%             surf(squeeze(normc_(u)),'edgecolor','none')
-%             
-%             return
-            
             % get normal modes (Wallace p 115 eq 10.49)
             q_sk = (u2q*reshape(u,[],nsteps));
             p_sk = (v2p*reshape(v,[],nsteps));
@@ -902,7 +904,7 @@ classdef am_lib
                 idc_ = @(dc,cc,pc,c2d,d2c) struct('units',dc.units, ...
                     'bas',cc.bas,'bas2pc',pc.bas/cc.bas,'tau2pc',pc.bas\cc.bas,...
                     'symb',{{dc.symb{:}}},'mass',dc.mass, ...
-                    'nspecies',sum(dc.species.'==[1:max(dc.species)],1),'natoms',numel(c2d), ...
+                    'nspecies',sum(dc.species(c2d).'==[1:max(dc.species(c2d))],1),'natoms',numel(c2d), ...
                     'force',mod_(matmul_(cc.bas\dc.bas,dc.force(:,c2d,:))), ...
                     'tau',  mod_(matmul_(cc.bas\dc.bas,dc.tau(:,c2d,:))),...
                     'vel',       matmul_(cc.bas\dc.bas,dc.vel(:,c2d,:)), ...
