@@ -81,7 +81,9 @@ classdef am_lib
         function           save_poscar(uc,fname)
             n = size(uc.tau,3);
             for i = 1:n
-                fid=fopen(sprintf('%s_%06i',fname,i),'w');
+                if n == 1; fid=fopen(sprintf('%s'     ,fname,i),'w'); else
+                           fid=fopen(sprintf('%s_%06i',fname,i),'w');
+                end
                 fprintf(fid,'%s \n',sprintf('POSCAR %i of %i',i,n)); 
                 fprintf(fid,'%12.8f \n',1.0);  % latpar
                 fprintf(fid,'%12.8f %12.8f %12.8f \n',uc.bas(:,1)); 
@@ -474,8 +476,10 @@ classdef am_lib
             if nargout>2; I = [MT==E]*[1:nSs].'; end
         end
 
-        function [irrep,CT,s2c] = get_irreps(S)
-            % s2c = identifies the class to which the symmetry r belongs
+        function [CT,s2c,irrep] = get_irreps(S)
+            % s2c = identifies the class to which symmetries belong
+            % CT = character table
+            % irreps
             
             import am_lib.*
             
@@ -486,14 +490,14 @@ classdef am_lib
             % initialize decomposition loop
             U = eye(nGs); inds = ones(nGs,1); ninds = 1;
 
-            % three loops is enough to decompose the irrep
+            % loop until irreps are fully decomposed
             while true
                 % loop over cycle structures
                 for j = 1:max(inds)
                     ex_ = inds==j;
 
                     H = dixon_decomposition_( G(ex_,ex_,:) );
-                    [Vp,~] = eig(H);
+                    [Vp,E] = eig(H,'vector'); [Vp] = orth_(Vp,E);
                     for ig = 1:nGs
                         G(ex_,ex_,ig) = Vp\G(ex_,ex_,ig)*Vp;
                     end
@@ -516,15 +520,16 @@ classdef am_lib
             [CT,ir] = unique(round(CT).','rows'); CT=CT.';
 
             % get irreducible classes
-            [CT,~,s2c] = unique(round(CT),'rows','stable'); CT=CT.';
+            [CT,~,s2c] = unique(round(CT),'rows','stable'); CT=CT.'; s2c=s2c(:).';
 
             % get irreducible representations
             nirreps = numel(ir); irrep = cell(1,nirreps);
             for i = 1:nirreps
                 irrep{i} = G(inds==ir(i),inds==ir(i),1:nGs); 
-                for j = 1:nGs
-                    irrep{i}(:,:,j) = diag(sort(eig(irrep{i}(:,:,j))));
-                end
+                % this makes them look nice but multiplcation table is not preserved
+%                 for j = 1:nGs
+%                     irrep{i}(:,:,j) = diag(sort(eig(irrep{i}(:,:,j))));
+%                 end
             end
 
 
@@ -1381,8 +1386,7 @@ classdef am_lib
                 F = zeros(9,9); F(sub2ind([9,9],[1:9],[1,4,7,2,5,8,3,6,9])) = 1; W = W + F-eye(9);
 
                 % get linearly-independent nullspace and normalize to first nonzero element
-                W = null(W); W = frref_(W.').'; W(abs(W)<1E-10)=0; W(abs(W-1)<1E-10)=1;
-                for j = 1:size(W,2); W(:,j)=W(:,j)./W(find(W(:,j),1),j); end
+                W=real(null(W)); W=frref_(W.').'; W(abs(W)<am_lib.eps)=0; W(abs(W-1)<am_lib.eps)=1; W=W./perm_(W,findrow_(W.').');
 
                 % define parameters
                 c = sym(sprintf('c%02i_%%d%%d',i),[3,3],'real'); c = c(findrow_(double(W).'));
@@ -1766,28 +1770,31 @@ classdef am_lib
         
         % electrons
 
-        function [tb,pp] = get_tb(pc,uc,cutoff,spdf,nskips,Ef,fname,flags)
+        function [tb,pp] = get_tb(pc,uc,cutoff,spdf,nskips,Ef,fname)
             % for paper:
             % cutoff = 3; % Angstroms 
             % fname = 'EIGENVAL'
 
             import am_lib.*
             
-            % continue earlier calc?
-            sfile = sprintf('am_tb.mat');
-            if and(strfind(flags,'continue'),exist(sfile,'file')); load(sfile); return; end 
-
             % get irreducible shells
+            fprintf(' ... solving for pairs'); tic;
             [tb,pp] = get_pairs(pc,uc,cutoff);
+            fprintf(' (%.f secs)\n',toc);
             
-            % get tb model
-            [tb] = get_tb_model(tb,pp,uc,spdf);
-
-            % get force constants
+            % [cart] print shell results
+            print_pairs(uc,pp)
+            
+            % tight binding model
+            fprintf(' ... solving for tight binding matrix elements and hamiltonian'); tic;
+            tb = get_tb_model(tb,pp,uc,spdf);
+            fprintf(' (%.f secs)\n',toc);
+            
+            % get tight binding matrix elements
+            fprintf(' ... solving for tight binding matrix elements '); tic;
             tb = get_tb_matrix_elements(tb,nskips,Ef,fname);
+            fprintf('(%.f secs)\n',toc);
 
-            % save everything generated
-            save(sfile,'tb','pp');
         end
 
         function [tb] = get_tb_model(ip,pp,uc,spdf)
@@ -1806,7 +1813,6 @@ classdef am_lib
             p2i=uc.u2i(uc.p2u); for p=[1:pp.pc_natoms]; d(p)=sum(J{p2i(p)}*2+1); end; E=cumsum(d); S=E-d+1; nbands=E(end);
 
             % get form of force constants for irreducible prototypical bonds
-            fprintf(' ... solving for symbolic force constants '); tic;
             for p = 1:ip.nshells
                 % get indicies
                 x = ip.xy(1,p); i = uc.u2i(x); m = uc.u2p(x); dm = d(m);
@@ -1817,7 +1823,7 @@ classdef am_lib
 
                 % partity transpose 
                 if (i==j); W = W + F{i}-eye(dm*dn); end
-
+                
                 % get linearly-independent nullspace and normalize to first nonzero element
                 W=real(null(W)); W=frref_(W.').'; W(abs(W)<am_lib.eps)=0; W(abs(W-1)<am_lib.eps)=1; W=W./perm_(W,findrow_(W.').');
 
@@ -1825,24 +1831,22 @@ classdef am_lib
                 c = sym(sprintf('c%02i_%%d%%d',p),[dm,dn],'real'); c = c(findrow_(W.'));
 
                 % get symmetry adapted force constants
-                vsk = reshape( sym(W)*c(:), [dm,dn]);
+                vsk = reshape( sym(W,'d')*c(:), [dm,dn]);
 
                 % save important stuff (sort W to be in line with c, matlabFunction sorts D variables)
                 [sav.c{p},n] = sort(c(:).'); sav.W{p} = W(:,n); sav.vsk{p} = vsk;
             end
-            fprintf('(%.f secs)\n',toc);
 
             % create bvk structure
             tb_ = @(pp,ip,sav,nbands) struct('units','cart','bas',pp.bas2pc*pp.bas, ...
                 'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'cutoff',pp.cutoff,'natoms',pp.pc_natoms,...
-                'nbands',nbands,'nshells',size(sav.W,2),'W',{sav.W},'vsk',{sav.vsk},'xy',ip.xy,'d',ip.d,'v',ip.v);
+                'nbands',nbands,'nshells',size(sav.W,2),'W',{sav.W},'vsk',{sav.vsk},'d',ip.d,'v',ip.v,'xy',ip.xy);
             tb = tb_(pp,ip,sav,nbands);
 
             % define function to get bond vector
             vec_ = @(xy) uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),pp.bas);
             
             % construct symbolic dynamical matrix
-            fprintf(' ... solving for symbolic tight binding hamiltonian '); tic;
             H=sym(zeros(tb.nbands)); kvec=sym('k%d',[3,1],'real');
             for p = 1:pp.pc_natoms
             for u = 1:pp.npairs(p)
@@ -1861,13 +1865,12 @@ classdef am_lib
 
                 % rotate force constants and bond vector
                 rij = vec_(xy); rij(abs(rij)<am_lib.eps) = 0;
-                vsk =  sym(D{i}(:,:,iq)) * permute(tb.vsk{ir},pp.Q{2}(:,iq)) * sym(D{j}(:,:,iq)).';
+                vsk =  sym(D{i}(:,:,iq)) * permute(tb.vsk{ir},pp.Q{2}(:,iq)) * sym(D{j}(:,:,iq))';
                 
                 % build dynamical matrix
                 H(mp,np) = H(mp,np) + vsk .* exp(sym(2i*pi * rij(:).','d') * kvec(:) );
             end
             end
-            fprintf('(%.f secs)\n',toc);
             
             % attach symbolic dynamical matrix to bvk
             tb.H = matlabFunction(H);
@@ -1888,23 +1891,22 @@ classdef am_lib
 
             % set array parameter size calculator for selected shells
             nxs_ = @(selector_shell) sum(any([tb.shell{:}]==selector_shell(:),1));
+            
+            % set simulated annealing temeprature
+            kT = 20;
 
             % fit neighbor parameter at high symmetry points using poor man's simulated anneal
-            [~,~,shells]=unique(rnd_(tb.d)); shells=repelem(shells.',cellfun(@(x)size(x,2),tb.W));
-            for j = 1:max(shells)
-
-                % select shells and kpoints
-                selector_shell=[1:j]; selector_kpoint = round(linspace(1,bz.nks,10)); kT = 20;
-
+            d4fc = repelem(tb.d,cellfun(@(x)size(x,2),tb.vsk)); d = unique(rnd_(d4fc)); nfcs=numel(d4fc); nds = numel(d); x = zeros(1,nfcs); r_best = Inf;
+            for j = 1:nds
+                % select kpoints
+                selector_kpt = round(linspace(1,bz.nks,10)); 
+                
                 for i = 1:20
-                    if i == 1 % initialize
-                        x = zeros(1,nxs_(selector_shell)); x(1:numel(x_best)) = x_best; r_best = Inf;
-                    else % modify x values with a damped temperature function
-                        x = x_best + kT * rand_(x_best) * exp(-i/25);
-                    end
+                    % simulated annealing
+                    if i ~= 1; x = x_best + kT * rand_(x_best) * exp(-i/25); end
 
                     % optimize
-                    [x,r] = optimize_and_plot(tb,bz,dft,x,selector_kpoint,selector_shell,nskips);
+                    [x,r] = optimize_and_plot(tb,bz,dft,x,[d4fc>d(j)+am_lib.eps],selector_kpt,nskips);
 
                     % save r_best parameter
                     if r < r_best; r_best = r; x_best = x; end
@@ -1912,8 +1914,7 @@ classdef am_lib
             end
 
             % five final last pass with all parameters and all kpoints
-            selector_shell=[1:max(shells)]; selector_kpoint=[1:bz.nks]; kT = 5;
-            [x,r] = optimize_and_plot(tb,bz,dft,x,selector_kpoint,selector_shell,nskips);
+            [x,r] = optimize_and_plot(tb,bz,dft,x,false(1,nfcs),[1:bz.nks],nskips);
 
             % save r_best parameter
             if r < r_best; r_best = r; x_best = x; end
@@ -1921,57 +1922,6 @@ classdef am_lib
             % save refined matrix elements and conform to bvk
             for i = [1:tb.nshells]; d(i)=size(tb.W{i},2); end; Evsk=cumsum(d); Svsk=Evsk-d+1;
             for i = [1:tb.nshells]; tb.vsk{i} = x(Svsk(i):Evsk(i)); end;
-
-            %%
-
-            function H = compute_tb_hamiltonian(tb,x,k)
-                % define padding
-                pad_ = @(A,n) [A,zeros(1,n(2)-size(A,2));zeros(n(1)-size(A,1),n(2))];
-                % pad tight binding matrix elements
-                nargs = nargin(tb.H); padded_x = pad_(x,[1,nargs-3]);
-                % get hamiltonians
-                nks = size(k,2); H = zeros(tb.nbands,tb.nbands,nks);
-                for m = 1:nks
-                    % build input
-                    input = num2cell([padded_x,k(:,m).']);
-                    % evaluate H
-                    H(:,:,m) = tb.H(input{:});
-                end
-            end
-
-            function [R] = compute_tb_residual(tb,bz,dft,x,selector_kpoint,nskips)
-                % generate input
-                H = compute_tb_hamiltonian(tb,x,bz.k(:,selector_kpoint));
-                % allocate space for residual vector
-                R = zeros(1,numel(selector_kpoint)*tb.nbands);
-                % determine residual vector
-                inds = [1:tb.nbands]+nskips;
-                for n = 1:size(H,3)
-                    % build residual vector
-                    R([1:tb.nbands]+(n-1)*tb.nbands) = dft.E(inds,selector_kpoint(n)) - sort(real(eig( H(:,:,n) )));
-                end
-            end
-
-            function [x,r] = optimize_and_plot(tb,bz,dft,x,selector_kpoint,selector_shell,nskips)
-                % trim x according to selector_shell NOTE shells must be in
-                % monotonically increasing order and not skip any shells!
-                trim = any([tb.shell{:}]==selector_shell(:),1); x = x(trim(1:numel(x)));
-
-                % define cost functional
-                cost_ = @(x) compute_tb_residual(tb,bz,dft,x,selector_kpoint,nskips); 
-
-                % define optimization parameters
-                opts = optimoptions('lsqnonlin','Display','none','MaxIter',7);
-
-                % perform optimization
-                [x,r] = lsqnonlin(cost_,x,[],[],opts);
-
-                % plot band structure (quick and dirty)
-                H = compute_tb_hamiltonian(tb,x,bz.k); E = zeros([size(H,1),size(H,2)]);
-                for m = 1:bz.nks; E(:,m)=sort(real(eig( H(:,:,m) ))); end
-                figure(1); plot([1:bz.nks],real(E),'-k', [1:bz.nks],dft.E([1:(end-nskips)]+nskips,:),':r');
-                set(gca,'XTick',[]); axis tight; grid on; ylabel('Energy E'); xlabel('Wavevector k'); drawnow;
-            end
 
         end
 
@@ -2672,6 +2622,7 @@ classdef am_lib
             % end
         end
         
+        
         % aux electrons
 
         function [J,D,F] = get_tb_model_initialize_atoms(spdf,R)
@@ -2718,55 +2669,38 @@ classdef am_lib
             end;end;end
         end
         
-        function [Wtes] = get_wigner(j,R)
-
-            import am_lib.get_wigner_engine
-
-            % define tiny, kronecker delta, and heavside
-            d_ = @(x,y) logical(x==y); t_ = @(x,y) logical(x>y);
-            
-            % matrix indices
-            [m,mp]=meshgrid([j:-1:-j]);
-
-            % define angular momentum operators (Jp raising, Jm lowering, ...)
-            Jm = d_(m,mp+1).*sqrt((j+m).*(j-m+1)); Jp = d_(m,mp-1).*sqrt((j-m).*(j+m+1));
-            Jx = (Jp+Jm)/2; Jy = (Jp-Jm)/2i; Jz = d_(m,mp).*m; J = cat(3,Jx,Jy,Jz);
-
-            % define basis change: spherical to tesseral harmonics (real basis)
-            T = d_(0,m) .* d_(mp,m) + ...
-                t_(m,0) .* - sqrt(-1/2) .* ( (-1).^m.*d_(m,-mp) - d_(m, mp) ) + ...
-                t_(0,m) .* - sqrt( 1/2) .* ( (-1).^m.*d_(m, mp) + d_(m,-mp) );
-
-            % batch convert to wigner
-            nRs = size(R,3); Wtes = zeros(2*j+1,2*j+1,nRs);
-            for i = [1:nRs]; Wtes(:,:,i) = get_wigner_engine(J,T,j,R(:,:,i)); end
-        end
-        
-        function [Wtes] = get_wigner_engine(J,T,j,R)
-            % define wigner function for spherical (complex) and tesseral (real) harmonics
-            % Note: for l = 1, Wtes_(R) = R
-
-            import am_lib.*
-
-            % get proper rotation
-            d = det(R); dR = R*d;
-
-            % get rotation axis and angle
-            an = R_angle_(dR); ax = circshift(R_axis_(dR),1);
-
-            % define spin-vector dot products [Eq. 1.37 Blundell]
-            dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
-
-            if size(R,1)>9 % faster for symbolic and square matrices with dimensions > 9
-                Wsph = expm( -sqrt(-1)*dotV_(J,ax)*an ) * d^j;
-                Wtes = T' * Wsph * T;
-            else % faster for numerical square matrices with dimensions < 9
-                [V,D] = eig( -sqrt(-1) * dotV_(J,ax) * an); 
-                Wsph = V*diag(exp(diag(D)))/V * d^j;
-                Wtes = T' * Wsph * T ;
+        function E = eval_energies_(tb,x,k)
+            % get hamiltonians
+            nks = size(k,2); E = zeros(tb.nbands,nks);
+            for m = 1:nks
+                % build input
+                input = num2cell([x,k(:,m).']);
+                % evaluate H
+                E(:,m) = sort(real(eig(tb.H(input{:}))));
             end
         end
 
+        function [x,r] = optimize_and_plot(tb,bz,dft,x,selector_fc,selector_kpt,nskips)
+
+            import am_lib.*
+
+            % define optimization parameters
+            opts = optimoptions('lsqnonlin','Display','none','MaxIter',7);
+
+            % define residual vector as cost functional
+            cost_ = @(x) flatten_( dft.E([1:tb.nbands]+nskips,selector_kpt) - eval_energies_(tb,x,bz.k(:,selector_kpt)) );
+
+            % perform optimization
+            [x,r] = lsqnonlin_(cost_,x,selector_fc,[],[],opts);
+
+            % plot band structure (quick and dirty)
+            figure(1); 
+            plot([1:bz.nks], real(eval_energies_(tb,x,bz.k)),'-k',...
+                 [1:bz.nks], dft.E([1:(end-nskips)]+nskips,:),':r');
+            set(gca,'XTick',[]); axis tight; grid on; 
+            ylabel('Energy E'); xlabel('Wavevector k'); drawnow;
+        end
+        
 
         % aux functions
 
@@ -3002,6 +2936,55 @@ classdef am_lib
             A = acos((trace(R)-1)/2); 
         end
 
+        function [Wtes] = get_wigner(j,R)
+
+            import am_lib.get_wigner_engine
+
+            % define tiny, kronecker delta, and heavside
+            d_ = @(x,y) logical(x==y); t_ = @(x,y) logical(x>y);
+            
+            % matrix indices
+            [m,mp]=meshgrid([j:-1:-j]);
+
+            % define angular momentum operators (Jp raising, Jm lowering, ...)
+            Jm = d_(m,mp+1).*sqrt((j+m).*(j-m+1)); Jp = d_(m,mp-1).*sqrt((j-m).*(j+m+1));
+            Jx = (Jp+Jm)/2; Jy = (Jp-Jm)/2i; Jz = d_(m,mp).*m; J = cat(3,Jx,Jy,Jz);
+
+            % define basis change: spherical to tesseral harmonics (real basis)
+            T = d_(0,m) .* d_(mp,m) + ...
+                t_(m,0) .* - sqrt(-1/2) .* ( (-1).^m.*d_(m,-mp) - d_(m, mp) ) + ...
+                t_(0,m) .* - sqrt( 1/2) .* ( (-1).^m.*d_(m, mp) + d_(m,-mp) );
+
+            % batch convert to wigner
+            nRs = size(R,3); Wtes = zeros(2*j+1,2*j+1,nRs);
+            for i = [1:nRs]; Wtes(:,:,i) = get_wigner_engine(J,T,j,R(:,:,i)); end
+        end
+        
+        function [Wtes] = get_wigner_engine(J,T,j,R)
+            % define wigner function for spherical (complex) and tesseral (real) harmonics
+            % Note: for l = 1, Wtes_(R) = R
+
+            import am_lib.*
+
+            % get proper rotation
+            d = det(R); dR = R*d;
+
+            % get rotation axis and angle
+            an = R_angle_(dR); ax = circshift(R_axis_(dR),1);
+
+            % define spin-vector dot products [Eq. 1.37 Blundell]
+            dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
+
+            if size(R,1)>9 % faster for symbolic and square matrices with dimensions > 9
+                Wsph = expm( -sqrt(-1)*dotV_(J,ax)*an ) * d^j;
+                Wtes = T' * Wsph * T;
+            else % faster for numerical square matrices with dimensions < 9
+                [V,D] = eig( -sqrt(-1) * dotV_(J,ax) * an); 
+                Wsph = V*diag(exp(diag(D)))/V * d^j;
+                Wtes = T' * Wsph * T ;
+            end
+        end
+        
         function [A] = merge_(A)
 
             [m,n] = size(A); tol=max(m,n)*eps(class(A))*norm(A,'inf');
@@ -3151,9 +3134,12 @@ classdef am_lib
                
         end
         
-        function [A] = orth_(U,E)
+        function [U] = orth_(U,E)
             % orthonormalize eigencolumns of A within each degenerate
             % subspace using eigenvalues E 
+            
+            import am_lib.*
+            
             if nargin == 2
                 % [~,~,a]=unique(rnd_(E));
                 a = cumsum([0;diff(sort(rnd_(E(:))))~=0])+1;
@@ -3161,7 +3147,7 @@ classdef am_lib
                     U(:,a==j)=orth(U(:,a==j));
                 end
             else 
-                A = orth(U);
+                U = orth(U);
             end
         end
         
@@ -3228,6 +3214,31 @@ classdef am_lib
             % confirm properties of new eigenvectors
 %             assert(unitaricity_(U)<am_lib.eps, 'U is not unitary.');
             assert(any(~abs(diag(U'*D*U)-E)<am_lib.eps), 'E is mismatched.');
+        end
+        
+        function [x,r] = lsqnonlin_(cost_,x0,isfixed,varargin)
+            % X = lsqnonlin(FUN,X0,LB,UB,OPTIONS)
+            % z=[1:500]/250; y=z.^2.3+5.5;
+            % isfixed = logical([0 0]); x0=[0 2];
+            % fnct_ = @(x) x(1)+z.^x(2);
+            % cost_ = @(x) abs(fnct_(x)-y);
+            % opts = optimoptions('lsqnonlin','Display','none','MaxIter',7);
+            % [x,r]=lsqnonlin_(cost_,x0,isfixed,[],[],opts)
+            % plot(z,y,'.',z,fnct_(x),'-')
+            
+            % fixed and loose indicies
+            f = find( isfixed); xf = x0(f);
+            l = find(~isfixed); xl = x0(l);
+
+            % Estimate only the non-fixed ones
+            [xl,r] = lsqnonlin(@localcost_,xl,varargin{:});
+
+            % Re-create array combining fixed and estimated coefficients
+            x([f,l]) = [xf,xl];
+
+            function y = localcost_(x)
+               b([f,l]) = [xf,x]; y = cost_(b);
+            end
         end
         
         function [h] = plot3_(A,varargin)
