@@ -158,7 +158,6 @@ classdef am_lib
         end
 
         function [dr,bz] = load_vasp_eigenval(fname)
-            fprintf('loading dispersion from: %s \n',fname);
             fid=fopen(fname);
             % skip first five lines
             for i = 1:5; fgetl(fid); end
@@ -166,9 +165,6 @@ classdef am_lib
             dr.nelecs = sscanf(buffer{1},'%i');
             bz.nks    = sscanf(buffer{2},'%i');
             dr.nbands = sscanf(buffer{3},'%i');
-            fprintf(' ... electrons = %i \n',dr.nelecs);
-            fprintf(' ... kpoints = %i \n',bz.nks);
-            fprintf(' ... bands = %i \n',dr.nbands);
             for i = 1:bz.nks
                 % skip line
                 fgetl(fid);
@@ -184,7 +180,6 @@ classdef am_lib
                 end
                 dr.E(:,i) = sort(dr.E(:,i));
             end
-            fprintf(' ... done\n');
             fclose(fid);
         end
 
@@ -1327,7 +1322,7 @@ classdef am_lib
         end
         
         
-        % phonons
+        % phonons (harmonic)
 
         function [bvk,pp] = get_bvk(pc,uc,md,cutoff)
             % for paper:
@@ -1363,14 +1358,6 @@ classdef am_lib
         end
 
         function [bvk] = get_bvk_model(ip,pp,uc)
-            % NOTE #1:
-            % WTF? Should not flip bond here? If bond flips using:
-            %
-            %           xy = xy(pp.Q{2}(:,iq))
-            %
-            % D becomes non-hermitian for hexagonal case... hmm...
-            % xy = [x;y]; xy = xy(pp.Q{2}(:,iq)); rij = vec_(xy); rij(abs(rij)<am_lib.eps) = 0;
-            %
             
             import am_lib.*
 
@@ -1507,7 +1494,7 @@ classdef am_lib
                 end
             end
         end
-
+        
         function [bz]  = get_bvk_dispersion(bvk,bz)
             
             import am_lib.* 
@@ -1770,6 +1757,182 @@ classdef am_lib
         end
         
         
+        % phonons (anharmonic)
+
+        function [bvt] = get_bvt_model(it,pt)
+            % 
+            % Q: What is the intrinsict symmetry of third-order force
+            %    constants due to permutation of coordinate axes x,y,z?
+            % A: Each page of the tensor is symmetry.
+            %
+            %     phi(:,:,1) =				   phi(1,:,:) =                
+            %         [ c_111, c_211, c_311]   		[ c_111, c_211, c_311] 
+            %         [ c_211, c_221, c_321]   		[ c_211, c_221, c_321] 
+            %         [ c_311, c_321, c_331]   		[ c_311, c_321, c_331] 
+            %     phi(:,:,2) =				   phi(2,:,:) =                
+            %         [ c_211, c_221, c_321]   		[ c_211, c_221, c_321] 
+            %         [ c_221, c_222, c_322]   		[ c_221, c_222, c_322] 
+            %         [ c_321, c_322, c_332]   		[ c_321, c_322, c_332] 
+            %     phi(:,:,3) =				   phi(3,:,:) =                
+            %         [ c_311, c_321, c_331]   		[ c_311, c_321, c_331] 
+            %         [ c_321, c_322, c_332]   		[ c_321, c_322, c_332] 
+            %         [ c_331, c_332, c_333]   		[ c_331, c_332, c_333] 
+            %
+            %    And the same thing for the middle phi(:,1:3,:). Check if out with the code:
+            %
+            %         % get [x,y,z] flip/permutation operators
+            %         a = reshape([1:27],3,3,3); p = perms(1:3).'; nps = size(p,2); F = zeros(27,27,nps); 
+            %         for i = 1:nps; F(:,:,i) = sparse( flatten_(a), flatten_(permute(a,p(:,i))), ones(27,1), 27, 27); end
+            % 
+            %         % enforce intrinsic symmetry (immaterial order of differentiation: c == c.')
+            %         W = sum(F-eye(27),3);
+            % 
+            %         % get linearly-independent nullspace and normalize to first nonzero element
+            %         W=real(null(W)); W=frref_(W.').'; W(abs(W)<am_lib.eps)=0; W(abs(W-1)<am_lib.eps)=1; W=W./accessc_(W,findrow_(W.').');
+            % 
+            %         % define parameters
+            %         c = sym(sprintf('c_%d%d%d',i),[3,3,3],'real'); c = c(findrow_(double(W).'));
+            % 
+            %         % get symmetry adapted force constants
+            %         phi = reshape( sym(W)*c(:), [3,3,3]);
+            %
+            % Q: How do third-order force constants work?
+            % A: The triple dot product PHI ... u1 u2 u3, as described by Ziman,
+            %    produces as a scalar and is given in Einstein summation as 
+            %    PHI(ijk) u1(i) u2(j) u3(k). Try it out with:
+            %
+            %         % explicit: force F due to third-order force constants
+            %         A = rand(3,3,3); U = rand(3,1); W = rand(3,1); F = zeros(3,1);
+            %         for m = 1:3
+            %             for i = 1:3
+            %             for j = 1:3
+            %                 F(m) = F(m) + A(i,j,m)*U(i)*W(j);
+            %             end
+            %             end
+            %         end
+            %         % NOTE: F == [ U.'*A(:,:,1)*W;  U.'*A(:,:,2)*W ; U.'*A(:,:,3)*W ]
+            %         % NOTE: F == matmul_(A,W).'*U;
+            %
+            %    This is equivalent to the product:
+            %
+            %       u1 * F
+            %
+            %    in which the force F is:
+            %
+            %         u2 = sym('x_%d',[3,1]); u3 = sym('y_%d',[3,1]);
+            %         Fx=zeros(3,1); for i = 1:3; Fx(i) = u2.'*phi(:,:,i)*u3; end
+            %    
+            %    Yet another way to express the force is through by consider the
+            %    outer product of displacement vectors u2 and u3:
+            %           
+            %         u23 = flatten_(u2*u3.');
+            %         F = reshape(phi,3,9)*u23;
+            %
+            %    This will be the most useful when determining third order force 
+            %    constants.
+            %
+
+            import am_lib.*
+        
+            % set sym digits
+            digits(10);
+
+            % get flip operators
+            a = reshape([1:27],3,3,3); p = perms(1:3).'; nps = size(p,2); F = zeros(27,27,nps); 
+            for i = 1:nps; F(:,:,i) = sparse( flatten_(a), flatten_(permute(a,p(:,i))), ones(27,1), 27, 27); end
+
+            % get form of force constants for irreducible prototypical bonds
+            for i = 1:it.nshells
+                % use stabilzer group to determine crystallographic symmetry relations; A*B*C' equals kron(C,A)*B(:)
+                W = sum( kronpow_( pt.Q{1}(1:3,1:3,it.s_ck(:,i)) , 3) - eye(27), 3);
+
+                % enforce intrinsic symmetry (immaterial order of differentiation: c == c.')
+                W = W + sum(F-eye(27),3);
+
+                % get linearly-independent nullspace and normalize to first nonzero element
+                W=real(null(W)); W=frref_(W.').'; W(abs(W)<am_lib.eps)=0; W(abs(W-1)<am_lib.eps)=1; W=W./accessc_(W,findrow_(W.').');
+
+                % define parameters
+                c = sym(sprintf('c%02i_%%d%%d',i),[3,3,3],'real'); c = c(findrow_(double(W).'));
+
+                % get symmetry adapted force constants
+                phi = reshape( sym(W,'d')*c(:), [3,3,3]);
+
+                % save important stuff (sort W to be in line with c, matlabFunction sorts D variables)
+                [sav.c{i},n] = sort(c(:).'); sav.W{i} = W(:,n); sav.phi{i} = phi;
+            end
+
+            % augment bvk structure with triplet info
+            bvt_ = @(pt,it,sav) struct('units','cart','bas',pt.bas2pc*pt.bas, ...
+                'symb',{pt.symb},'mass',pt.mass,'species',pt.species(pt.p2u),'cutoff',pt.cutoff,'natoms',pt.pc_natoms,...
+                'nshells',size(sav.W,2),'W',{sav.W},'phi',{sav.phi},'xyz',it.xyz);
+            bvt = bvt_(pt,it,sav);
+
+        end
+        
+        function [bvt] = get_bvt_force_constants(bvk,uc,pp,md,bvt,pt)
+            % Extracts symmetry adapted third-order force constants.
+
+            import am_lib.*
+
+            % [cart] get displacements and forces
+            u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
+            f = matmul_( md.bas, md.force );
+
+            % get harmonic forces
+            for m = 1:pp.pc_natoms
+                phi{m} = zeros(3,3*pp.npairs(m));
+            for j = 1:pp.npairs(m)
+                % get indicies
+                i = pp.i{m}(j); iq = pp.iq{m}(j);
+                % get irrep force constant indicies
+                iphi = reshape(bvk.W{i}*bvk.fc{i}(:),3,3);
+                % rotate force constants from irrep to orbit
+                phi{m}(1:3,[1:3]+3*(j-1)) = pp.Q{1}(1:3,1:3,iq) * permute(iphi,pp.Q{2}(:,iq)) * pp.Q{1}(1:3,1:3,iq).';
+            end
+            end
+            % compute forces on every atom at every step
+            f_phi = zeros(3,md.natoms,md.nsteps);
+            for j = 1:md.nsteps
+                for m = 1:pp.pc_natoms
+                    f_phi(1:3,pp.c{m},j) = - phi{m} * reshape(u(:,pp.o{m},j), size(pp.o{m}).*[3,1]);
+                end
+            end
+            % subtract harmonic forces
+            f = f - f_phi;
+
+            % loop over primitive types
+            phi=[]; 
+            for m = 1%:pp.pc_natoms
+                % construct displacement outer products
+                ux = outerc_( reshape(u(:,flatten_(pt.o{m}(:,:,1)),:),3,[]) , ...
+                              reshape(u(:,flatten_(pt.o{m}(:,:,2)),:),3,[]) );
+
+                % solve for the generalized third-order force constants: FC = - f / u 
+                fc = - reshape( f(:,pt.c{m},:) ,3,pt.ncenters(m)*md.nsteps) /...
+                       reshape( ux             ,9*pt.npairs(m),pt.ncenters(m)*md.nsteps);
+
+                % get third order force constants
+                phi = double(cat(3,phi,reshape(fc,3,3,3,[])));
+            end
+
+            % transform fc from orbit to irrep
+            q = cat(1,pp.q{:}); phi = matmul_(matmul_(pp.Q{1}(1:3,1:3,q),phi),permute(pp.Q{1}(1:3,1:3,q),[2,1,3]));
+            for j = 1:size(phi,3); phi(:,:,j) = permute( phi(:,:,j), pp.Q{2}(:,q(j)) ); end
+            
+            % solve for symmetry adapted force constants : A x = B
+            for i = 1:bvk.nshells
+                ex_ = cat(1,pp.i{:})==i;
+                if any(ex_)
+                    A = repmat(double(bvk.W{i}),sum(ex_),1);
+                    B = reshape(phi(:,:,ex_),[],1);
+                    % get force constants as row vectors
+                    bvk.fc{i} = reshape( A \ B , 1, []);
+                end
+            end
+        end
+
+
         % electrons
 
         function [tb,pp] = get_tb(pc,uc,cutoff,spdf,nskips,Ef,fname)
@@ -1788,7 +1951,7 @@ classdef am_lib
             print_pairs(uc,pp)
             
             % tight binding model
-            fprintf(' ... solving for tight binding matrix elements and hamiltonian'); tic;
+            fprintf(' ... solving for symbolic matrix elements and hamiltonian'); tic;
             tb = get_tb_model(tb,pp,uc,spdf);
             fprintf(' (%.f secs)\n',toc);
             
@@ -1900,7 +2063,7 @@ classdef am_lib
             opts = optimoptions('lsqnonlin','Display','None','MaxIter',7);
             
             % define cost function on select kpoints
-            kpt_id = round(linspace(1,bz.nks,15)); cost_ = @(x) dft.E([1:tb.nbands]+nskips,kpt_id) - sort(eval_energies_(tb,x,bz.k(:,kpt_id)));
+            kpt_id = round(linspace(1,bz.nks,20)); cost_ = @(x) dft.E([1:tb.nbands]+nskips,kpt_id) - sort(eval_energies_(tb,x,bz.k(:,kpt_id)));
 
             % poor man's simulated annealing: loop over distances, incorporating each shell at a time
             for j = 1:nds
@@ -1926,7 +2089,7 @@ classdef am_lib
             cost_ = @(x) dft.E([1:tb.nbands]+nskips,:) - sort(eval_energies_(tb,x,bz.k(:,:)));
             
             % final pass with all parameters and all kpoints
-            [x,r] = lsqnonlin_(cost_,x,false(1,nfcs),[],[],opts);
+            [x,~] = lsqnonlin_(cost_,x,false(1,nfcs),[],[],opts);
 
             % save refined matrix elements and conform to bvk
             for i = [1:tb.nshells]; d(i)=size(tb.W{i},2); end; Evsk=cumsum(d); Svsk=Evsk-d+1;
@@ -2252,7 +2415,7 @@ classdef am_lib
                 [~,~,S] = get_symmetries(pc); nSs = size(S,3); 
 
                 % save space symmetry combined with permutation of atomic positions as Q
-                M = perms([1:3]).'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); nQs = nSs*nMs;
+                M = perms([1:3]).'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs);
 
                 % get multiplication table, list of inverse elements, and identity
                 [MT,E,I]= get_multiplication_table(Q); nQs = size(MT,1);
@@ -2265,6 +2428,7 @@ classdef am_lib
                 ex_(ex_) = normc_(uc2ws(uc.bas*(uc.tau(:,x(2,ex_))-uc.tau(:,x(1,ex_))),uc.bas))<cutoff;
                 ex_(ex_) = normc_(uc2ws(uc.bas*(uc.tau(:,x(3,ex_))-uc.tau(:,x(2,ex_))),uc.bas))<cutoff;
                 ex_(ex_) = normc_(uc2ws(uc.bas*(uc.tau(:,x(1,ex_))-uc.tau(:,x(3,ex_))),uc.bas))<cutoff;
+                ex_(ex_) = ~and(x(1,ex_)==x(2,ex_),x(1,ex_)==x(3,ex_));
 
                 % [pc-frac] compute action of space symmetries on pair positions
                 seitz_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
@@ -2866,6 +3030,18 @@ classdef am_lib
             C = reshape(repmat(A,[1,size(B,2)]),size(A,1),[]) + reshape(repmat(B,[size(A,2),1]),size(B,1),[]);
         end
 
+        function [C] = outerc_(A,B)
+            % outer product of each column of A against each column of B
+            % check with: 
+            %       A=rand(3,3);B=rand(3,3); 
+            %       for i = 1:3 C(:,:,i) = A(:,i)*(B(:,i).'); end
+            %       outerc_(A,B) - C
+            
+            import am_lib.*
+            
+            C = matmul_( permute(A,[1,3,4,2]) , permute(B,[3,1,4,2]) );
+        end
+        
         function [C] = normc_(A)
             % get length of each column vector
             C = sqrt(sum(abs(A).^2,1));
