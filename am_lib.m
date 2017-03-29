@@ -400,12 +400,12 @@ classdef am_lib
             check3_ = @(A) all(all(abs(A)<am_lib.tiny,1),2);
             
             % define function to sort atoms and species into a unique order (reference)
-            X_ = @(tau,species) sortcol_([species;mod_(tau)]); X = X_(pc.tau(:,:,1),pc.species);
+            X_ = @(tau,species) sortc_([species;mod_(tau)]); X = X_(pc.tau(:,:,1),pc.species);
 
             % get vectors that preserve periodic boundary conditions
             N=1; T=mod_(pc.tau(:,pc.species==pc.species(N))-pc.tau(:,N)); nTs=size(T,2); T_ck=false(1,nTs);
             for j = 1:nTs; T_ck(j) = check3_( X_(pc.tau(1:3,:,1)-T(:,j),pc.species)-X ); end
-            T=[T(:,T_ck),eye(3)]; T=T(:,rankcol_(normc_(T))); 
+            T=[T(:,T_ck),eye(3)]; T=T(:,rankc_(normc_(T))); 
 
             if nargout == 1; return; end
             
@@ -485,7 +485,7 @@ classdef am_lib
             
             % get regular rep G by putting identity along diagonal of multiplciation table
             [MT,~,I] = get_multiplication_table(S); nGs = size(MT,2);
-            G = double(perm_(MT,I)==permute([1:nGs],[1,3,2])); 
+            G = double(accessc_(MT,I)==permute([1:nGs],[1,3,2])); 
 
             % initialize decomposition loop
             U = eye(nGs); inds = ones(nGs,1); ninds = 1;
@@ -754,7 +754,7 @@ classdef am_lib
             
             % build permutation matrix for atoms related by translations
             T = get_symmetries(uc); nTs=size(T,2); PM=zeros(uc.natoms,nTs);
-            for i = [1:nTs]; PM(:,i)=rankcol_( [mod_(uc.tau(:,:,1)+T(1:3,i));uc.species] ); end
+            for i = [1:nTs]; PM(:,i)=rankc_( [mod_(uc.tau(:,:,1)+T(1:3,i));uc.species] ); end
 
             % construct a sparse binary representation 
             A=zeros(uc.natoms); A(sub2ind([1,1]*uc.natoms,repmat([1:uc.natoms].',nTs,1),PM(:)))=1; A=frref_(A); A=A(~all(A==0,2),:);
@@ -1121,8 +1121,8 @@ classdef am_lib
             
             import am_lib.*
             
-            % get point symmetries [real-frac --> rec-frac] by applying basis transformation twice
-            [~,~,~,R] = get_symmetries(pc); R = matmul_(pc.bas^2,matmul_(R,inv(pc.bas)^2)); 
+            % get point symmetries [real-frac --> rec-frac] by transposing R
+            [~,~,~,R] = get_symmetries(pc); R = permute(R,[2,1,3]); 
 
             % build permutation matrix for kpoints related by point symmetries
             PM = member_(mod_(matmul_(R,fbz.k)),fbz.k); A = get_connectivity_chart(PM);
@@ -1386,7 +1386,7 @@ classdef am_lib
                 F = zeros(9,9); F(sub2ind([9,9],[1:9],[1,4,7,2,5,8,3,6,9])) = 1; W = W + F-eye(9);
 
                 % get linearly-independent nullspace and normalize to first nonzero element
-                W=real(null(W)); W=frref_(W.').'; W(abs(W)<am_lib.eps)=0; W(abs(W-1)<am_lib.eps)=1; W=W./perm_(W,findrow_(W.').');
+                W=real(null(W)); W=frref_(W.').'; W(abs(W)<am_lib.eps)=0; W(abs(W-1)<am_lib.eps)=1; W=W./accessc_(W,findrow_(W.').');
 
                 % define parameters
                 c = sym(sprintf('c%02i_%%d%%d',i),[3,3],'real'); c = c(findrow_(double(W).'));
@@ -1522,7 +1522,7 @@ classdef am_lib
                 % ... and evaluate (U are column vectors)
                 [bz.U(:,:,i),bz.hw(:,i)] = eig( force_hermiticity_(bvk.D(input{:})) ,'vector');
                 % correct units
-                bz.hw(:,i) = sqrt(abs(bz.hw(:,i))) .* sign(bz.hw(:,i)) * am_lib.units_eV;
+                bz.hw(:,i) = sqrt(real(bz.hw(:,i))) * am_lib.units_eV;
                 % sort energies
                 [bz.hw(:,i),inds]=sort(bz.hw(:,i)); bz.U(:,:,i)=bz.U(:,inds,i);
             end
@@ -1634,7 +1634,6 @@ classdef am_lib
         end
 
         function         plot_bvk_dispersion(bvk,bzp)
-            % pp and uc are optional: numerical vs symbolic evaluation.
             
             import am_lib.*
             
@@ -1828,7 +1827,7 @@ classdef am_lib
                 if (i==j); W = W + F{i}-eye(dm*dn); end
                 
                 % get linearly-independent nullspace and normalize to first nonzero element
-                W=real(null(W)); W=frref_(W.').'; W(abs(W)<am_lib.eps)=0; W(abs(W-1)<am_lib.eps)=1; W=W./perm_(W,findrow_(W.').');
+                W=real(null(W)); W=frref_(W.').'; W(abs(W)<am_lib.eps)=0; W(abs(W-1)<am_lib.eps)=1; W=W./accessc_(W,findrow_(W.').');
 
                 % define parameters
                 c = sym(sprintf('c%02i_%%d%%d',p),[dm,dn],'real'); c = c(findrow_(W.'));
@@ -1936,13 +1935,16 @@ classdef am_lib
         end
 
         function [bz] = get_tb_dispersion(tb,bz)
+            
+            import am_lib.* 
+            
             % get eigenvalues
-            bz.E = zeros(tb.nbands,bz.nks); bz.V = zeros(tb.nbands,tb.nbands,bz.nks);
+            bz.E = zeros(tb.nbands,bz.nks); bz.V = zeros(tb.nbands,tb.nbands,bz.nks); h = zeros(1,bz.nks);
             for i = 1:bz.nks
                 % define input ...
                 input = num2cell([tb.vsk{:},[bz.recbas*bz.k(:,i)].']);
                 % ... and evaluate (V are column vectors)
-                [bz.V(:,:,i),bz.E(:,i)] = eig(tb.H(input{:}),'vector'); 
+                [bz.V(:,:,i),bz.E(:,i)] = eig(  force_hermiticity_(tb.H(input{:})) ,'vector');
             end
         end
 
@@ -2029,6 +2031,25 @@ classdef am_lib
 
         end
 
+        function         plot_tb_dispersion(tb,bzp)
+            % % plot dispersion along high symmetry path
+            % path={'hex','fcc-short','fcc'}; path=path{3};
+            % plot_tb_dispersion(tb,get_bz_path(pc,31,path));
+            
+            import am_lib.*
+            
+            % get phonon band structure along path
+            bzp = get_tb_dispersion(tb,bzp);
+
+            % and plot the results
+            fig_ = @(h)       set(h,'color','white');
+            axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
+
+            fig_(gcf);
+            plot(bzp.x,sort(bzp.E),'-k');
+            axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [eV]'); xlabel('Wavevector k');
+        end
+        
         function get_nesting_vs_ef()
             
             import am_lib.*
@@ -2094,8 +2115,8 @@ classdef am_lib
             %    XRef=repmat(X(1,:),size(X,1),1); 
             %    Qi=findrow_(XRef==X(:,E));
             %    % These last two are equivalent:
-            %    perm_(X.',MT(:,I(Qi))).'-XRef %   Qi  takes orbits to prototype
-            %    perm_(XRef.',MT(:,Qi)).'-X    % I(Qi) takes prototype to orbit
+            %    accessc_(X.',MT(:,I(Qi))).'-XRef %   Qi  takes orbits to prototype
+            %    accessc_(XRef.',MT(:,Qi)).'-X    % I(Qi) takes prototype to orbit
             %
 
             import am_lib.*
@@ -2272,7 +2293,7 @@ classdef am_lib
             % step 3: [xy, qi, iqi]
 
                 % get symmetry which takes irrep to orbit
-                qi = findrow_(PM==PM(it2pt(pt2it),E)); iqi = I(qi); % i=2; X=perm_(PM(p2i==i,:).',MT(:,qi(p2i==i))).'
+                qi = findrow_(PM==PM(it2pt(pt2it),E)); iqi = I(qi); % i=2; X=accessc_(PM(p2i==i,:).',MT(:,qi(p2i==i))).'
 
                 % get uc indicies, vectors, and stabilizers
                 xyz = V(:,PM(:,E)); s_ck = [PM==PM(:,E)].';
@@ -2361,7 +2382,7 @@ classdef am_lib
                     Y = [Y,[d;v1;v2;w;ijk;mno;ir]];
                 end
             end
-                fprintf('%10.5f %10.5f %10.5f  %10.5f %10.5f %10.5f   %4i   %3i-%3i-%3i   %3i-%3i-%3i   %4i\n', Y(2:end,rankcol_(Y(1,:)))); fprintf('\n');
+                fprintf('%10.5f %10.5f %10.5f  %10.5f %10.5f %10.5f   %4i   %3i-%3i-%3i   %3i-%3i-%3i   %4i\n', Y(2:end,rankc_(Y(1,:)))); fprintf('\n');
                 Z=[Z,Y];
             end
 
@@ -2369,7 +2390,7 @@ classdef am_lib
             fprintf('%s irreducible shells %s\n', bar_(29), bar_(29) );
             fprintf('  %-30s    %-30s   %-4s   %-11s   %-11s   %-4s\n','tau_1 [cart]','tau_2 [cart]','#','ic(i,j,k)','pc(m,n,o)','irr.'); 
             fprintf('  %-30s    %-30s   %-4s   %-11s   %-11s   %-4s\n',      bar_(30),      bar_(30),bar_(4),bar_(11),bar_(11),bar_(4));
-            fprintf('%10.5f %10.5f %10.5f  %10.5f %10.5f %10.5f   %4i   %3i-%3i-%3i   %3i-%3i-%3i   %4i\n', Z(2:end,rankcol_(Z(1,:)))); 
+            fprintf('%10.5f %10.5f %10.5f  %10.5f %10.5f %10.5f   %4i   %3i-%3i-%3i   %3i-%3i-%3i   %4i\n', Z(2:end,rankc_(Z(1,:)))); 
         end
         
         function print_pairs(uc,pp)
@@ -2396,21 +2417,21 @@ classdef am_lib
                     Y = [Y,[d;v;w;ij;mn;ir]];
                 end
             end
-                fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Y(:,rankcol_(Y(1,:))) ); fprintf('\n');
+                fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Y(:,rankc_(Y(1,:))) ); fprintf('\n');
                 Z=[Z,Y];
             end
             w = accumarray(Z(end,:).',Z(5,:).',[],@sum); Z = Z(:,uniquemask_(Z(end,:).')); Z(5,:) = w; 
             fprintf('%s irreducible shells %s\n', bar_(29), bar_(29) );
             fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', 'd [cart]','bond [cart]','#','ic(i,j)','pc(m,n)','irr.'); 
             fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
-            fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Z(:,rankcol_(Z(1,:))) );
+            fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Z(:,rankc_(Z(1,:))) );
         end
         
     end
     
     % aux library
     
-    methods (Static)%, Access = protected)       
+    methods (Static)%, Access = protected)
         
         % structure
         
@@ -2800,14 +2821,24 @@ classdef am_lib
             % define high dimensional kronecker self-product: for i=[1:size(A,3)]; C(:,:,i)=kron(A(:,:,i),B(:,:,i)); end
             C = reshape(bsxfun(@times, permute(A,[4 1 5 2 3]), permute(B,[1 4 2 5 3])), size(A,1)*size(B,1),[],size(A,3));
         end
+        
+        function [C] = kronpow_(A,n)
+            
+            import am_lib.kron_
+            
+            C = A;
+            for i = 1:(n-1)
+                C = kron_(C,A);
+            end
+        end
 
-        function [C] = sortcol_(A)
+        function [C] = sortc_(A)
             % column vector-based rank, sort, unique with numeric precision
             import am_lib.rnd_
             [C] = sortrows(rnd_(A).').'; 
         end
 
-        function [C] = rankcol_(A)
+        function [C] = rankc_(A)
             % column vector-based rank, sort, unique with numeric precision
             import am_lib.rnd_
             C = sortrowsc(rnd_(A).',[1:size(A,1)]).'; 
@@ -2852,12 +2883,12 @@ classdef am_lib
             
             import am_lib.*
             
-            C = reshape(perm_(repmat(A,1,size(I,2)),repelem(I,1,size(A,2))),size(I,1),size(I,2),size(A,2));
+            C = reshape(accessc_(repmat(A,1,size(I,2)),repelem(I,1,size(A,2))),size(I,1),size(I,2),size(A,2));
         end
         
-        function [C] = perm_(A,I)
+        function [C] = accessc_(A,I)
             % permute each column of A according to the indicie matrix I
-            % for example: A=randi(10,5,5); [B,I]=sort(A); B-perm_(A,I)
+            % for example: A=randi(10,5,5); [B,I]=sort(A); B-accessc_(A,I)
             % Explicit: 
             % for i = 1:size(A,2)
             %   C(:,i) = C(I(:,i),i);
@@ -3112,7 +3143,7 @@ classdef am_lib
         function [A] = force_symmetricity_(A)
             A = (A.'+A)/2;
         end
-
+        
         function [a] = trace_(A)
             [m]=size(A,3);[n]=size(A,4);
             A = zeros(m,n);
@@ -3190,7 +3221,7 @@ classdef am_lib
             ex_ = abs(U(:))<am_lib.eps; U(ex_) = 0;
 
             % rotate each column vector in complex space to make the first value be real
-            th = angle(U); [~,I]=max(abs(th)); U = U .* exp(-1i*perm_(th,I));
+            th = angle(U); [~,I]=max(abs(th)); U = U .* exp(-1i*accessc_(th,I));
 
             % nullify numerically negligible components
             ex_ = abs(imag(U(:)))<am_lib.eps; U(ex_) = real(U(ex_));
@@ -3221,50 +3252,6 @@ classdef am_lib
             % Estimate only the non-fixed ones
             [xl,r] = lsqnonlin(@localcost_,xl,varargin{:});
 
-            % Re-create array combining fixed and estimated coefficients
-            x([f,l]) = [xf,xl];
-
-            function y = localcost_(x)
-               b([f,l]) = [xf,x]; y = cost_(b);
-            end
-        end
-        
-        function [x,r] = lsqnonlinms_(cost_,x0,isfixed,varargin)
-            % multistart
-            
-            % fixed and loose indicies
-            f = find( isfixed); xf = x0(f);
-            l = find(~isfixed); xl = x0(l);
-
-            % Estimate only non-fixed values
-            prob_ = createOptimProblem( ...
-                'lsqnonlin','objective',@localcost_,'x0',xl, ...
-                'options',optimoptions(@lsqnonlin,varargin{:}));
-            algo_ = MultiStart('UseParallel',true,'PlotFcns',@gsplotbestf);
-            [xl,r] = run(algo_,prob_,20);
-            
-            % Re-create array combining fixed and estimated coefficients
-            x([f,l]) = [xf,xl];
-
-            function y = localcost_(x)
-               b([f,l]) = [xf,x]; y = cost_(b);
-            end
-        end
-        
-        function [x,r] = fmincongs_(cost_,x0,isfixed,varargin)
-            % multistart
-            
-            % fixed and loose indicies
-            f = find( isfixed); xf = x0(f);
-            l = find(~isfixed); xl = x0(l);
-
-            % Estimate only non-fixed values
-            prob_ = createOptimProblem( ...
-                'fmincon','objective',@localcost_,'x0',xl,...
-                'options',optimoptions(@fmincon,'Algorithm','interior-point',varargin{:}));
-            algo_ = GlobalSearch('PlotFcns',@gsplotbestf);
-            [x,f] = run(algo_,prob_);
-            
             % Re-create array combining fixed and estimated coefficients
             x([f,l]) = [xf,xl];
 
