@@ -1425,9 +1425,12 @@ classdef am_lib
             end
             end
 
+            % simplify (speeds evaluation up significantly later)
+            D = simplify(D,'steps',500);
+            
             % multiply by 1/sqrt(mass)
             mass = repelem(mass(pp.species(pp.p2u)),1,3); mass = 1./sqrt(mass.' * mass); D = D .* mass;
-
+            
             % attach symbolic dynamical matrix to bvk
             bvk.D = matlabFunction(D);
         end
@@ -1872,6 +1875,9 @@ classdef am_lib
             end
             end
             
+            % simplify (speeds evaluation up significantly later)
+            H = simplify(H,'steps',500);
+            
             % attach symbolic dynamical matrix to bvk
             tb.H = matlabFunction(H);
         end
@@ -1886,38 +1892,42 @@ classdef am_lib
             % load dispersion [frac-recp] and shift Fermi energy to zero
             [dft,bz]=load_vasp_eigenval(fname); dft.E = dft.E - Ef; 
 
-            % define randomizer
-            rand_ = @(x) (0.5-rand(size(x))).*abs(x./max(x));
-
-            % set array parameter size calculator for selected shells
-            nxs_ = @(selector_shell) sum(any([tb.shell{:}]==selector_shell(:),1));
-            
-            % set simulated annealing temeprature
-            kT = 20;
-
             % fit neighbor parameter at high symmetry points using poor man's simulated anneal
-            d4fc = repelem(tb.d,cellfun(@(x)size(x,2),tb.vsk)); d = unique(rnd_(d4fc)); nfcs=numel(d4fc); nds = numel(d); x = zeros(1,nfcs); r_best = Inf;
+            d4fc = repelem(tb.d,cellfun(@(x)size(x,2),tb.W)); nfcs=numel(d4fc); x=zeros(1,nfcs); 
+            d=unique(rnd_(d4fc)); d=conv([d,Inf],[1 1]/2,'valid'); nds = numel(d); r_best = Inf;
+            
+            % set simulated annealing temeprature and optimization options
+            kT = 20; kT_decay_ = @(kT,i) kT .* exp(-i/50); rand_ = @(x) (0.5-rand(size(x))).*abs(x./max(x));
+            opts = optimoptions('lsqnonlin','Display','None','MaxIter',7);
+            
+            % define cost function on select kpoints
+            kpt_id = round(linspace(1,bz.nks,15)); cost_ = @(x) dft.E([1:tb.nbands]+nskips,kpt_id) - sort(eval_energies_(tb,x,bz.k(:,kpt_id)));
+
+            % poor man's simulated annealing: loop over distances, incorporating each shell at a time
             for j = 1:nds
-                % select kpoints
-                selector_kpt = round(linspace(1,bz.nks,10)); 
-                
-                for i = 1:20
+                for i = 1:30
                     % simulated annealing
-                    if i ~= 1; x = x_best + kT * rand_(x_best) * exp(-i/25); end
+                    if i ~= 1; x = x_best + rand_(x_best) * kT_decay_(kT,i); end
 
                     % optimize
-                    [x,r] = optimize_and_plot(tb,bz,dft,x,[d4fc>d(j)+am_lib.eps],selector_kpt,nskips);
+                    [x,r] = lsqnonlin_(cost_,x,[d4fc>d(j)],[],[],opts);
 
                     % save r_best parameter
-                    if r < r_best; r_best = r; x_best = x; end
+                    if r < r_best; r_best = r; x_best = x; 
+                        % plot band structure (quick and dirty)
+                        plot([1:bz.nks], sort(real(eval_energies_(tb,x,bz.k))),'-k',...
+                             [1:bz.nks], dft.E([1:(end-nskips)]+nskips,:),':r');
+                        set(gca,'XTick',[]); axis tight; grid on; 
+                        ylabel('Energy E'); xlabel('Wavevector k'); drawnow;
+                    end
                 end
             end
 
-            % five final last pass with all parameters and all kpoints
-            [x,r] = optimize_and_plot(tb,bz,dft,x,false(1,nfcs),[1:bz.nks],nskips);
-
-            % save r_best parameter
-            if r < r_best; r_best = r; x_best = x; end
+            % redefine cost function on all kpoints
+            cost_ = @(x) dft.E([1:tb.nbands]+nskips,:) - sort(eval_energies_(tb,x,bz.k(:,:)));
+            
+            % final pass with all parameters and all kpoints
+            [x,r] = lsqnonlin_(cost_,x,false(1,nfcs),[],[],opts);
 
             % save refined matrix elements and conform to bvk
             for i = [1:tb.nshells]; d(i)=size(tb.W{i},2); end; Evsk=cumsum(d); Svsk=Evsk-d+1;
@@ -1932,8 +1942,7 @@ classdef am_lib
                 % define input ...
                 input = num2cell([tb.vsk{:},[bz.recbas*bz.k(:,i)].']);
                 % ... and evaluate (V are column vectors)
-                % [bz.V(:,:,i),bz.E(:,i)] = eig(tb.H(input{:}),'vector'); 
-                [bz.V(:,:,i),bz.E(:,i)] = eig_(tb.H(input{:})); 
+                [bz.V(:,:,i),bz.E(:,i)] = eig(tb.H(input{:}),'vector'); 
             end
         end
 
@@ -2671,34 +2680,13 @@ classdef am_lib
         
         function E = eval_energies_(tb,x,k)
             % get hamiltonians
-            nks = size(k,2); E = zeros(tb.nbands,nks);
+            nks = size(k,2); E = zeros(tb.nbands,nks); recbas = inv(tb.bas).';
             for m = 1:nks
                 % build input
-                input = num2cell([x,k(:,m).']);
+                input = num2cell([x,(recbas*k(:,m)).']);
                 % evaluate H
-                E(:,m) = sort(real(eig(tb.H(input{:}))));
+                E(:,m) = real(eig(tb.H(input{:})));
             end
-        end
-
-        function [x,r] = optimize_and_plot(tb,bz,dft,x,selector_fc,selector_kpt,nskips)
-
-            import am_lib.*
-
-            % define optimization parameters
-            opts = optimoptions('lsqnonlin','Display','none','MaxIter',7);
-
-            % define residual vector as cost functional
-            cost_ = @(x) flatten_( dft.E([1:tb.nbands]+nskips,selector_kpt) - eval_energies_(tb,x,bz.k(:,selector_kpt)) );
-
-            % perform optimization
-            [x,r] = lsqnonlin_(cost_,x,selector_fc,[],[],opts);
-
-            % plot band structure (quick and dirty)
-            figure(1); 
-            plot([1:bz.nks], real(eval_energies_(tb,x,bz.k)),'-k',...
-                 [1:bz.nks], dft.E([1:(end-nskips)]+nskips,:),':r');
-            set(gca,'XTick',[]); axis tight; grid on; 
-            ylabel('Energy E'); xlabel('Wavevector k'); drawnow;
         end
         
 
@@ -3241,6 +3229,50 @@ classdef am_lib
             end
         end
         
+        function [x,r] = lsqnonlinms_(cost_,x0,isfixed,varargin)
+            % multistart
+            
+            % fixed and loose indicies
+            f = find( isfixed); xf = x0(f);
+            l = find(~isfixed); xl = x0(l);
+
+            % Estimate only non-fixed values
+            prob_ = createOptimProblem( ...
+                'lsqnonlin','objective',@localcost_,'x0',xl, ...
+                'options',optimoptions(@lsqnonlin,varargin{:}));
+            algo_ = MultiStart('UseParallel',true,'PlotFcns',@gsplotbestf);
+            [xl,r] = run(algo_,prob_,20);
+            
+            % Re-create array combining fixed and estimated coefficients
+            x([f,l]) = [xf,xl];
+
+            function y = localcost_(x)
+               b([f,l]) = [xf,x]; y = cost_(b);
+            end
+        end
+        
+        function [x,r] = fmincongs_(cost_,x0,isfixed,varargin)
+            % multistart
+            
+            % fixed and loose indicies
+            f = find( isfixed); xf = x0(f);
+            l = find(~isfixed); xl = x0(l);
+
+            % Estimate only non-fixed values
+            prob_ = createOptimProblem( ...
+                'fmincon','objective',@localcost_,'x0',xl,...
+                'options',optimoptions(@fmincon,'Algorithm','interior-point',varargin{:}));
+            algo_ = GlobalSearch('PlotFcns',@gsplotbestf);
+            [x,f] = run(algo_,prob_);
+            
+            % Re-create array combining fixed and estimated coefficients
+            x([f,l]) = [xf,xl];
+
+            function y = localcost_(x)
+               b([f,l]) = [xf,x]; y = cost_(b);
+            end
+        end
+
         function [h] = plot3_(A,varargin)
            h = plot3(A(1,:),A(2,:),A(3,:),varargin{:});
         end
