@@ -67,6 +67,7 @@ classdef am_lib
     % 
     
     properties (Constant)
+        usemex = true;
         tiny = 1E-4; % precision of atomic coordinates
         eps = 1E-8; % numerical precision
         units_eV = 0.06465555; % sqrt( [eV/Ang^2] * [1/amu] ) --> 0.06465555 [eV]
@@ -267,7 +268,7 @@ classdef am_lib
             fprintf(' ... loading displacements vs forces'); tic;
 
             % count number of lines in file and check that all runs completed properly
-            nlines = count_lines(fname); if mod(nlines,uc.natoms)~=0; error('lines appear to be missing.'); end;
+            nlines = count_lines_(fname); if mod(nlines,uc.natoms)~=0; error('lines appear to be missing.'); end;
 
             % open file and parse: use single precision here, solves for force constants much faster
             fid = fopen(fname); fd = reshape(single(fscanf(fid,'%f')),6,uc.natoms,nlines/uc.natoms); fclose(fid);
@@ -373,7 +374,7 @@ classdef am_lib
             import am_lib.*
             
             % count number of lines in file and check that all runs completed properly
-            nlines = count_lines(fname); if mod(nlines,nbands)~=0; error('lines appear to be missing.'); end;
+            nlines = count_lines_(fname); if mod(nlines,nbands)~=0; error('lines appear to be missing.'); end;
 
             % open file and parse
             nsteps=nlines/nbands; fid=fopen(fname); en=reshape(fscanf(fid,'%f'),nbands,nsteps); fclose(fid);
@@ -1106,7 +1107,7 @@ classdef am_lib
             Q_ = @(i) [0:(n(i)-1)]/n(i); [Y{1:3}]=ndgrid(Q_(1),Q_(2),Q_(3)); k=reshape(cat(3+1,Y{:}),[],3).';
 
             % define irreducible cell creation function and make structure
-            fbz_ = @(uc,n,k) struct('units','frac-recp','recbas',get_recbas(uc.bas),...
+            fbz_ = @(uc,n,k) struct('units','frac-recp','recbas',inv(uc.bas).',...
                 'n',n,'nks',size(k,2),'k',k,'w',ones([1,size(k,2)]));
             fbz = fbz_(pc,n,k);
 
@@ -1169,7 +1170,7 @@ classdef am_lib
             end
             
             % get number of kpoints
-            nqs=size(qs,2); recbas = get_recbas(pc.bas);
+            nqs=size(qs,2); recbas = inv(pc.bas).';
 
             % get path: convert to [cart-recp] to get x spacings right then convert back to [frac-recp]
             [k,x,qt] = get_path(recbas*qs,recbas*qe,nqs,n); k=recbas\k;
@@ -1205,7 +1206,7 @@ classdef am_lib
             import am_lib.*
             
             % get number of kpoints
-            nks=prod(n); recbas = get_recbas(pc.bas);
+            nks=prod(n); recbas = inv(pc.bas).';
 
             % get surface in [cart-recp] then convert back to [frac-recp]
             Q_ = @(n) [0:(n-1)]./(n-1); [Y{1:2}]=meshgrid(Q_(n(2)),Q_(n(1)));
@@ -1223,7 +1224,7 @@ classdef am_lib
             import am_lib.*
             
             % get number of kpoints
-            nks=n; recbas = get_recbas(pc.bas);
+            nks=n; recbas = inv(pc.bas).';
             
             % define path (includes both boundaries)
             path_ = @(k,q,N) cumsum([zeros(3,1),repmat((k-q)/(N-1),1,N-1)],2)+repmat(q,1,N);
@@ -1494,7 +1495,7 @@ classdef am_lib
                 end
             end
         end
-        
+
         function [bz]  = get_bvk_dispersion(bvk,bz)
             
             import am_lib.* 
@@ -1755,7 +1756,7 @@ classdef am_lib
                 
             end
         end
-        
+
         
         % phonons (anharmonic)
 
@@ -1817,7 +1818,7 @@ classdef am_lib
             %
             %       u1 * F
             %
-            %    in which the force F is:
+            %    with force F:
             %
             %         u2 = sym('x_%d',[3,1]); u3 = sym('y_%d',[3,1]);
             %         Fx=zeros(3,1); for i = 1:3; Fx(i) = u2.'*phi(:,:,i)*u3; end
@@ -1908,12 +1909,16 @@ classdef am_lib
                 ux = outerc_( reshape(u(:,flatten_(pt.o{m}(:,:,1)),:),3,[]) , ...
                               reshape(u(:,flatten_(pt.o{m}(:,:,2)),:),3,[]) );
 
+                % make ux symmetric
+                ux = reshape( [ux(1,1,:);ux(2,1,:)+ux(1,2,:);ux(3,1,:)+ux(1,3,:); ...
+                               ux(2,2,:);ux(3,2,:)+ux(2,3,:);ux(3,3,:)] , 6, []);
+
                 % solve for the generalized third-order force constants: FC = - f / u 
                 fc = - reshape( f(:,pt.c{m},:) ,3,pt.ncenters(m)*md.nsteps) /...
-                       reshape( ux             ,9*pt.npairs(m),pt.ncenters(m)*md.nsteps);
+                       reshape( ux             ,6*pt.npairs(m),pt.ncenters(m)*md.nsteps);
 
                 % get third order force constants
-                phi = double(cat(3,phi,reshape(fc,3,3,3,[])));
+            %     phi = double(cat(3,phi,reshape(fc,3,3,3,[])));
             end
 
             % transform fc from orbit to irrep
@@ -2311,12 +2316,12 @@ classdef am_lib
                 pc_tau = uc.tau2pc*mod_(uc.tau);
                 tau(:,:,:,1) = seitz_apply_(Q{1},pc_tau(:,x(1,ex_)));
                 tau(:,:,:,2) = seitz_apply_(Q{1},pc_tau(:,x(2,ex_)));
-                for iq = 1:nQs; tau(:,:,iq,:) = tau(1:3,:,iq,Q{2}(:,iq)); end
+                for iq = 1:nQs; tau(:,:,iq,Q{2}(:,iq)) = tau(1:3,:,iq,:); end
 
                 % [uc-frac] shift reference atom to primitive cell and record uc index
                 %     relax matching criteria here by a factor of 10;
                 %     solves a problem for systems with atoms are at 1/3
-                %     position whereone of the coordinates may be -0.6666
+                %     position where one of the coordinates may be -0.6666
                 %     and the other 0.3334. Applying mod takes -0.6666 to
                 %     0.3334 causing a difference of 0.001.        
                 G_ = @(tau) tau - mod_(tau); tau = mod_(matmul_(inv(uc.tau2pc),tau-G_(tau(:,:,:,1))));
@@ -2415,7 +2420,7 @@ classdef am_lib
                 [~,~,S] = get_symmetries(pc); nSs = size(S,3); 
 
                 % save space symmetry combined with permutation of atomic positions as Q
-                M = perms([1:3]).'; nMs = size(M,2); Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs);
+                M = perms([1:3]).'; Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs);
 
                 % get multiplication table, list of inverse elements, and identity
                 [MT,E,I]= get_multiplication_table(Q); nQs = size(MT,1);
@@ -2423,27 +2428,25 @@ classdef am_lib
             % step 2: [PM, V, ip2pp, and pt2it]
 
                 % get all possible triplets which have bond legnths below the cutoff 
-                [Y{1:3}]=ndgrid(1:uc.natoms,1:uc.natoms,uc.p2u); x=[Y{3}(:),Y{2}(:),Y{1}(:)].';
-                ex_ = true(1,size(x,2));
+                [Y{1:3}]=ndgrid(1:uc.natoms,1:uc.natoms,uc.p2u); x=[Y{3}(:),Y{2}(:),Y{1}(:)].'; ex_=true(1,size(x,2));
                 ex_(ex_) = normc_(uc2ws(uc.bas*(uc.tau(:,x(2,ex_))-uc.tau(:,x(1,ex_))),uc.bas))<cutoff;
                 ex_(ex_) = normc_(uc2ws(uc.bas*(uc.tau(:,x(3,ex_))-uc.tau(:,x(2,ex_))),uc.bas))<cutoff;
                 ex_(ex_) = normc_(uc2ws(uc.bas*(uc.tau(:,x(1,ex_))-uc.tau(:,x(3,ex_))),uc.bas))<cutoff;
-                ex_(ex_) = ~and(x(1,ex_)==x(2,ex_),x(1,ex_)==x(3,ex_));
 
                 % [pc-frac] compute action of space symmetries on pair positions
+                % NOTE: Q{1} is active and Q{2} is passive!
                 seitz_apply_ = @(S,tau) reshape(matmul_(S(1:3,1:3,:),tau),3,[],size(S,3)) + S(1:3,4,:);
                 pc_tau = uc.tau2pc*mod_(uc.tau);
                 tau(:,:,:,1) = seitz_apply_(Q{1},pc_tau(:,x(1,ex_)));
                 tau(:,:,:,2) = seitz_apply_(Q{1},pc_tau(:,x(2,ex_)));
                 tau(:,:,:,3) = seitz_apply_(Q{1},pc_tau(:,x(3,ex_)));
-                for iq = 1:nQs; tau(:,:,iq,:) = tau(1:3,:,iq,Q{2}(:,iq)); end
+                for iq = 1:nQs; tau(:,:,iq,Q{2}(:,iq)) = tau(1:3,:,iq,:); end
 
                 % [uc-frac] shift reference atom to primitive cell and record uc index
-                G_ = @(tau) tau - mod_(tau); 
-                tau = mod_(matmul_(inv(uc.tau2pc),tau-G_(tau(:,:,:,1))));
-                P1 = member_(tau(:,:,:,1),uc.tau);
-                P2 = member_(tau(:,:,:,2),uc.tau);
-                P3 = member_(tau(:,:,:,3),uc.tau);
+                G_ = @(tau) tau - mod_(tau); tau = mod_(matmul_(inv(uc.tau2pc),tau-G_(tau(:,:,:,1))));
+                P1 = member_(tau(:,:,:,1)/10,uc.tau/10);
+                P2 = member_(tau(:,:,:,2)/10,uc.tau/10);
+                P3 = member_(tau(:,:,:,3)/10,uc.tau/10);
 
                 % create a unique pair label
                 [V,~,V_p2i]=unique([P1(:),P2(:),P3(:)],'rows'); V=V.';
@@ -2457,7 +2460,7 @@ classdef am_lib
             % step 3: [xy, qi, iqi]
 
                 % get symmetry which takes irrep to orbit
-                qi = findrow_(PM==PM(it2pt(pt2it),E)); iqi = I(qi); % i=2; X=accessc_(PM(p2i==i,:).',MT(:,qi(p2i==i))).'
+                qi = findrow_(PM==PM(it2pt(pt2it),E)); iqi = I(qi); % i=2; X=accessc_(PM(pt2it==i,:).',MT(:,qi(pt2it==i))).'
 
                 % get uc indicies, vectors, and stabilizers
                 xyz = V(:,PM(:,E)); s_ck = [PM==PM(:,E)].';
@@ -2590,49 +2593,13 @@ classdef am_lib
             fprintf('%-10s    %-30s   %-4s   %-7s   %-7s   %-4s\n', bar_(10),bar_(30),bar_(4),bar_(7),bar_(7),bar_(4));
             fprintf('%10.5f  %10.5f %10.5f %10.5f   %4i   %-3i-%3i   %-3i-%3i   %4i\n', Z(:,rankc_(Z(1,:))) );
         end
-        
+
     end
-    
+        
     % aux library
     
     methods (Static)%, Access = protected)
         
-        % structure
-        
-        function recbas  = get_recbas(bas)
-            % note inv(bas) ~= recbas ... so that bas * recbas ~= eye(3)
-            recbas=inv(bas).';
-        end
-        
-        function [K0] = uc2ws(K,M)
-            % uc2ws uses M real (reciprocal) lattice vectors to reduces K(1:3,:) vectors 
-            % in cartesian (reciprocal) coordinates to the definiging Wigner-Seitz cell.
-            % Note: K0 = cell2mat(arrayfun(@(j) uc2ws_engine(K(:,j),G,G2),[1:size(K,2)],'unif',0)); 
-            %       is slower than looping.
-
-            % generate mesh
-            G = M * [-1,-1,-1, 0, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 0, 1, 1, 1;
-                     -1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1;
-                     -1,-1,-1,-1,-1,-1,-1,-1,-1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1];
-            G2=sum(G.^2,1);
-
-            % call engine
-            m=size(K,2); K0 = zeros(3,m); for j = 1:m; K0(:,j) = uc2ws_engine(K(:,j),G,G2,am_lib.eps); end
-
-            function [K] = uc2ws_engine(K,G,G2,tiny)
-                go = true;
-                while go; go=false;
-                    for i = 1:26
-                        P = 2*K.'*G(:,i)-G2(i);
-                        if P > + tiny
-                            K = K - G(:,i); go=true;
-                        end
-                    end
-                end
-            end
-        end
-
-
         % aux brillouin zones
 
         function tet = get_tetrahedra(recbas,n)
@@ -3008,6 +2975,13 @@ classdef am_lib
             C = sortrowsc(rnd_(A).',[1:size(A,1)]).'; 
         end                 
 
+        function [I] = match_(A,B)
+            % find the indicies I which permute column entries of A to match B
+            % for example: A=[[1;4;3],[1;3;4],[3;1;4]]; B=[3;1;4]; X=match_(A,B); accessc_(A,X)-B
+            import am_lib.*
+            [~,iA]=sort(A); [~,iB]=sort(B); iB(iB)=[1:numel(iB)]; I = accessc_(iA,iB);
+        end
+        
         function [C,inds] = uniquecol_(A)
             % get unique values with numeric precision
             import am_lib.rnd_
@@ -3614,13 +3588,81 @@ classdef am_lib
             end
         end
         
-        function [n] = count_lines(fname)
-            if ispc
-                [~,a] = system(sprintf('type %s | find /c /v ""',fname));
-            elseif or(ismac,isunix)
-                [~,a] = system(sprintf('wc -l %s',fname));
+        function [str] = verbatim_()
+            %VERBATIM  Get the text that appears in the next comment block.
+            %  Returns the text of the first comment block following the call.  The
+            %  block comment delimiters, %{ and %}, must appear on lines by themselves
+            %  (optionally preceded by white space).
+            %
+            %  If you want a final end-of-line character then leave a blank line before
+            %  the %}.
+            %
+            %  If both comment delimiters are preceded by the same white space (same
+            %  combination of spaces and tabs) then that white space will be deleted
+            %  (if possible) from the beginning of each line of the commented text.
+            %  This is so the whole block can be indented.
+            %
+            %  Example,
+            %
+            %      str = verbatim;
+            %          %{
+            %          This is the text
+            %          that will be returned by verbatim.
+            %          %}
+            %
+            %  VERBATIM can only be used in an m-file.
+
+            % Get the function call stack.
+            [dbs,thisWorkspace] = dbstack('-completenames');
+            assert(length(dbs) > 1,'VERBATIM must be called from an M-file.')
+            dbs = dbs(thisWorkspace + 1);
+            lines = repmat({''},1,100);
+
+            % Open the file.
+            fid = fopen(dbs.file);
+
+            try
+                % Skip lines up to the current line in the calling function.
+                textscan(fid,'%*s',0,'HeaderLines',dbs.line,'Delimiter','');
+
+                % Read lines until one begins with '%{'.
+                line = '';
+                while ~isequal(line,-1) && isempty(regexp(line,'^\s*%{','once'))
+                    line = fgetl(fid);
+                end
+
+                % Read and save lines until one begins with '%}'.  Leave first cell
+                % empty.
+                k = 1;
+                while true
+                    k = k + 1;
+                    lines{k} = fgetl(fid);
+                    if isequal(lines{k},-1) || ...
+                            ~isempty(regexp(lines{k},'^\s*%}','once'))
+                        break
+                    end
+                end
+
+                % Close the file.
+                fclose(fid);
+
+            catch err
+                % Close the file and rethrow the error.
+                fclose(fid);
+                rethrow(err)
             end
-            n = sscanf(a,'%i');
+
+            % If white space preceeding '%{' and '%}' is the same then delete it from
+            % the beginning of each line of the commented text so you can have indented
+            % code.
+            white_space1 = regexp(line,'^\s*','match','once');
+            white_space2 = regexp(lines{k},'^\s*','match','once');
+            if strcmp(white_space1,white_space2)
+                lines = regexprep(lines,['^',white_space1],'');
+            end
+
+            % Construct the output string.
+            str = [sprintf('%s\n',lines{2:k-2}),lines{k-1}];
         end
         
         % aux aesthetic
@@ -4019,6 +4061,161 @@ cmap = map_(n,cmap);
 
         end
 
+    end
+    
+
+    % mex functions
+    
+    methods (Static)
+        
+        function compile_mex()
+            % compile mex functions
+            
+            import am_lib.*
+            
+            % system configurations
+            FC = 'ifort'; 
+            FFLAGS = '-O3 -parallel -fpp -fPIC -lmx -lmex -lmat -nofor_main -bundle';
+            MPATH = '/Applications/MATLAB_R2016b.app';
+            LIBS = ['-L',MPATH,'/bin/maci64 -I',MPATH,'/extern/include'];
+            
+            % mex functions
+            i=0;
+            i=i+1; f{i} = 'uc2ws_mex'; fid=fopen([f{i},'.f90'],'w'); fprintf(fid,verbatim_()); fclose(fid); 
+            %{
+            ! ifort -O3 -parallel -fpp -fPIC -L/Applications/MATLAB_R2016b.app/bin/maci64 -I/Applications/MATLAB_R2016b.app/extern/include -lmx -lmex -lmat -nofor_main -bundle ./uc2ws_mex.f90 -o uc2ws_mex.mexmaci64
+            #include "fintrf.h"      
+
+            subroutine mexFunction(nlhs, plhs, nrhs, prhs)
+
+                implicit none
+
+                mwPointer plhs(*), prhs(*)
+                integer nlhs, nrhs
+                mwPointer mxGetPr
+                mwPointer mxCreateDoubleMatrix
+                mwPointer mxGetM, mxGetN
+
+                integer :: j
+                real*8, allocatable :: K(:,:)
+                real*8 :: G(3,26) , G2(26) , M(3,3), tiny
+
+                ! [K] = uc2ws(K,M,tiny)
+                if(nrhs .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Three inputs required.')
+                if(nlhs .gt. 1) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','One output produced.')
+                if(mxGetM(prhs(1)) .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 1 requires three-dimensional column vectors.')
+                if(mxGetM(prhs(2)) .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 2 requires a three-dimensional transformation matrix.')
+                if(mxGetN(prhs(2)) .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 2 requires a three-dimensional transformation matrix.')
+                if(mxGetM(prhs(3)) .ne. 1 .or. &
+                 & mxGetN(prhs(3)) .ne. 1) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 3 requires a scalar.')
+
+                ! K
+                allocate( K(3,mxGetN(prhs(1))) )
+                call mxCopyPtrToReal8(mxGetPr(prhs(1)),K,mxGetM(prhs(1))*mxGetN(prhs(1)))
+
+                ! M(3,3)
+                call mxCopyPtrToReal8(mxGetPr(prhs(2)),M,mxGetM(prhs(2))*mxGetN(prhs(2)))
+
+                ! tiny
+                call mxCopyPtrToReal8(mxGetPr(prhs(3)),tiny,mxGetM(prhs(3)))
+
+                ! generate mesh
+                G(1,:) = real([-1,-1,-1, 0, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 0, 1, 1, 1])
+                G(2,:) = real([-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1])
+                G(3,:) = real([-1,-1,-1,-1,-1,-1,-1,-1,-1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+                G = matmul(M,G)
+                G2 = sum(G**2,1)
+
+                ! perform calc
+                do j = 1, size(K,2)
+                    call uc2ws_engine(K(:,j),G,G2,tiny)
+                enddo
+
+                ! output results
+                plhs(1) = mxCreateDoubleMatrix(mxGetM(prhs(1)),mxGetN(prhs(1)),0)
+                call mxCopyReal8ToPtr(K,mxGetPr(plhs(1)),mxGetM(prhs(1))*mxGetN(prhs(1)))
+
+            end subroutine mexFunction
+
+            pure subroutine uc2ws_engine(K,G,G2,tiny)
+                real*8, intent(inout) :: K(3)
+                real*8, intent(in) :: G(3,26), G2(26), tiny
+                real*8  :: P
+                logical :: go
+                integer :: i
+
+                go = .true.
+                do while (go)
+                    go = .false.
+                    do i = 1, 26
+                        P = 2*(K(1)*G(1,i) + K(2)*G(2,i) + K(3)*G(3,i)) - G2(i)
+                        if (P .gt. 1D-8) then
+                            K = K - G(:,i)
+                            go = .true.
+                        endif
+                    enddo
+                enddo
+            end subroutine uc2ws_engine
+            %}
+            
+            
+            % compile everything
+            fprintf('Building mex functions:\n')
+            for i = 1:numel(f)
+                if system([FC,' ',FFLAGS,' ',LIBS,' ',f{i},'.f90 -o ',f{i},'.mexmaci64'])
+                    warning(' ... %s (failed)\n',f{i})
+                else
+                    fprintf(' ... %s (successful)\n',f{i});
+                end
+            end
+        
+        end
+        
+        function [K] = uc2ws(K,M)
+            % uc2ws uses M real (reciprocal) lattice vectors to reduces K(1:3,:) vectors 
+            % in cartesian (reciprocal) coordinates to the definiging Wigner-Seitz cell.
+
+            if  and( am_lib.usemex , which('uc2ws_mex') )
+                % use mex function if available
+                K = uc2ws_mex(K,M,am_lib.eps);
+            else
+                % generate mesh
+                G = M * [-1,-1,-1, 0, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 0, 1, 1, 1;
+                         -1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1;
+                         -1,-1,-1,-1,-1,-1,-1,-1,-1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+                G2=sum(G.^2,1);
+                % call engine
+                for j = 1:size(K,2); K(:,j) = uc2ws_engine(K(:,j),G,G2,am_lib.eps); end
+            end
+
+            function [K] = uc2ws_engine(K,G,G2,tiny)
+                go = true;
+                while go; go=false;
+                    for i = 1:26
+                        P = 2*K.'*G(:,i)-G2(i);
+                        if P > + tiny
+                            K = K - G(:,i); go=true;
+                        end
+                    end
+                end
+            end
+        end
+        
+    end
+    
+    % unix functions
+    
+    methods (Static)
+        
+        function [n] = count_lines_(fname)
+            if ispc
+                [~,a] = system(sprintf('type %s | find /c /v ""',fname));
+            elseif or(ismac,isunix)
+                [~,a] = system(sprintf('wc -l %s',fname));
+            end
+            n = sscanf(a,'%i');
+        end
+        
     end    
 end
 
