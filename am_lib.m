@@ -1441,9 +1441,9 @@ classdef am_lib
                     asr = zeros(3,3,pp.npairs(m));
                     for j = 1:pp.npairs(m)
                         % get irrep->orbit symmetry
-                        iq = pp.iq{m}(j,1);
+                        iq = pp.iq{m}(j,1); q = pp.q{m}(j,1); 
                         % rotate force constants from irrep to orbit
-                        asr(:,:,j) = permute( pp.Q{1}(1:3,1:3,iq) * phi(:,:,pp.i{m}(j)) * pp.Q{1}(1:3,1:3,iq).', pp.Q{2}(:,iq) );
+                        asr(:,:,j) = permute( pp.Q{1}(1:3,1:3,iq) * phi(:,:,pp.i{m}(j)) * pp.Q{1}(1:3,1:3,q), pp.Q{2}(:,iq) );
                     end
                     % impose asr on self-forces
                     asr = -sum(asr(:,:,pp.o{m}(:,1)~=pp.c{m}(1)),3);
@@ -1457,6 +1457,19 @@ classdef am_lib
 
         function [bvk] = get_bvk_force_constants(bvk,uc,pp,md)
             % Extracts symmetry adapted force constants.
+            % Q: How different are force constants extracted with each method?
+            % A: Method 1:   7.2626    0.4073   -0.5706    0.0775   -0.0314   -5.3528   17.3444   -0.5830    0.2604   -0.4623
+            %    Method 2:   7.3286    0.4595   -0.5817    0.0429   -0.1441   -5.3000   17.3281   -0.5506    0.2480   -0.4367
+            %    How significant are these differences? They very subtly affect
+            %    the phonon dispersion (probably not enough to warrant one
+            %    method over the other and definately not as much is just
+            %    due to noise in the AIMD forces). 
+            % Q: How much memory and time does each method take?
+            % A: Method 1: needs to invert an [3n * m ] matrix
+            %    Method 2: needs to invert an [3m * 6n] matrix
+            %    n = number of pairs; m = number of equivalent atoms
+            %    Thus, Method 2, which incorporates intrinsic force
+            %    constant symmetries, requires 6x more memory than Method 1. 
 
             import am_lib.*
 
@@ -1464,35 +1477,129 @@ classdef am_lib
             u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
             f = matmul_( md.bas, md.force );
 
-            % loop over primitive types
-            phi=[]; 
-            for m = 1:pp.pc_natoms
-                % get forces : f = [ (x,y,z), (1:natoms)*nsteps ] 
-                % get displacements : u [ (x,y,z)*orbits, (1:natoms)*nsteps ]
-                %  ... and solve for the generalized force constants: FC = - f / u 
-                fc = - reshape( f(:,pp.c{m},:) ,3,pp.ncenters(m)*md.nsteps) /...
-                       reshape( u(:,pp.o{m},:) ,3*pp.npairs(m),pp.ncenters(m)*md.nsteps);
-                
-                % reshape % NOTE: imposing ASR here is pointless
-                % b/c the force 1-2 constants WILL change when the 2-1
-                % which comes later is considered. needs to simultaneously
-                % determine the fcs.
-                phi = double(cat(3,phi,reshape(fc,3,3,[])));
-            end
+            % choose a method
+            switch 3
+                case 1
+                    % basic method using full 3x3 second-order tensor (ignores intrinsic force constant symmetry)
+                    % F [3 * m] = - FC [3 * 3n] * U [3n * m]: n pairs, m atoms ==> FC = - F / U
+                    phi=[];
+                    for m = 1:pp.pc_natoms
+                        % get forces : f = [ (x,y,z), (1:natoms)*nsteps ] 
+                        % get displacements : u [ (x,y,z)*orbits, (1:natoms)*nsteps ]
+                        %  ... and solve for the generalized force constants: FC = - f / u 
+                        fc = - reshape( f(:,pp.c{m},:) ,3,pp.ncenters(m)*md.nsteps) /...
+                               reshape( u(:,pp.o{m},:) ,3*pp.npairs(m),pp.ncenters(m)*md.nsteps);
+                        % reshape into 3x3 matrices
+                        phi = double(cat(3,phi,reshape(fc,3,3,[])));
+                    end
+                    
+                    % transform fc from orbit to irrep
+                    q = cat(1,pp.q{:}); phi = matmul_( matmul_( pp.Q{1}(1:3,1:3,q) ,phi), permute(pp.Q{1}(1:3,1:3,q),[2,1,3]) );
+                    for j = 1:size(phi,3); phi(:,:,j) = permute( phi(:,:,j), pp.Q{2}(:,q(j)) ); end
 
-            % transform fc from orbit to irrep
-            q = cat(1,pp.q{:}); phi = matmul_(matmul_(pp.Q{1}(1:3,1:3,q),phi),permute(pp.Q{1}(1:3,1:3,q),[2,1,3]));
-            for j = 1:size(phi,3); phi(:,:,j) = permute( phi(:,:,j), pp.Q{2}(:,q(j)) ); end
-            
-            % solve for symmetry adapted force constants : A x = B
-            for i = 1:bvk.nshells
-                ex_ = cat(1,pp.i{:})==i;
-                if any(ex_)
-                    A = repmat(double(bvk.W{i}),sum(ex_),1);
-                    B = reshape(phi(:,:,ex_),[],1);
-                    % get force constants as row vectors
-                    bvk.fc{i} = reshape( A \ B , 1, []);
-                end
+                    % solve for symmetry adapted force constants : A x = B
+                    for i = 1:bvk.nshells
+                        ex_ = cat(1,pp.i{:})==i;
+                        if any(ex_)
+                            A = repmat(double(bvk.W{i}),sum(ex_),1);
+                            B = reshape(phi(:,:,ex_),[],1);
+                            % get force constants as row vectors
+                            bvk.fc{i} = reshape( A \ B , 1, []);
+                        end
+                    end
+                case 2
+                    % method using voigt notation (incorporates intrinsic force constant symmetry)
+                    % F [3m * 1] = - U [3m * 6n] * FC [6n * 1]: n pairs, m atoms ==> FC = - U \ F
+                    %
+                    %      [ 1, 6, 5]
+                    % FC = [ 6, 2, 4] = reshape( [1,6,5,6,2,4,5,4,3] ,3,3)
+                    %      [ 5, 4, 3]
+                    %
+                    % prepare input using: 
+                    %       a = sym('a_%d',[1,6]); u = sym('u_%d',[3,1]); 
+                    %       eqs = reshape(a([1,6,5,6,2,4,5,4,3]),3,3)*u==0;
+                    %       prep_ = matlabFunction(equationsToMatrix(eqs,a));
+                    prep_ = @(x) [x(1),0,0,0,x(3),x(2); 0,x(2),0,x(3),0,x(1); 0,0,x(3),x(2),x(1),0];
+                    phi=[];
+                    for m = 1:pp.pc_natoms
+                        % get F and U in the correct format
+                        F = zeros(3*pp.ncenters(m)*md.nsteps,1); n=0;
+                        U = zeros(3*pp.ncenters(m)*md.nsteps,6*pp.npairs(m));
+                        for j = 1:pp.ncenters(m); for k = 1:md.nsteps; n=n+1; 
+                        for i = 1:pp.npairs(m)
+                            U([1:3]+3*(n-1),[1:6]+6*(i-1)) = prep_(u(:,pp.o{m}(i,j),k));
+                        end
+                            F([1:3]+3*(n-1)) = f(:,pp.c{m}(j),k);
+                        end; end
+                        % evaluate
+                        fc = reshape( - U \ F , 6, []);
+                        % convert to 3x3 matrix
+                        phi = double(cat(3,phi,reshape(fc([1,6,5,6,2,4,5,4,3],:),3,3,[])));
+                    end
+                    
+                    % transform fc from orbit to irrep
+                    q = cat(1,pp.q{:}); phi = matmul_(matmul_(pp.Q{1}(1:3,1:3,q),phi),permute(pp.Q{1}(1:3,1:3,q),[2,1,3]));
+                    for j = 1:size(phi,3); phi(:,:,j) = permute( phi(:,:,j), pp.Q{2}(:,q(j)) ); end
+
+                    % solve for symmetry adapted force constants : A x = B
+                    for i = 1:bvk.nshells
+                        ex_ = cat(1,pp.i{:})==i;
+                        if any(ex_)
+                            A = repmat(double(bvk.W{i}),sum(ex_),1);
+                            B = reshape(phi(:,:,ex_),[],1);
+                            % get force constants as row vectors
+                            bvk.fc{i} = reshape( A \ B , 1, []);
+                        end
+                    end
+                case 3
+                    % NOT WORKING YET
+                    % NOT WORKING YET
+                    % NOT WORKING YET - DOUBLE CHECK LOOPS and INDICES
+                    % NOT WORKING YET
+                    % method incorporating full intrinsic and crystalographic symmetries
+                    % F [3m * 1] = - U [3m * nFcs] * FC [ nFCs * 1]: n pairs, m atoms ==> FC = - U \ F
+                    % 
+                    % Q: How does are roto-inversions incorporated?
+                    % A: Check with:
+                    %
+                    %         % define input prep
+                    %         prep_ = @(x) [x(1),x(2),x(3),0,0,0,0,0,0;0,0,0,x(1),x(2),x(3),0,0,0;0,0,0,0,0,0,x(1),x(2),x(3)];
+                    %         % select irreducible pair j and symmetry i
+                    %         j=2;i=9;
+                    %         % define symbolic displacement u and force constants c
+                    %         u=sym('u_%d',[3,1]); c=sym('c_%d',[size(bvk.W{j},2),1]); 
+                    %         % get rotations and inverse
+                    %         R=pp.Q{1}(1:3,1:3,pp.q{1}(i)); iR=pp.Q{1}(1:3,1:3,pp.iq{1}(i));
+                    %         % check without rotation
+                    %         prep_(u)*bvk.W{j}- equationsToMatrix(reshape(bvk.W{j}*c,3,3)*u,c)
+                    %         % check with rotation
+                    %         R*prep_(iR*u)*bvk.W{j}- equationsToMatrix(R*reshape(bvk.W{j}*c,3,3)*iR*u,c)
+                    %
+                    %
+                    
+                    
+                    prep_ = @(x) [x(1),x(2),x(3),0,0,0,0,0,0;0,0,0,x(1),x(2),x(3),0,0,0;0,0,0,0,0,0,x(1),x(2),x(3)];
+
+                    d = cellfun(@(x)size(x,2),bvk.W); E=cumsum(d); S=E-d+1; nFCs=max(E);
+
+                    n = 0;
+                    F = zeros(3*sum(pp.ncenters*md.nsteps),1);
+                    U = zeros(3*sum(pp.ncenters*md.nsteps),nFCs);
+                    for m = 1:pp.pc_natoms; for j = 1:pp.ncenters(m); for k = 1:md.nsteps
+                        n=n+1; np = [1:3]+3*(n-1); 
+                    for ipair = 1:pp.npairs(m)
+                        ir=pp.i{m}(ipair); mp = S(ir):E(ir);
+                        R =pp.Q{1}(1:3,1:3, pp.q{m}(ipair)); 
+                        iR=pp.Q{1}(1:3,1:3,pp.iq{m}(ipair));
+                        U(np,mp) = U(np,mp) + R * prep_(iR * u(1:3,pp.o{m}(ipair,j),k)) * bvk.W{ir};
+                    end
+                        F(np) = f(:,pp.c{m}(j),k);
+                    end; end; end
+                    
+                    fc = - U \ F;
+                    
+                    % save force constants
+                    for i = 1:bvk.nshells; bvk.fc{i} = fc(S(i):E(i)).'; end
             end
         end
 
@@ -1792,7 +1899,7 @@ classdef am_lib
             %         W=real(null(W)); W=frref_(W.').'; W(abs(W)<am_lib.eps)=0; W(abs(W-1)<am_lib.eps)=1; W=W./accessc_(W,findrow_(W.').');
             % 
             %         % define parameters
-            %         c = sym(sprintf('c_%d%d%d',i),[3,3,3],'real'); c = c(findrow_(double(W).'));
+            %         c = sym(sprintf('c_%%d%%d%%d',i),[3,3,3],'real'); c = c(findrow_(double(W).'));
             % 
             %         % get symmetry adapted force constants
             %         phi = reshape( sym(W)*c(:), [3,3,3]);
@@ -1830,7 +1937,12 @@ classdef am_lib
             %         F = reshape(phi,3,9)*u23;
             %
             %    This will be the most useful when determining third order force 
-            %    constants.
+            %    constants. Also, considering intrinsic symmetry
+            % Q: What effect does the intrinsic symmetry have on the matrices?
+            % A: 
+            %         X=reshape(phi,3,9); u2 = sym('x_%d',[3,1]); u3 = sym('y_%d',[3,1]); u23 = flatten_(u2*u3.');
+            %         simplify( X(:,c)*[u23(1);u23(2)+u23(4);u23(5);u23(3)+u23(7);u23(6)+u23(8);u23(9)] - X*u23 );
+            %
             %
 
             import am_lib.*
@@ -1921,20 +2033,20 @@ classdef am_lib
             %     phi = double(cat(3,phi,reshape(fc,3,3,3,[])));
             end
 
-            % transform fc from orbit to irrep
-            q = cat(1,pp.q{:}); phi = matmul_(matmul_(pp.Q{1}(1:3,1:3,q),phi),permute(pp.Q{1}(1:3,1:3,q),[2,1,3]));
-            for j = 1:size(phi,3); phi(:,:,j) = permute( phi(:,:,j), pp.Q{2}(:,q(j)) ); end
-            
-            % solve for symmetry adapted force constants : A x = B
-            for i = 1:bvk.nshells
-                ex_ = cat(1,pp.i{:})==i;
-                if any(ex_)
-                    A = repmat(double(bvk.W{i}),sum(ex_),1);
-                    B = reshape(phi(:,:,ex_),[],1);
-                    % get force constants as row vectors
-                    bvk.fc{i} = reshape( A \ B , 1, []);
-                end
-            end
+            % % transform fc from orbit to irrep
+            % q = cat(1,pp.q{:}); phi = matmul_(matmul_(pp.Q{1}(1:3,1:3,q),phi),permute(pp.Q{1}(1:3,1:3,q),[2,1,3]));
+            % for j = 1:size(phi,3); phi(:,:,j) = permute( phi(:,:,j), pp.Q{2}(:,q(j)) ); end
+            % 
+            % % solve for symmetry adapted force constants : A x = B
+            % for i = 1:bvk.nshells
+            %     ex_ = cat(1,pp.i{:})==i;
+            %     if any(ex_)
+            %         A = repmat(double(bvk.W{i}),sum(ex_),1);
+            %         B = reshape(phi(:,:,ex_),[],1);
+            %         % get force constants as row vectors
+            %         bvk.fc{i} = reshape( A \ B , 1, []);
+            %     end
+            % end
         end
 
 
@@ -2033,7 +2145,7 @@ classdef am_lib
                 i = uc.u2i(x); m = uc.u2p(x); mp = S(m):E(m);
                 j = uc.u2i(y); n = pp.u2p(y); np = S(n):E(n);
 
-                % rotate force constants and bond vector
+                % rotate force constants and bond vector from irrep to bond
                 rij = vec_(xy); rij(abs(rij)<am_lib.eps) = 0;
                 vsk =  sym(D{i}(:,:,iq)) * permute(tb.vsk{ir},pp.Q{2}(:,iq)) * sym(D{j}(:,:,iq))';
                 
@@ -2596,6 +2708,7 @@ classdef am_lib
 
     end
         
+    
     % aux library
     
     methods (Static)%, Access = protected)
@@ -2922,6 +3035,7 @@ classdef am_lib
         end
 
     end
+    
     
     % general-purpopse functions
     
@@ -4203,6 +4317,7 @@ cmap = map_(n,cmap);
         
     end
     
+    
     % unix functions
     
     methods (Static)
@@ -4217,6 +4332,8 @@ cmap = map_(n,cmap);
         end
         
     end    
+    
+    
 end
 
 
