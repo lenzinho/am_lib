@@ -67,12 +67,12 @@ classdef am_lib
     % 
     
     properties (Constant)
-        usemex = true;
-        tiny = 1E-4; % precision of atomic coordinates
-        eps = 1E-8; % numerical precision
-        units_eV = 0.06465555; % sqrt( [eV/Ang^2] * [1/amu] ) --> 0.06465555 [eV]
-        units_THz = 98.22906;  % sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz=1/ps]
-        units_GHz = 98229.06;  % sqrt( [eV/Ang^2] * [1/amu] ) --> 98229.06 [GHz=1/fs]
+        usemex    = true;
+        tiny      = 1E-4; % precision of atomic coordinates
+        eps       = 1E-8; % numerical precision
+        units_eV  = 0.06465555; % sqrt( [eV/Ang^2] * [1/amu] ) --> 0.06465555 [eV]
+        units_THz = 98.22906;   % sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz=1/ps]
+        units_GHz = 98229.06;   % sqrt( [eV/Ang^2] * [1/amu] ) --> 98229.06 [GHz=1/fs]
     end
     
     methods (Static)
@@ -1457,19 +1457,32 @@ classdef am_lib
 
         function [bvk] = get_bvk_force_constants(bvk,uc,pp,md)
             % Extracts symmetry adapted force constants.
-            % Q: How different are force constants extracted with each method?
-            % A: Method 1:   7.2626    0.4073   -0.5706    0.0775   -0.0314   -5.3528   17.3444   -0.5830    0.2604   -0.4623
-            %    Method 2:   7.3286    0.4595   -0.5817    0.0429   -0.1441   -5.3000   17.3281   -0.5506    0.2480   -0.4367
-            %    How significant are these differences? They very subtly affect
-            %    the phonon dispersion (probably not enough to warrant one
-            %    method over the other and definately not as much is just
-            %    due to noise in the AIMD forces). 
+            % Q: How different are force constants extracted with each
+            %    method (before enforcing acoustic-sum rules)? 
+            % A: Method 1:   10.0033    0.4073   -0.5706    0.0775   -0.0314   -5.3528   16.0851   -0.5830    0.2604   -0.4623
+            %    Method 2:    9.8093    0.4595   -0.5817    0.0429   -0.1441   -5.3000   16.2163   -0.5506    0.2480   -0.4367
+            %    Method 3:    8.9932    0.2321   -0.4806   -0.1065   -0.0337   -4.9099   14.6953   -0.5217    0.6199   -0.2590
+            % Q: How significant are these force-constant differences? 
+            % A: Between methods 1 and 2 the phonon dispersion (probably
+            %    not enough to warrant one method over the other and
+            %    definately not as much is just due to noise in the AIMD
+            %    forces). R^2 are correlation coefficients for calculated
+            %    forces on atoms and AIMD forces on atoms for the different
+            %    methods:
+            %           METHOD     1         2          3
+            %              R^2     0.633     0.639      0.668
+            %      MATRIX SIZE     3*n*m     18*m*n     3*m*nFCs
+            %          TIME [s]    0.031     12.367     0.322
+            %      TIMES SLOWER    1x        1000x      10x
             % Q: How much memory and time does each method take?
-            % A: Method 1: needs to invert an [3n * m ] matrix
-            %    Method 2: needs to invert an [3m * 6n] matrix
+            % A: Method 1: needs to invert an [3n * m   ] matrix
+            %    Method 2: needs to invert an [3m * 6n  ] matrix
+            %    Method 3: needs to invert an [3m * nFCs] matrix
             %    n = number of pairs; m = number of equivalent atoms
+            %    The memory load for each method follows the trend:
+            %             METHOD 3 < METHOD 1 < METHOD 2
             %    Thus, Method 2, which incorporates intrinsic force
-            %    constant symmetries, requires 6x more memory than Method 1. 
+            %    constant symmetries, requires 6x more memory than Method 1 
 
             import am_lib.*
 
@@ -1477,7 +1490,7 @@ classdef am_lib
             u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
             f = matmul_( md.bas, md.force );
 
-            % choose a method
+            % USE METHOD 3, WHICH IS THE MOST ACCURATE.
             switch 3
                 case 1
                     % basic method using full 3x3 second-order tensor (ignores intrinsic force constant symmetry)
@@ -1552,14 +1565,11 @@ classdef am_lib
                         end
                     end
                 case 3
-                    % NOT WORKING YET
-                    % NOT WORKING YET
-                    % NOT WORKING YET - DOUBLE CHECK LOOPS and INDICES
-                    % NOT WORKING YET
-                    % method incorporating full intrinsic and crystalographic symmetries
+                    % Method incorporating full intrinsic and crystalographic symmetries 
+                    % Note that ASR are automatically enforced when this method is used!
                     % F [3m * 1] = - U [3m * nFcs] * FC [ nFCs * 1]: n pairs, m atoms ==> FC = - U \ F
                     % 
-                    % Q: How does are roto-inversions incorporated?
+                    % Q: How are roto-inversions incorporated?
                     % A: Check with:
                     %
                     %         % define input prep
@@ -1575,29 +1585,56 @@ classdef am_lib
                     %         % check with rotation
                     %         R*prep_(iR*u)*bvk.W{j}- equationsToMatrix(R*reshape(bvk.W{j}*c,3,3)*iR*u,c)
                     %
-
-                    prep_ = @(x) [x(1),x(2),x(3),0,0,0,0,0,0;0,0,0,x(1),x(2),x(3),0,0,0;0,0,0,0,0,0,x(1),x(2),x(3)];
-
-                    d = cellfun(@(x)size(x,2),bvk.W); E=cumsum(d); S=E-d+1; nFCs=max(E);
-
-                    n = 0;
-                    F = zeros(3*sum(pp.ncenters*md.nsteps),1);
-                    U = zeros(3*sum(pp.ncenters*md.nsteps),nFCs);
-                    for m = 1:pp.pc_natoms; for j = 1:pp.ncenters(m); for k = 1:md.nsteps
-                        n=n+1; np = [1:3]+3*(n-1); 
-                    for ipair = 1:pp.npairs(m)
-                        ir=pp.i{m}(ipair); mp = S(ir):E(ir);
-                        R =pp.Q{1}(1:3,1:3, pp.q{m}(ipair)); 
-                        iR=pp.Q{1}(1:3,1:3,pp.iq{m}(ipair));
-                        U(np,mp) = U(np,mp) + iR * prep_(R * double(u(1:3,pp.o{m}(ipair,j),k)) ) * bvk.W{ir};
-                    end
-                        F(np) = f(:,pp.c{m}(j),k);
-                    end; end; end
                     
+                    % the Z matrix factors out force constants leaving displacements
+                    Z = [1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0;
+                         0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0;
+                         0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1].';
+
+                    % initialize arrays 
+                    nFCs = sum(cellfun(@(x)size(x,2),bvk.W));
+                    F = zeros(3*sum(md.nsteps*pp.ncenters),1);
+                    U = zeros(3*sum(md.nsteps*pp.ncenters),nFCs);
+
+                    % record which shell FCs belong to
+                    s_id = repelem([1:bvk.nshells],cellfun(@(x)size(x,2),bvk.W));
+                    m_id = repelem([1:bvk.natoms],3*md.nsteps*pp.ncenters);
+
+                    % F [3m * 1] = - U [3m * nFcs] * FC [ nFCs * 1]: n pairs, m atoms ==> FC = - U \ F
+                    for m = 1:bvk.natoms
+                        F(m_id==m) = flatten_(f(:,pp.c{m},:));
+                    for s = 1:bvk.nshells
+                        ex_    = [pp.i{m}==s]; 
+                        npairs = sum(ex_);
+                        nFCs   = size(bvk.W{s},2);
+                        natoms = pp.ncenters(m)*md.nsteps; 
+
+                        % define array reshape functions
+                       ushp_ = @(X) reshape(X,3,  npairs,natoms);
+                        shp_ = @(X) reshape(X,3,9,npairs,natoms);
+                       fshp_ = @(X) reshape(X,3,    nFCs,natoms);
+
+                       % get rotation matrices
+                        R  = pp.Q{1}(1:3,1:3, pp.q{m}(ex_)); 
+                        iR = pp.Q{1}(1:3,1:3,pp.iq{m}(ex_));
+
+                        % get working matrix UW
+                        UW = ushp_(u(:,pp.o{m}(ex_,:),:));
+                        UW = matmul_(R,permute(UW,[1,4,2,3]));
+                        UW = shp_(matmul_(Z,UW));
+                        UW = shp_(matmul_(iR,UW));
+                        UW = fshp_(matmul_(sum(UW,3),bvk.W{s}));
+
+                        % construct U
+                        U(m_id==m,s_id==s) = reshape(permute(UW,[1,3,2]), 3*natoms, nFCs );
+                    end
+                    end
+
+                    % solve for force constants
                     fc = - U \ F;
                     
                     % save force constants
-                    for i = 1:bvk.nshells; bvk.fc{i} = fc(S(i):E(i)).'; end
+                    for s = 1:bvk.nshells; bvk.fc{s} = fc(s_id==s).'; end
             end
         end
 
@@ -1769,29 +1806,13 @@ classdef am_lib
                 end
             end
             
-            
-        prep_ = @(x) [x(1),x(2),x(3),0,0,0,0,0,0;0,0,0,x(1),x(2),x(3),0,0,0;0,0,0,0,0,0,x(1),x(2),x(3)];
-        d = cellfun(@(x)size(x,2),bvk.W); E=cumsum(d); S=E-d+1; nFCs=max(E);
-        n = 0;
-        F = zeros(3*sum(pp.ncenters*md.nsteps),1);
-        U = zeros(3*sum(pp.ncenters*md.nsteps),nFCs);
-        for m = 1:pp.pc_natoms; for j = 1:pp.ncenters(m); for k = 1:md.nsteps
-            n=n+1; np = [1:3]+3*(n-1); 
-        for ipair = 1:pp.npairs(m)
-            ir=pp.i{m}(ipair); mp = S(ir):E(ir);
-            R =pp.Q{1}(1:3,1:3, pp.q{m}(ipair)); 
-            iR=pp.Q{1}(1:3,1:3,pp.iq{m}(ipair));
-            U(np,mp) = U(np,mp) + iR * prep_(R * double(u(1:3,pp.o{m}(ipair,j),k)) ) * bvk.W{ir};
-        end
-        end; end; end
-        f_phi2 = reshape(U*[bvk.fc{:}].',3,uc.natoms,md.nsteps);
-            
             % plot correlation for dft vs bvk forces on atoms
             % [N,X,Y]=histcounts2(f_phi(:),f(:)); [Z{1:2}]=ndgrid(X(1:(end-1)),Y(1:(end-1))); contourf(Z{1},Z{2},log(N))
             h = scatter(f_phi(:),f(:),[],flatten_(repelem(permute(1:md.nsteps,[3,2,1]),3,md.natoms,1)),'.');
             maxis=max(abs(axis)); axis([-1 1 -1 1].*maxis); line([-1 1].*maxis,[-1 1].*maxis); 
             daspect([1 1 1]); box on; colormap(flipud(colormap('parula')));
-            xlabel('dft force [eV/Ang]'); ylabel('bvk force [eV/Ang]');  
+            xlabel('dft force [eV/Ang]'); ylabel('bvk force [eV/Ang]');            
+            title(sprintf('R^2 = %f',pcorr_(f_phi,f).^2)); 
         end
 
         function [T,KE,PE,q_sk] = plot_md_stats(uc,md,fbz,bvk)
@@ -1880,7 +1901,7 @@ classdef am_lib
             end
         end
 
-        
+
         % phonons (anharmonic)
 
         function [bvt] = get_bvt_model(it,pt)
@@ -1907,16 +1928,12 @@ classdef am_lib
             %         % get [x,y,z] flip/permutation operators
             %         a = reshape([1:27],3,3,3); p = perms(1:3).'; nps = size(p,2); F = zeros(27,27,nps); 
             %         for i = 1:nps; F(:,:,i) = sparse( flatten_(a), flatten_(permute(a,p(:,i))), ones(27,1), 27, 27); end
-            % 
             %         % enforce intrinsic symmetry (immaterial order of differentiation: c == c.')
             %         W = sum(F-eye(27),3);
-            % 
             %         % get linearly-independent nullspace and normalize to first nonzero element
             %         W=real(null(W)); W=frref_(W.').'; W(abs(W)<am_lib.eps)=0; W(abs(W-1)<am_lib.eps)=1; W=W./accessc_(W,findrow_(W.').');
-            % 
             %         % define parameters
             %         c = sym(sprintf('c_%%d%%d%%d',i),[3,3,3],'real'); c = c(findrow_(double(W).'));
-            % 
             %         % get symmetry adapted force constants
             %         phi = reshape( sym(W)*c(:), [3,3,3]);
             %
@@ -1925,7 +1942,7 @@ classdef am_lib
             %    produces as a scalar and is given in Einstein summation as 
             %    PHI(ijk) u1(i) u2(j) u3(k). Try it out with:
             %
-            %         % explicit: force F due to third-order force constants
+            %         % Explicit: force F due to third-order force constants
             %         A = rand(3,3,3); U = rand(3,1); W = rand(3,1); F = zeros(3,1);
             %         for m = 1:3
             %             for i = 1:3
@@ -1934,8 +1951,11 @@ classdef am_lib
             %             end
             %             end
             %         end
-            %         % NOTE: F == [ U.'*A(:,:,1)*W;  U.'*A(:,:,2)*W ; U.'*A(:,:,3)*W ]
-            %         % NOTE: F == matmul_(A,W).'*U;
+            %         % Equivalent formulations:
+            %         % F - [ U.'*A(:,:,1)*W;  U.'*A(:,:,2)*W ; U.'*A(:,:,3)*W ]
+            %         % F - matmul_(A,W).'*U
+            %         % F - reshape(A,9,3).'*flatten_(U*W.')
+            %         % F - squeeze(sum(sum((U*W.').*A,1),2))
             %
             %    This is equivalent to the product:
             %
@@ -2572,7 +2592,7 @@ classdef am_lib
 
             % step 2: [PM, V, ip2pp, and pt2it]
 
-                % get all possible triplets which have bond legnths below the cutoff 
+                % get all possible triplets for which every bond length is below the cutoff 
                 [Y{1:3}]=ndgrid(1:uc.natoms,1:uc.natoms,uc.p2u); x=[Y{3}(:),Y{2}(:),Y{1}(:)].'; ex_=true(1,size(x,2));
                 ex_(ex_) = normc_(uc2ws(uc.bas*(uc.tau(:,x(2,ex_))-uc.tau(:,x(1,ex_))),uc.bas))<cutoff;
                 ex_(ex_) = normc_(uc2ws(uc.bas*(uc.tau(:,x(3,ex_))-uc.tau(:,x(2,ex_))),uc.bas))<cutoff;
@@ -3651,7 +3671,7 @@ classdef am_lib
             x=x-repmat(0:k-1,size(x,1),1);
             x=x.';
         end
-
+        
         function [M, I] = permn_(V, N, K)
             % PERMN - permutations with repetition
             %   Using two input variables V and N, M = PERMN(V,N) returns all
@@ -3733,6 +3753,12 @@ classdef am_lib
                     M = V(I) ;
                 end
             end
+        end
+        
+        function [R] = pcorr_(A,B)
+            % pearson's correlation coefficient
+            xcor_ = @(A,B) numel(A)*A(:).'*B(:)-sum(A(:))*sum(B(:));
+            R = xcor_(A,B)/(sqrt(xcor_(A,A))*sqrt(xcor_(B,B)));
         end
         
         function [str] = verbatim_()
