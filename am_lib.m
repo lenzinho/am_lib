@@ -1575,9 +1575,7 @@ classdef am_lib
                     %         % check with rotation
                     %         R*prep_(iR*u)*bvk.W{j}- equationsToMatrix(R*reshape(bvk.W{j}*c,3,3)*iR*u,c)
                     %
-                    %
-                    
-                    
+
                     prep_ = @(x) [x(1),x(2),x(3),0,0,0,0,0,0;0,0,0,x(1),x(2),x(3),0,0,0;0,0,0,0,0,0,x(1),x(2),x(3)];
 
                     d = cellfun(@(x)size(x,2),bvk.W); E=cumsum(d); S=E-d+1; nFCs=max(E);
@@ -1591,7 +1589,7 @@ classdef am_lib
                         ir=pp.i{m}(ipair); mp = S(ir):E(ir);
                         R =pp.Q{1}(1:3,1:3, pp.q{m}(ipair)); 
                         iR=pp.Q{1}(1:3,1:3,pp.iq{m}(ipair));
-                        U(np,mp) = U(np,mp) + R * prep_(iR * u(1:3,pp.o{m}(ipair,j),k)) * bvk.W{ir};
+                        U(np,mp) = U(np,mp) + iR * prep_(R * double(u(1:3,pp.o{m}(ipair,j),k)) ) * bvk.W{ir};
                     end
                         F(np) = f(:,pp.c{m}(j),k);
                     end; end; end
@@ -1770,6 +1768,24 @@ classdef am_lib
                     f_phi(1:3,pp.c{m},j) = - phi{m} * reshape(u(:,pp.o{m},j), size(pp.o{m}).*[3,1]);
                 end
             end
+            
+            
+        prep_ = @(x) [x(1),x(2),x(3),0,0,0,0,0,0;0,0,0,x(1),x(2),x(3),0,0,0;0,0,0,0,0,0,x(1),x(2),x(3)];
+        d = cellfun(@(x)size(x,2),bvk.W); E=cumsum(d); S=E-d+1; nFCs=max(E);
+        n = 0;
+        F = zeros(3*sum(pp.ncenters*md.nsteps),1);
+        U = zeros(3*sum(pp.ncenters*md.nsteps),nFCs);
+        for m = 1:pp.pc_natoms; for j = 1:pp.ncenters(m); for k = 1:md.nsteps
+            n=n+1; np = [1:3]+3*(n-1); 
+        for ipair = 1:pp.npairs(m)
+            ir=pp.i{m}(ipair); mp = S(ir):E(ir);
+            R =pp.Q{1}(1:3,1:3, pp.q{m}(ipair)); 
+            iR=pp.Q{1}(1:3,1:3,pp.iq{m}(ipair));
+            U(np,mp) = U(np,mp) + iR * prep_(R * double(u(1:3,pp.o{m}(ipair,j),k)) ) * bvk.W{ir};
+        end
+        end; end; end
+        f_phi2 = reshape(U*[bvk.fc{:}].',3,uc.natoms,md.nsteps);
+            
             % plot correlation for dft vs bvk forces on atoms
             % [N,X,Y]=histcounts2(f_phi(:),f(:)); [Z{1:2}]=ndgrid(X(1:(end-1)),Y(1:(end-1))); contourf(Z{1},Z{2},log(N))
             h = scatter(f_phi(:),f(:),[],flatten_(repelem(permute(1:md.nsteps,[3,2,1]),3,md.natoms,1)),'.');
@@ -2398,6 +2414,23 @@ classdef am_lib
             %    accessc_(X.',MT(:,I(Qi))).'-XRef %   Qi  takes orbits to prototype
             %    accessc_(XRef.',MT(:,Qi)).'-X    % I(Qi) takes prototype to orbit
             %
+            % Q: How is pp organized?
+            % A: Check it out with the code:
+            %         
+            %         % select a primitive atom
+            %         m  = 1; 
+            %         % construct array containing positions of pairs for each equivalent atom
+            %         X  = reshape(uc.tau(:,pp.o{m}(:,:)),[3,size(pp.o{m})]);
+            %         % get reference atom in pair
+            %         X0 = permute(uc.tau(:,pp.c{m}),[1,3,2]);
+            %         % subtract reference and convert to [cart]
+            %         U  = matmul_(uc.bas , X-X0 );
+            %         % get rotations Rq which take bond -> irrep
+            %         Rq = pp.Q{1}(1:3,1:3,pp.q{m});
+            %         % apply rotations
+            %         UR = permute(matmul_(Rq,permute(U,[1,3,2])),[1,3,2]);
+            %         % translate to wigner-seitz cell
+            %         UR = reshape(uc2ws_mex(UR,uc.bas,am_lib.tiny),size(UR));
 
             import am_lib.*
 
