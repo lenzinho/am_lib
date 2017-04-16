@@ -473,16 +473,20 @@ classdef am_lib
             if nargout == 2; return; end
             
             % get seitz operators which leave the atomic basis invariant
-            S = zeros(4,4,nHs*nTs); S(4,4,:)=1; k=0;
+            S = zeros(4,4,nHs*nTs); S(4,4,:)=1; nSs=0;
             for i = 1:nHs; for j = 1:nTs
-                if check3_( X_(H(:,:,i)*pc.tau+T(:,j),pc.species) - X ); k=k+1; S(1:3,1:4,k)=[ H(:,:,i), T(:,j) ]; end
-            end; end; S = S(:,:,1:k); 
+                if check3_( X_(H(:,:,i)*pc.tau+T(:,j),pc.species) - X ); nSs=nSs+1; S(1:3,1:4,nSs)=[ H(:,:,i), T(:,j) ]; end
+            end; end; S = S(:,:,1:nSs); 
+        
+            % set identity first
             id = member_(flatten_(eye(4)),reshape(S,4^2,[])); S(:,:,[1,id])=S(:,:,[id,1]);
             
             if nargout == 3; return; end
 
-            % get point symmetries and set identity first
-            R  = reshape(uniquecol_( reshape(S(1:3,1:3,:),[9,k]) ),3,3,[]);
+            % get point symmetries
+            R  = reshape(uniquecol_( reshape(S(1:3,1:3,:),[9,nSs]) ),3,3,[]);
+            
+            % set identity first
             id = member_(flatten_(eye(3)),reshape(R,3^2,[])); R(:,:,[1,id])=R(:,:,[id,1]);
         end
 
@@ -912,7 +916,7 @@ classdef am_lib
             
             % build q_sk wave vector
             t = 2*pi*[0:(nsteps-1)]/(nsteps-1)/hw(mode); 
-            q_sk(bvk.nbands,nsteps) = 0; 
+            q_sk(bvk.nbranches,nsteps) = 0; 
             q_sk(mode,:) = amp * exp(1i*t(:)*hw(mode));
             
             % displace according to the phonon mode
@@ -1151,6 +1155,98 @@ classdef am_lib
             bzl = bzl_(recbas,n,nks,x,k);
         end
 
+        function [bz]         = get_dispersion(bvk,bz,flag)
+            % Get phonon and electron dispersions on bz.
+            %
+            % Q: Are the eigenvalues and eigenvectors the same at
+            %    symmetry-equivalent positions in reciprocal space?
+            % A: Eigenvalues, yes; eigenvectors are (to within a sign)
+            %    rotated by the same point symmetry relating the different
+            %    k-points. Check it out with:
+            %
+            %     % generate point symmetries [recp-frac]
+            %     [~,~,~,R] = get_symmetries(pc); nRs = size(R,3); R = permute(R,[2,1,3]);
+            %     % get orbit of a rank k point
+            %     k = matmul_(R,rand(3,1)); nks = size(k,2); 
+            %     % get eigenvectors and eigenvalues at each orbit point
+            %     for i = 1:nks
+            %     input = num2cell([bvk.fc{:},(pc.bas.'\k(:,i)).',bvk.mass]); % [cart]
+            %     [U(:,:,i),hw(:,i)] = eig( force_hermiticity_(bvk.D(input{:})) ,'vector');
+            %     end
+            % 
+            %     % covert symmetries [recp-frac] -> [recp-cart]
+            %     sym_rebase_ = @(B,R) matmul_(matmul_(B,R),inv(B));
+            %     R_cart = sym_rebase_(inv(pc.bas).',R);
+            % 
+            %     % rotate the first eigenvector and compare with other kpoints
+            %     X = matmul_( blkdiag_(R_cart,R_cart) ,  U(:,1,1) );
+            %     abs(X) - abs(squeeze(U(:,1,:))) < am_lib.eps
+            % 
+            %     % compare eigenvalues
+            %     hw-hw(:,1) < am_lib.eps
+            %
+
+            
+            import am_lib.* 
+            
+            fprintf(' ... computing dispersion '); tic; 
+            switch lower(strtrim(flag))
+                case 'electron'
+
+                    % get eigenvalues
+                    bz.nbands = tb.nbands; bz.E = zeros(tb.nbands,bz.nks); bz.V = zeros(tb.nbands,tb.nbands,bz.nks);
+                    for i = 1:bz.nks
+                        % define input ...
+                        input = num2cell([tb.vsk{:},[bz.recbas*bz.k(:,i)].']);
+                        % ... and evaluate (V are column vectors)
+                        [bz.V(:,:,i),bz.E(:,i)] = eig(  force_hermiticity_(tb.H(input{:})) ,'vector');
+                        % sort energies
+                        [bz.E(:,i),inds]=sort(bz.E(:,i)); bz.V(:,:,i)=bz.V(:,inds,i);
+                    end
+                    
+                case 'phonon'
+            
+                    % get eigenvalues
+                    bz.nbranches = bvk.nbranches; bz.hw = zeros(bz.nbranches,bz.nks); bz.U = zeros(bz.nbranches,bz.nbranches,bz.nks);
+                    for i = 1:bz.nks
+                        % define input ...
+                        % input = num2cell([bvk.fc{:},bz.k(:,i).',bvk.mass]); % [pc-frac]
+                        input = num2cell([bvk.fc{:},(bz.recbas*bz.k(:,i)).',bvk.mass]); % [cart]
+                        % ... and evaluate (U are column vectors)
+                        [bz.U(:,:,i),bz.hw(:,i)] = eig( force_hermiticity_(bvk.D(input{:})) ,'vector');
+                        % correct units
+                        bz.hw(:,i) = sqrt(real(bz.hw(:,i))) * am_lib.units_eV;
+                        % sort energies
+                        [bz.hw(:,i),inds]=sort(bz.hw(:,i)); bz.U(:,:,i)=bz.U(:,inds,i);
+                    end
+            end
+            fprintf('(%.f secs)\n',toc);
+        end
+        
+        function plot_dispersion(bvk,bzp,flag)
+            
+            import am_lib.*
+            
+            % get phonon band structure along path
+            bzp = get_dispersion(bvk,bzp,flag);
+            
+            % and plot the results
+            fig_ = @(h)       set(h,'color','white');
+            axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
+            fig_(gcf);
+            
+            switch lower(strtrim(flag))
+                case 'electron'
+                    plot(bzp.x,sort(bzp.E),'-k');
+                    axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [eV]'); xlabel('Wavevector k');
+                case 'phonon'
+                    plot(bzp.x,sort(real(bzp.hw)*1E3),'-k',bzp.x,-sort(abs(imag(bzp.hw))),':r');
+                    axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [meV]'); xlabel('Wavevector k');
+            end
+            
+
+        end
+        
         function plot_bz(fbz)
             
             import am_lib.*
@@ -1292,14 +1388,14 @@ classdef am_lib
             % create bvk structure
             bvk_ = @(pp,ip,sav) struct('units','cart','bas',pp.bas2pc*pp.bas, ...
                 'symb',{pp.symb},'mass',pp.mass,'species',pp.species(pp.p2u),'cutoff',pp.cutoff,'natoms',pp.pc_natoms,...
-                'nbands',3*pp.pc_natoms,'nshells',size(sav.W,2),'W',{sav.W},'phi',{sav.phi},'d',ip.d,'v',ip.v,'xy',ip.xy);
+                'nbranches',3*pp.pc_natoms,'nshells',size(sav.W,2),'W',{sav.W},'phi',{sav.phi},'d',ip.d,'v',ip.v,'xy',ip.xy);
             bvk = bvk_(pp,ip,sav);
 
             % [cart] define function to get bond vector
             vec_ = @(xy) uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),pp.bas);
             
             % construct symbolic dynamical matrix
-            D=sym(zeros(bvk.nbands)); kvec=sym('k%d',[3,1],'real'); mass=sym('m%d',[1,numel(pp.i2u)],'positive');
+            D=sym(zeros(bvk.nbranches)); kvec=sym('k%d',[3,1],'real'); mass=sym('m%d',[1,numel(pp.i2u)],'positive');
             for p = 1:pp.pc_natoms
             for j = 1:pp.npairs(p)
                 % get indicies and already permute xy,mn,mp,np if necessary by iq
@@ -1367,9 +1463,9 @@ classdef am_lib
                     %         % get rotations and inverse
                     %         R=pp.Q{1}(1:3,1:3,pp.q{1}(i)); iR=pp.Q{1}(1:3,1:3,pp.iq{1}(i));
                     %         % check without rotation
-                    %         prep_(u)*bvk.W{j}- equationsToMatrix(reshape(bvk.W{j}*c,3,3)*u,c)
+                    %         prep_(u)*bvk.W{j} - equationsToMatrix(reshape(bvk.W{j}*c,3,3)*u,c)
                     %         % check with rotation
-                    %         R*prep_(iR*u)*bvk.W{j}- equationsToMatrix(R*reshape(bvk.W{j}*c,3,3)*iR*u,c)
+                    %         R*prep_(iR*u)*bvk.W{j} - equationsToMatrix(R*reshape(bvk.W{j}*c,3,3)*iR*u,c)
                     %
                     
                     % get U matrix and indexing I
@@ -1380,7 +1476,7 @@ classdef am_lib
                     
                     % save force constants
                     s_id = repelem([1:bvk.nshells],cellfun(@(x)size(x,2),bvk.W));
-                    for s = 1:bvk.nshells; bvk.fc{s} = fc(s_id==s).'; end
+                    for s = 1:bvk.nshells; bvk.fc{s} = double(fc(s_id==s).'); end
                 case 2
                     % basic method using full 3x3 second-order tensor (ignores intrinsic force constant symmetry)
                     % F [3 * m] = - FC [3 * 3n] * U [3n * m]: n pairs, m atoms ==> FC = - F / U
@@ -1410,27 +1506,6 @@ classdef am_lib
                         end
                     end
             end
-        end
-
-        function [bz]         = get_bvk_dispersion(bvk,bz)
-            
-            import am_lib.* 
-            
-            % get eigenvalues
-            bz.nbands = bvk.nbands; bz.hw = zeros(bz.nbands,bz.nks); bz.U = zeros(bz.nbands,bz.nbands,bz.nks);
-            fprintf(' ... computing dispersion '); tic; 
-            for i = 1:bz.nks
-                % define input ...
-                % input = num2cell([bvk.fc{:},bz.k(:,i).',bvk.mass]); % [pc-frac]
-                input = num2cell([bvk.fc{:},(bz.recbas*bz.k(:,i)).',bvk.mass]); % [cart]
-                % ... and evaluate (U are column vectors)
-                [bz.U(:,:,i),bz.hw(:,i)] = eig( force_hermiticity_(bvk.D(input{:})) ,'vector');
-                % correct units
-                bz.hw(:,i) = sqrt(real(bz.hw(:,i))) * am_lib.units_eV;
-                % sort energies
-                [bz.hw(:,i),inds]=sort(bz.hw(:,i)); bz.U(:,:,i)=bz.U(:,inds,i);
-            end
-            fprintf('(%.f secs)\n',toc);
         end
 
         function [md]         = run_bvk_md(bvk,pp,uc,dt,nsteps,Q,T)
@@ -1522,7 +1597,7 @@ classdef am_lib
             import am_lib.*
             
             bvk_ = @(bvk,mass,fc) struct('units','cart','bas',bvk.bas,'recbas',bvk.recbas,'natoms',bvk.natoms,'mass',mass, ...
-                'nshells',bvk.nshells,'W',{bvk.W},'shell',{bvk.shell},'nbands',bvk.nbands,'D',bvk.D,'fc',{fc});
+                'nshells',bvk.nshells,'W',{bvk.W},'shell',{bvk.shell},'nbranches',bvk.nbranches,'D',bvk.D,'fc',{fc});
 
             fc_interp = nlinspace( [bvk_1.fc{:}] , [bvk_2.fc{:}] , n );
             mu_interp = nlinspace( [bvk_1.mass]  , [bvk_2.mass]  , n );
@@ -1535,22 +1610,6 @@ classdef am_lib
                 for j = 1:numel(E); fc{j} = fc_interp(S(j):E(j),i).'; end
                 bvk(i) = bvk_(bvk_1,mu_interp(:,i).',fc);
             end
-        end
-
-        function plot_bvk_dispersion(bvk,bzp)
-            
-            import am_lib.*
-            
-            % get phonon band structure along path
-            bzp = get_bvk_dispersion(bvk,bzp);
-
-            % and plot the results
-            fig_ = @(h)       set(h,'color','white');
-            axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
-
-            fig_(gcf);
-            plot(bzp.x,sort(real(bzp.hw)*1E3),'-k',bzp.x,-sort(abs(imag(bzp.hw))),':r');
-            axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [meV]'); xlabel('Wavevector k');
         end
 
         function plot_bvk_vs_aimd(uc,md,bvk,pp,bvt,pt)
@@ -1629,7 +1688,7 @@ classdef am_lib
                                        1:md.nsteps,KE(:,2),'.',1:md.nsteps,PE(:,2),'.',1:md.nsteps,KE(:,2)+PE(:,2),'.');
                                 legend('KE','PE','KE+PE','nKE','nPE','nKE+nPE');
                                 xlabel('time step'); ylabel('energy [eV]'); axis tight;
-                subplot(3,4,4); plot3(repelem([1:md.nsteps].',1,fbz.nks*bvk.nbands),real(q_sk.*hw(:)).',real(p_sk).'); 
+                subplot(3,4,4); plot3(repelem([1:md.nsteps].',1,fbz.nks*bvk.nbranches),real(q_sk.*hw(:)).',real(p_sk).'); 
                                 view([1 0 0]); box on; ax=axis; maxax=max(abs(ax(3:6))); axis([ax(1:2),[-1 1 -1 1].*maxax]); daspect([md.nsteps/maxax 1 1]);
                 else
                 subplot(3,1,1); plot(1:md.nsteps,KE(:,1),'-',1:md.nsteps,KE(:,2),'o',1:md.nsteps,KE(:,1)+PE(:,1),'^');
@@ -2053,20 +2112,6 @@ classdef am_lib
 
         end
 
-        function [bz]         = get_tb_dispersion(tb,bz)
-            
-            import am_lib.* 
-            
-            % get eigenvalues
-            bz.E = zeros(tb.nbands,bz.nks); bz.V = zeros(tb.nbands,tb.nbands,bz.nks); h = zeros(1,bz.nks);
-            for i = 1:bz.nks
-                % define input ...
-                input = num2cell([tb.vsk{:},[bz.recbas*bz.k(:,i)].']);
-                % ... and evaluate (V are column vectors)
-                [bz.V(:,:,i),bz.E(:,i)] = eig(  force_hermiticity_(tb.H(input{:})) ,'vector');
-            end
-        end
-
         function [ibz]        = get_nesting(tb,ibz,bzp,Ef,degauss)
             % Ef, fermi energy
             % degauss, degauss = 0.04 61x61x61 kpoint mesh
@@ -2148,25 +2193,6 @@ classdef am_lib
             semilogy(x,real(nk),'-'); axs_(gca,qt,ql); axis tight; 
             ylabel('Nesting [a.u.]'); set(gca,'YTickLabel',[]); xlabel('Wavevector k'); 
 
-        end
-
-        function plot_tb_dispersion(tb,bzp)
-            % % plot dispersion along high symmetry path
-            % path={'hex','fcc-short','fcc'}; path=path{3};
-            % plot_tb_dispersion(tb,get_bz_path(pc,31,path));
-            
-            import am_lib.*
-            
-            % get phonon band structure along path
-            bzp = get_tb_dispersion(tb,bzp);
-
-            % and plot the results
-            fig_ = @(h)       set(h,'color','white');
-            axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
-
-            fig_(gcf);
-            plot(bzp.x,sort(bzp.E),'-k');
-            axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [eV]'); xlabel('Wavevector k');
         end
         
         function get_nesting_vs_ef()
@@ -2366,6 +2392,7 @@ classdef am_lib
             sym_rebase_ = @(B,S) [[ matmul_(matmul_(B,S(1:3,1:3,:)),inv(B)), ...
                 reshape(matmul_(B,S(1:3,4,:)),3,[],size(S,3))]; S(4,1:4,:)];
             Q{1} = sym_rebase_(uc.bas2pc*uc.bas,Q{1});
+            
             % correct rounding errors in cart
             for i = 1:numel(Q{1}); for wdv = [0,1,.5,sqrt(3)/2]
                 if abs(abs(Q{1}(i))-wdv)<am_lib.tiny; Q{1}(i)=wdv*sign(Q{1}(i)); end
@@ -2904,7 +2931,7 @@ classdef am_lib
             %  
             % Use the expanded eigenvectors to convert normal phonon coordinates to
             % displacements and velocities (vectorized Wallace Eq. 10.41, p. 113): 
-            % U = q2u [ 1:3 * uc.natoms , bvk.nbands * ibz.nks ]  * q_ks
+            % U = q2u [ 1:3 * uc.natoms , bvk.nbranches * ibz.nks ]  * q_ks
             %
             % Note: Hermitian matrices eigendecomposed as A = U E U* for 
             % a unitary matrix U and eigenvalues E -- meaning: 
@@ -2980,16 +3007,16 @@ classdef am_lib
             % expand primitive eigenvectors to unit cell
             % NOTE: exp in must ABSTOLUTELY be positive, i.e. +2i*pi and NOT -2i*pi
             u2p = flatten_([1:3].'+3*(uc.u2p-1));
-            U = reshape(bz.U(u2p,:,:),3*uc.natoms,bvk.nbands*bz.nks);
-            E = repelem(exp(2i*pi*(uc.tau2pc*G_(uc.tau)).'*bz.k),3,bvk.nbands);
+            U = reshape(bz.U(u2p,:,:),3*uc.natoms,bvk.nbranches*bz.nks);
+            E = repelem(exp(2i*pi*(uc.tau2pc*G_(uc.tau)).'*bz.k),3,bvk.nbranches);
             q2u = U .* E * sqrt(bvk.natoms/uc.natoms);
             
             % % explicit
-            % q2u = zeros(uc.natoms,bvk.nbands*bz.nks);
+            % q2u = zeros(uc.natoms,bvk.nbranches*bz.nks);
             % for i = 1:uc.natoms
             %     y = 0;  x = i; xp = [1:3] + 3*(x-1); 
             %     m = uc.u2p(x); mp = [1:3] + 3*(m-1);
-            % for j = 1:bz.nks; for k = 1:bvk.nbands; y = y+1;
+            % for j = 1:bz.nks; for k = 1:bvk.nbranches; y = y+1;
             %     q2u(xp,y) = bz.U(mp,k,j) * exp(-2i*pi*dot(uc.tau2pc*G_(uc.tau(:,x)),bz.k(:,j))) * sqrt(bvk.natoms/uc.natoms);
             % end;end
             % end
@@ -3458,6 +3485,14 @@ classdef am_lib
             end
         end
 
+        function [C] = blkdiag_(A,B)
+            n = size(A); m = size(B);
+            C = zeros(n(1)+m(1),n(2)+m(2),n(3));
+            for i = 1:n(3)
+                C(:,:,i) = blkdiag(A(:,:,i),B(:,:,i));
+            end            
+        end
+        
         function [C] = osum_(A,B,i)
             % define outer sum of two vector arrays
             % 
