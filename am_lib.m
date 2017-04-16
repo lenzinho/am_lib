@@ -78,52 +78,58 @@ classdef am_lib
         default_force_position = 'infile.force_position';
     end
     
+    % program level
     
     methods (Static)
         
-        % program-level routines
-        
-        function [uc,pc,md,bvk,pp,bvt,pt] = get_phonons(varargin)
+        function [uc,pc,md,bvk,pp,bvt,pt] = get_phonons(opts)
+            % opts.continue=true;
+            % opts.poscar='POSCAR';
+            % opts.force_position='infile.force_position';
+            % opts.cutoff2=3;
+            % opts.cutoff3=3; % ignored if set to zero
+            % opts.dt=2; %fs 
             
             import am_lib.*
-            
-            % parse input
-            p = inputParser; 
-            addParameter(p,'poscar',am_lib.default_poscar);
-            addParameter(p,'force_position',am_lib.default_force_position);
-            addParameter(p,'cutoff2',[]);
-            addParameter(p,'cutoff3',[]);
-            addParameter(p,'dt',[]);
-            parse(p,varargin{:});
-            
+
             % check inputs
-            for f = {p.Results.poscar,p.Results.force_position}
+            for f = {opts.poscar,opts.force_position}
             if ~exist(f{:},'file'); error('File not found: %s',f{:}); end
             end
-            
-            % get cells
-            [uc,pc] = get_cells(p.Results.poscar); 
 
-            % load md
-            [md] = load_md(uc,p.Results.force_position,p.Results.dt);
+            % file name to save to/load from
+            sname = sprintf('%s_%s_%0.2f_%0.2f.mat',...
+                opts.poscar, opts.force_position, opts.cutoff2, opts.cutoff3);
+            if and(exist(sname,'file'),opts.continue); load(sname); else
 
-            % get both pairs and triplets?
-            if isempty(p.Results.cutoff3)
-                % get pair shells
-                [bvk,pp] = get_bvk(pc,uc,md,p.Results.cutoff2);
-                % plot correlation for dft vs bvk forces on atoms
-                figure('color','white'); plot_bvk_vs_aimd(uc,md,bvk,pp)
-            else
-                % get pair shells
-                [bvk,pp] = get_bvk(pc,uc,md,p.Results.cutoff2);
-                % get triplet shells
-                [bvt,pt] = get_bvt(pc,uc,md,p.Results.cutoff3,bvk,pp);
-                % plot correlation for dft vs bvk forces on atoms
-                figure('color','white'); plot_bvk_vs_aimd(uc,md,bvk,pp,bvt,pt)
+                % get cells
+                [uc,pc] = get_cells(opts.poscar); 
+                % load md
+                [md] = load_md(uc,opts.force_position,opts.dt);
+                % get both pairs and triplets?
+                if opts.cutoff3==0
+                    % get pair shells
+                    [bvk,pp] = get_bvk(pc,uc,md,opts.cutoff2);
+                    % get triplet shells
+                    bvt = []; pt = [];
+                    % plot correlation for dft vs bvk forces on atoms
+                    figure('color','white'); plot_bvk_vs_aimd(uc,md,bvk,pp); drawnow;
+                else
+                    % get pair shells
+                    [bvk,pp] = get_bvk(pc,uc,md,opts.cutoff2);
+                    % get triplet shells
+                    [bvt,pt] = get_bvt(pc,uc,md,opts.cutoff3,bvk,pp);
+                    % plot correlation for dft vs bvk forces on atoms
+                    figure('color','white'); plot_bvk_vs_aimd(uc,md,bvk,pp,bvt,pt); drawnow;
+                end
+                % save results
+                save(sname,'uc','pc','md','bvk','pp','bvt','pt');
             end
         end
         
     end
+    
+    % core
     
     methods (Static)
 
@@ -208,29 +214,32 @@ classdef am_lib
             end
         end
 
-        function [dr,bz] = load_vasp_eigenval(fname)
+        function [dft]   = load_eigenval(fname,Ef)
             fid=fopen(fname);
             % skip first five lines
             for i = 1:5; fgetl(fid); end
             buffer = strsplit(strtrim(fgetl(fid)));
-            dr.nelecs = sscanf(buffer{1},'%i');
-            bz.nks    = sscanf(buffer{2},'%i');
-            dr.nbands = sscanf(buffer{3},'%i');
-            for i = 1:bz.nks
+            dft.nelecs = sscanf(buffer{1},'%i');
+            dft.nks    = sscanf(buffer{2},'%i');
+            dft.nbands = sscanf(buffer{3},'%i');
+            for i = 1:dft.nks
                 % skip line
                 fgetl(fid);
                 % get kpnts
                 buffer = strsplit(strtrim(fgetl(fid)));
-                bz.k(1,i) = sscanf(buffer{1},'%f');
-                bz.k(2,i) = sscanf(buffer{2},'%f');
-                bz.k(3,i) = sscanf(buffer{3},'%f');
+                dft.k(1,i) = sscanf(buffer{1},'%f');
+                dft.k(2,i) = sscanf(buffer{2},'%f');
+                dft.k(3,i) = sscanf(buffer{3},'%f');
                 % loop over bands
-                for j = 1:dr.nbands
+                for j = 1:dft.nbands
                     buffer = strsplit(strtrim(fgetl(fid)));
-                    dr.E(j,i)  = sscanf(buffer{2},'%f');
+                    dft.E(j,i)  = sscanf(buffer{2},'%f');
                 end
-                dr.E(:,i) = sort(dr.E(:,i));
+                dft.E(:,i) = sort(dft.E(:,i));
             end
+            % correct fermi energy
+            dft.E = dft.E - Ef; 
+            % close file
             fclose(fid);
         end
 
@@ -434,7 +443,7 @@ classdef am_lib
         
         % symmetry
 
-        function [T,H,S,R] = get_symmetries(pc)
+        function [T,H,S,R]    = get_symmetries(pc)
             % T = all possible translations which restore the crystal to iteself
             % H = holohogries (all possible rotations which restore the bravais lattice onto iteself)
             % S = space group symmetries
@@ -477,7 +486,7 @@ classdef am_lib
             id = member_(flatten_(eye(3)),reshape(R,3^2,[])); R(:,:,[1,id])=R(:,:,[id,1]);
         end
 
-        function [MT,E,I]= get_multiplication_table(S)
+        function [MT,E,I]     = get_multiplication_table(S)
             % get multiplication table: S(:,:,i)*S(:,:,j) = S(:,:,MT(i,j)
             
             import am_lib.*
@@ -486,29 +495,39 @@ classdef am_lib
                 % seitz operator (applies mod to translational components)
                 md_ = @(X) [X(1:12,:);mod_(X(13:15,:));X(16:end,:)];
                 rs_ = @(X) md_(reshape(X,4^2,[]));
-                
-                nSs=size(S,3);
+                nSs = size(S,3);
 
-                MT = reshape( member_( rs_(matmul_(S,permute(S,[1,2,4,3]))) , rs_(S) ) , nSs,nSs);
+                MT = reshape( member_( rs_(matmulp_(S,permute(S,[1,2,4,3]))) , rs_(S) ) , nSs,nSs);
                 
             elseif size(S,1) == 3 
                 % point operator
-                rs_ = @(X)     reshape(X,3^2,[]);
-                                
-                nSs=size(S,3);
+                rs_ = @(X) reshape(X,3^2,[]);
+                nSs = size(S,3);
 
-                MT = reshape( member_( rs_(matmul_(S,permute(S,[1,2,4,3]))) , rs_(S) ) , nSs,nSs);
+                MT = reshape( member_( rs_(matmulp_(S,permute(S,[1,2,4,3]))) , rs_(S) ) , nSs,nSs);
                 
             elseif size(S,1) == 1
                 % seitz operator combined with permutation (represented as a two-part cell)
-                md_ = @(X) [X(1:12,:);mod_(X(13:15,:));X(16:end,:)];
-                rs_ = @(X) md_(reshape(X,4^2,[]));
-                                
-                nSs=size(S{1},3);
-                ref = [rs_(S{1});reshape(S{2},size(S{2},1),[])];
-                opr = [rs_(matmul_(S{1},permute(S{1},[1,2,4,3]))); reshape(operm_(S{2},S{2}),size(S{2},1),[])];
+                if     size(S{1},1) == 4
+                    % seitz operator (applies mod to translational components)
+                    md_ = @(X) [X(1:12,:);mod_(X(13:15,:));X(16:end,:)];
+                    rs_ = @(X) md_(reshape(X,4^2,[]));
+                    nSs = size(S{1},3);
+                    
+                    ref = [rs_(S{1});reshape(S{2},size(S{2},1),[])];
+                    opr = [rs_(matmulp_(S{1},permute(S{1},[1,2,4,3]))); reshape(operm_(S{2},S{2}),size(S{2},1),[])];
 
-                MT = reshape( member_( opr , ref ) , nSs,nSs);
+                    MT = reshape( member_( opr , ref ) , nSs,nSs);
+                elseif size(S{1},1) == 3
+                    % point operator
+                    rs_ = @(X) reshape(X,3^2,[]);
+                    nSs = size(S{1},3);
+                    
+                    ref = [rs_(S{1});reshape(S{2},size(S{2},1),[])];
+                    opr = [rs_(matmulp_(S{1},permute(S{1},[1,2,4,3]))); reshape(operm_(S{2},S{2}),size(S{2},1),[])];
+
+                    MT = reshape( member_( opr , ref ) , nSs,nSs);
+                end
             end
             
             if any(MT(:)==0)
@@ -609,7 +628,7 @@ classdef am_lib
             end
         end
         
-        function pg_code = identify_pointgroup(R)
+        function pg_code      = identify_pointgroup(R)
             % 
             % Point symmetries in fractional coordinates so that they are nice integers which can be easily classified.
             %    element:         e    i  c_2  c_3  c_4  c_6  s_2  s_6  s_4  s_3
@@ -696,7 +715,7 @@ classdef am_lib
             end
         end
 
-        function pg_name = decode_pg(pg_code)
+        function pg_name      = decode_pg(pg_code)
             % point group dataset
             pg={'c_1' ,'s_2' ,'c_2' ,'c_1h','c_2h','d_2' ,'c_2v','d_2h', ...
                 'c_3' ,'s_6' ,'d_3' ,'c_3v','d_3d','c_4' ,'s_4' ,'c_4h', ...
@@ -706,7 +725,7 @@ classdef am_lib
             pg_name = pg{pg_code};
         end
         
-        function brv_name = decode_holohodry(pg_code)
+        function brv_name     = decode_holohodry(pg_code)
             % point group dataset
             brav={'triclinic','','','','monoclinic','','','orthorhombic', ...
                   '','','','','trigonal','','','','','','','tetragonal',...
@@ -772,7 +791,7 @@ classdef am_lib
             n=round(sum(abs(B),1)); [Y{3:-1:1}]=ndgrid(1:n(1),1:n(2),1:n(3)); nLs=prod(n); L=reshape(cat(3+1,Y{:})-1,[],3).'; 
 
             % expand atoms, coordinates supercell fractional, and reduce to primitive supercell
-            X=uniquecol_([ reshape(repmat([1:pc.natoms],nLs,1),1,[]); mod_(inv(B)*osum_(L,pc.tau)) ]);
+            X=uniquecol_([ reshape(repmat([1:pc.natoms],nLs,1),1,[]); mod_(inv(B)*osum_(L,pc.tau,2)) ]);
 
             % create mapping
             u2p = X(1,:); [~,p2u]=unique(u2p); p2u=p2u(:).';
@@ -1013,14 +1032,10 @@ classdef am_lib
         
         % brillouin zones
 
-        function [fbz,ibz]     = get_zones(pc,n,flags)
+        function [fbz,ibz]    = get_zones(pc,n)
             
             import am_lib.*
-
-            % continue earlier calc?
-            sfile = sprintf('%s','am_zones.mat');
-            if and(strfind(flags,'continue'),exist(sfile,'file')); load(sfile); return; end 
-
+            
             % get full brillouin zone
             [fbz] = get_fbz(pc,n);
 
@@ -1030,12 +1045,9 @@ classdef am_lib
             % save mapping to zones
             fbz.f2i = f2i; fbz.i2f = i2f;
             ibz.i2f = i2f; ibz.f2i = f2i;
-
-            % save
-            save(sfile,'fbz','ibz','i2f','f2i');
         end
         
-        function [bzp]         = get_bz_path(pc,n,brav)
+        function [bzp]        = get_bz_path(pc,n,brav)
 
             import am_lib.*
             
@@ -1097,7 +1109,7 @@ classdef am_lib
             end
         end
         
-        function [bzs]         = get_bz_surf(pc,n,vy,vx)
+        function [bzs]        = get_bz_surf(pc,n,vy,vx)
             % bzs=get_bz_surf(pc,[101,101],[1;0;0],[0;1;0]);
             % bzs=get_bvk_dispersion(bvk,bzs);
             % plot_bz_surf(bzs,1)
@@ -1117,7 +1129,7 @@ classdef am_lib
             bzs = bzs_(recbas,n,nks,k);
         end
 
-        function [bzl]         = get_bz_line(pc,n,vs,ve)
+        function [bzl]        = get_bz_line(pc,n,vs,ve)
             % surf: vs and ve are the start and end vectors in cart
             
             import am_lib.*
@@ -1221,31 +1233,25 @@ classdef am_lib
             hold off; daspect([1 1 1]); box on;
         end
         
-        
+
         % phonons (harmonic)
 
-        function [bvk,pp] = get_bvk(pc,uc,md,cutoff)
-            % for paper:
-            % cutoff = 5; % Angstroms 
-            % fname = 'infile.force_position.4.00-300'
+        function [bvk,pp]     = get_bvk(pc,uc,md,cutoff)
             
             import am_lib.*
 
             % get irreducible shells
-            fprintf(' ... solving for pairs'); tic;
+            fprintf(' ... identifying pairs '); tic;
             [bvk,pp] = get_pairs(pc,uc,cutoff);
-            fprintf(' (%.f secs)\n',toc);
-            
-            % [cart] print shell results
-            print_pairs(uc,pp)
+            fprintf('(%.f secs)\n',toc);
             
             % force constant model
-            fprintf(' ... solving for symbolic force constants and dynamical matrix'); tic;
+            fprintf(' ... determining harmonic force constant interdependancies and dynamical matrix '); tic;
             bvk = get_bvk_model(bvk,pp,uc);
-            fprintf(' (%.f secs)\n',toc);
+            fprintf('(%.f secs)\n',toc);
             
             % get force constants
-            fprintf(' ... solving for force constants '); tic;
+            fprintf(' ... solving for harmonic force constants '); tic;
             bvk = get_bvk_force_constants(bvk,uc,pp,md);
             fprintf('(%.f secs)\n',toc);
 
@@ -1254,8 +1260,8 @@ classdef am_lib
             bvk = set_bvk_acoustic_sum_rules(bvk,pp);
             fprintf('(%.f secs)\n',toc);
         end
-
-        function [bvk] = get_bvk_model(ip,pp,uc)
+ 
+        function [bvk]        = get_bvk_model(ip,pp,uc)
             
             import am_lib.*
 
@@ -1320,39 +1326,7 @@ classdef am_lib
             bvk.D = matlabFunction(D);
         end
 
-        function [bvk] = set_bvk_acoustic_sum_rules(bvk,pp)
-
-            import am_lib.*
-
-            % build force constants
-            phi = zeros(3,3,bvk.nshells);
-            for i = 1:bvk.nshells; phi(:,:,i) = reshape(bvk.W{i}*bvk.fc{i}.',3,3); end
-
-            % enforce acoustic sum rule
-            for i = 1:bvk.nshells
-                % check if it is a 0-th neighbor shell
-                if bvk.xy(1,i)==bvk.xy(2,i)
-                    % get index of primitive cell atom corresponding to this shell
-                    m = pp.u2p(bvk.xy(1,i));
-                    % get self forces
-                    asr = zeros(3,3,pp.npairs(m));
-                    for j = 1:pp.npairs(m)
-                        % get irrep->orbit symmetry
-                        iq = pp.iq{m}(j,1); q = pp.q{m}(j,1); 
-                        % rotate force constants from irrep to orbit
-                        asr(:,:,j) = permute( pp.Q{1}(1:3,1:3,iq) * phi(:,:,pp.i{m}(j)) * pp.Q{1}(1:3,1:3,q), pp.Q{2}(:,iq) );
-                    end
-                    % impose asr on self-forces
-                    asr = -sum(asr(:,:,pp.o{m}(:,1)~=pp.c{m}(1)),3);
-                    % solve for symmetry-adapted force constants
-                    A = double(bvk.W{i}); B = reshape(asr,[],1);
-                    % get force constants as row vectors
-                    bvk.fc{i} = reshape( A \ B , 1, []); 
-                end
-            end
-        end
-
-        function [bvk] = get_bvk_force_constants(bvk,uc,pp,md)
+        function [bvk]        = get_bvk_force_constants(bvk,uc,pp,md)
             % Extracts symmetry adapted force constants.
             %
             % Q: What is the difference of these methods? 
@@ -1438,12 +1412,12 @@ classdef am_lib
             end
         end
 
-        function [bz]  = get_bvk_dispersion(bvk,bz)
+        function [bz]         = get_bvk_dispersion(bvk,bz)
             
             import am_lib.* 
             
             % get eigenvalues
-            bz.hw = zeros(bvk.nbands,bz.nks); bz.U = zeros(bvk.nbands,bvk.nbands,bz.nks);
+            bz.nbands = bvk.nbands; bz.hw = zeros(bz.nbands,bz.nks); bz.U = zeros(bz.nbands,bz.nbands,bz.nks);
             fprintf(' ... computing dispersion '); tic; 
             for i = 1:bz.nks
                 % define input ...
@@ -1459,7 +1433,7 @@ classdef am_lib
             fprintf('(%.f secs)\n',toc);
         end
 
-        function [md]  = run_bvk_md(bvk,pp,uc,dt,nsteps,Q,T)
+        function [md]         = run_bvk_md(bvk,pp,uc,dt,nsteps,Q,T)
             % set time step [ps ~ 0.1], number of MDs steps, Nose-Hoover "mass" Q, and temperature T [K]
             % dt = 0.1; nsteps = 10000; Q = 1; T = 300; [md] = run_bvk_md(bvk,pp,uc,dt,nsteps,Q,T)
 
@@ -1542,7 +1516,7 @@ classdef am_lib
             md = md_(uc,f,tau,v,dt);
         end
 
-        function [bvk] = interpolate_bvk(bvk_1,bvk_2,n)
+        function [bvk]        = interpolate_bvk(bvk_1,bvk_2,n)
             % interpolates force constants and masses from bvk_1 and bvk_2 on n points (includes end points)
 
             import am_lib.*
@@ -1563,7 +1537,7 @@ classdef am_lib
             end
         end
 
-        function         plot_bvk_dispersion(bvk,bzp)
+        function plot_bvk_dispersion(bvk,bzp)
             
             import am_lib.*
             
@@ -1579,7 +1553,7 @@ classdef am_lib
             axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [meV]'); xlabel('Wavevector k');
         end
 
-        function [h]   = plot_bvk_vs_aimd(uc,md,bvk,pp,bvt,pt)
+        function plot_bvk_vs_aimd(uc,md,bvk,pp,bvt,pt)
             
             import am_lib.*
             
@@ -1595,13 +1569,8 @@ classdef am_lib
             f_phi = f_phi + get_bvt_forces(bvt,pt,u,method);
             end
             
-            % plot correlation for dft vs bvk forces on atoms
-            % [N,X,Y]=histcounts2(f_phi(:),f(:)); [Z{1:2}]=ndgrid(X(1:(end-1)),Y(1:(end-1))); contourf(Z{1},Z{2},log(N))
-            h = scatter(f_phi(:),f(:),[],flatten_(repelem(permute(1:md.nsteps,[3,2,1]),3,md.natoms,1)),'.');
-            maxis=max(abs(axis)); axis([-1 1 -1 1].*maxis); line([-1 1].*maxis,[-1 1].*maxis); 
-            daspect([1 1 1]); box on; colormap(flipud(colormap('parula')));
-            xlabel('dft force [eV/Ang]'); ylabel('bvk force [eV/Ang]');            
-            title(sprintf('R^2 = %f',pcorr_(f_phi,f).^2)); 
+            % plot correlation
+            plotcorr_(f_phi(:),f(:)); xlabel('aimd force [eV/Ang]'); ylabel('bvk force [eV/Ang]');  
         end
 
         function [T,KE,PE,q_sk] = plot_md_stats(uc,md,fbz,bvk)
@@ -1693,30 +1662,27 @@ classdef am_lib
         
         % phonons (anharmonic)
         
-        function [bvt,pt] = get_bvt(pc,uc,md,cutoff,bvk,pp)
+        function [bvt,pt]     = get_bvt(pc,uc,md,cutoff,bvk,pp)
             
             import am_lib.*
 
             % get irreducible shells
-            fprintf(' ... solving for triplets'); tic;
+            fprintf(' ... identifying triplets '); tic;
             [bvt,pt] = get_triplets(pc,uc,cutoff);
-            fprintf(' (%.f secs)\n',toc);
-            
-            % [cart] print shell results
-            print_triplets(uc,pt)
+            fprintf('(%.f secs)\n',toc);
             
             % get force constant model
-            fprintf(' ... solving for symbolic force constants and dynamical matrix'); tic;
+            fprintf(' ... determining anharmonic force constant interdependancies '); tic;
             bvt = get_bvt_model(bvt,pt);
-            fprintf(' (%.f secs)\n',toc);
+            fprintf('(%.f secs)\n',toc);
             
             % get force constants
-            fprintf(' ... solving for third-order force constants '); tic;
+            fprintf(' ... solving for anharmonic (3rd-order) force constants '); tic;
             bvt = get_bvt_force_constants(bvk,uc,pp,md,bvt,pt);
             fprintf('(%.f secs)\n',toc);
         end
 
-        function [bvt] = get_bvt_model(it,pt)
+        function [bvt]        = get_bvt_model(it,pt)
             % 
             % Q: What is the intrinsict symmetry of third-order force
             %    constants due to permutation of coordinate axes x,y,z?
@@ -1773,11 +1739,23 @@ classdef am_lib
             %         AR - reshape(kron(kron(R,R),R)*A(:),[3,3,3])
             %
             % Q: How do triple dot products work? For example, when
-            %    third-order force constants multiply displacements to
-            %    obtain forces.  
+            %    fourier-transforming third-order force constants.
             % A: The triple dot product PHI ... u1 u2 u3, as described by Ziman,
             %    produces as a scalar and is given in Einstein summation as 
-            %    PHI(ijk) u1(i) u2(j) u3(k). Try it out with:
+            %    PHI(ijk) u1(i) u2(j) u3(k). 
+            %
+            %         % apply double dot product
+            %         F = zeros(3,1);
+            %         for m = 1:3
+            %         for i = 1:3; for j = 1:3
+            %             F(m) = F(m) + AR(i,j,m)*u(i)*w(j);
+            %         end; end
+            %         end
+            %
+            % Q: What about a double dot product? For example, when
+            %    third-order force constants multiply displacements to
+            %    obtain forces.  
+            % A: Check it out with the code below:
             %
             %         % double dot product of rotated 3rd rank tensor
             %         clear;clc;rng(1); R=rand(3,3); u = rand(3,1); w = rand(3,1); A = rand(3,3,3);
@@ -1843,7 +1821,7 @@ classdef am_lib
 
         end
         
-        function [bvt] = get_bvt_force_constants(bvk,uc,pp,md,bvt,pt)
+        function [bvt]        = get_bvt_force_constants(bvk,uc,pp,md,bvt,pt)
             % Extracts symmetry adapted third-order force constants.
             %
             % Q: How to factor out displacements from third-rank tensors?
@@ -1904,13 +1882,13 @@ classdef am_lib
 
             % save force constants
             s_id = repelem([1:bvt.nshells],cellfun(@(x)size(x,2),bvt.W));
-            for s = 1:bvt.nshells; bvt.fc{s} = fc(s_id==s).'; end
+            for s = 1:bvt.nshells; bvt.fc{s} = double(fc(s_id==s)).'; end
         end
 
         
         % electrons
 
-        function [tb,pp] = get_tb(pc,uc,cutoff,spdf,nskips,Ef,fname)
+        function [tb,pp]      = get_tb(pc,uc,cutoff,spdf,nskips,Ef,fname)
             % for paper:
             % cutoff = 3; % Angstroms 
             % fname = 'EIGENVAL'
@@ -1918,26 +1896,32 @@ classdef am_lib
             import am_lib.*
             
             % get irreducible shells
-            fprintf(' ... solving for pairs'); tic;
+            fprintf(' ... identifying pairs'); tic;
             [tb,pp] = get_pairs(pc,uc,cutoff);
             fprintf(' (%.f secs)\n',toc);
             
             % [cart] print shell results
             print_pairs(uc,pp)
             
+            % load dispersion [frac-recp] and shift Fermi energy to zero
+            fprintf(' ... loading dft band structure'); tic;
+            [dft] = load_eigenval(fname,Ef); 
+            fprintf(' (%.f secs)\n',toc);
+            
             % tight binding model
             fprintf(' ... solving for symbolic matrix elements and hamiltonian'); tic;
             tb = get_tb_model(tb,pp,uc,spdf);
             fprintf(' (%.f secs)\n',toc);
             
+            
             % get tight binding matrix elements
             fprintf(' ... solving for tight binding matrix elements '); tic;
-            tb = get_tb_matrix_elements(tb,nskips,Ef,fname);
+            tb = get_tb_matrix_elements(tb,dft,nskips);
             fprintf('(%.f secs)\n',toc);
 
         end
 
-        function [tb] = get_tb_model(ip,pp,uc,spdf)
+        function [tb]         = get_tb_model(ip,pp,uc,spdf)
             % set oribtals per irreducible atom: spdf = {'d','p'};
             % may wish to do this to set it per species: x={'p','d'}; spdf={x{ic.species}};
             import am_lib.*
@@ -2019,15 +2003,12 @@ classdef am_lib
             tb.H = matlabFunction(H);
         end
 
-        function [tb] = get_tb_matrix_elements(tb,nskips,Ef,fname)
+        function [tb]         = get_tb_matrix_elements(tb,dft,nskips)
             % Ef     : fermi energy (read from OUTCAR)
             % nskips : number of dft bands to skip (e.g. 5)
             % fname  : eigenval file (e.g. 'EIGENVAL')
 
             import am_lib.*
-            
-            % load dispersion [frac-recp] and shift Fermi energy to zero
-            [dft,bz]=load_vasp_eigenval(fname); dft.E = dft.E - Ef; 
 
             % fit neighbor parameter at high symmetry points using poor man's simulated anneal
             d4fc = repelem(tb.d,cellfun(@(x)size(x,2),tb.W)); nfcs=numel(d4fc); x=zeros(1,nfcs); 
@@ -2038,7 +2019,7 @@ classdef am_lib
             opts = optimoptions('lsqnonlin','Display','None','MaxIter',7);
             
             % define cost function on select kpoints
-            kpt_id = round(linspace(1,bz.nks,20)); cost_ = @(x) dft.E([1:tb.nbands]+nskips,kpt_id) - sort(eval_energies_(tb,x,bz.k(:,kpt_id)));
+            kpt_id = round(linspace(1,dft.nks,20)); cost_ = @(x) dft.E([1:tb.nbands]+nskips,kpt_id) - sort(eval_energies_(tb,x,dft.k(:,kpt_id)));
 
             % poor man's simulated annealing: loop over distances, incorporating each shell at a time
             for j = 1:nds
@@ -2052,8 +2033,8 @@ classdef am_lib
                     % save r_best parameter
                     if r < r_best; r_best = r; x_best = x; 
                         % plot band structure (quick and dirty)
-                        plot([1:bz.nks], sort(real(eval_energies_(tb,x,bz.k))),'-k',...
-                             [1:bz.nks], dft.E([1:(end-nskips)]+nskips,:),':r');
+                        plot([1:dft.nks], sort(real(eval_energies_(tb,x,dft.k))),'-k',...
+                             [1:dft.nks], dft.E([1:(end-nskips)]+nskips,:),':r');
                         set(gca,'XTick',[]); axis tight; grid on; 
                         ylabel('Energy E'); xlabel('Wavevector k'); drawnow;
                     end
@@ -2061,7 +2042,7 @@ classdef am_lib
             end
 
             % redefine cost function on all kpoints
-            cost_ = @(x) dft.E([1:tb.nbands]+nskips,:) - sort(eval_energies_(tb,x,bz.k(:,:)));
+            cost_ = @(x) dft.E([1:tb.nbands]+nskips,:) - sort(eval_energies_(tb,x,dft.k(:,:)));
             
             % final pass with all parameters and all kpoints
             [x,~] = lsqnonlin_(cost_,x,false(1,nfcs),[],[],opts);
@@ -2072,7 +2053,7 @@ classdef am_lib
 
         end
 
-        function [bz] = get_tb_dispersion(tb,bz)
+        function [bz]         = get_tb_dispersion(tb,bz)
             
             import am_lib.* 
             
@@ -2086,7 +2067,7 @@ classdef am_lib
             end
         end
 
-        function [ibz] = get_nesting(tb,ibz,bzp,Ef,degauss)
+        function [ibz]        = get_nesting(tb,ibz,bzp,Ef,degauss)
             % Ef, fermi energy
             % degauss, degauss = 0.04 61x61x61 kpoint mesh
 
@@ -2169,7 +2150,7 @@ classdef am_lib
 
         end
 
-        function         plot_tb_dispersion(tb,bzp)
+        function plot_tb_dispersion(tb,bzp)
             % % plot dispersion along high symmetry path
             % path={'hex','fcc-short','fcc'}; path=path{3};
             % plot_tb_dispersion(tb,get_bz_path(pc,31,path));
@@ -2246,7 +2227,7 @@ classdef am_lib
         
         % pairs and triplets
 
-        function [ip,pp] = get_pairs(pc,uc,cutoff)
+        function [ip,pp]      = get_pairs(pc,uc,cutoff)
             %
             % IMPORTANT: 
             %    clc; X=PM(A(3,:),:)
@@ -2394,7 +2375,7 @@ classdef am_lib
             pp = pp_(uc,c_id,o_id,i_id,q_id,iq_id,Q);
         end
 
-        function [it,pt] = get_triplets(pc,uc,cutoff)
+        function [it,pt]      = get_triplets(pc,uc,cutoff)
 
             import am_lib.*
 
@@ -2661,7 +2642,7 @@ classdef am_lib
             
             % find closest atom
             [~,inds] = min(reshape(normc_( ...
-                mod_(osum_(-uc.tau(:,:,1),uc_ref.tau(:,:,1))+.5)-.5 ),...
+                mod_(osum_(-uc.tau(:,:,1),uc_ref.tau(:,:,1),2)+.5)-.5 ),...
                                                     uc.natoms,uc.natoms) );
 
             % shuffle uc atoms so that order matchs uc_ref
@@ -2819,22 +2800,30 @@ classdef am_lib
             % Get [cart] displacement using, for example:
             %     u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
             %
+            % Compare forces computed using the two methos:
+            %   u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
+            %   tic; f1 = get_bvk_forces(bvk,pp,u,1); toc
+            %   tic; f2 = get_bvk_forces(bvk,pp,u,2); toc
+            %   plot(f1(:),f2(:),'.')
+            %
 
             import am_lib.*            
 
             if nargin ~= 4; method=2; end
             
             switch method
-                case 1; 
+                case 1
                     % get U matrix and indexing
                     [U,I] = get_bvk_U_matrix(bvk,pp,u);
                     % solve for forces f [3m * 1] = - U [3m * nFcs] * FC [ nFCs * 1]: n pairs, m atoms
                     f(I) = - U * [bvk.fc{:}].';
                     % rearrange forces 
                     f = reshape(f,size(u));
-                case 2; 
+                case 2
+                    % get sizes
+                    [~,natoms,nsteps] = size(u);
                     % build force constants
-                    for m = 1:pp.pc_natoms
+                    for m = 1:bvk.natoms
                         phi{m} = zeros(3,3*pp.npairs(m));
                     for j = 1:pp.npairs(m)
                         % get indicies
@@ -2846,9 +2835,9 @@ classdef am_lib
                     end
                     end
                     % compute forces on every atom at every step
-                    f = zeros(3,md.natoms,md.nsteps);
-                    for j = 1:md.nsteps
-                        for m = 1:pp.pc_natoms
+                    f = zeros(3,natoms,nsteps);
+                    for j = 1:nsteps
+                        for m = 1:bvk.natoms
                             f(1:3,pp.c{m},j) = - phi{m} * reshape(u(:,pp.o{m},j), size(pp.o{m}).*[3,1]);
                         end
                     end
@@ -3005,7 +2994,39 @@ classdef am_lib
             % end;end
             % end
         end
-        
+
+        function [bvk] = set_bvk_acoustic_sum_rules(bvk,pp)
+
+            import am_lib.*
+
+            % build force constants
+            phi = zeros(3,3,bvk.nshells);
+            for i = 1:bvk.nshells; phi(:,:,i) = reshape(bvk.W{i}*bvk.fc{i}.',3,3); end
+
+            % enforce acoustic sum rule
+            for i = 1:bvk.nshells
+                % check if it is a 0-th neighbor shell
+                if bvk.xy(1,i)==bvk.xy(2,i)
+                    % get index of primitive cell atom corresponding to this shell
+                    m = pp.u2p(bvk.xy(1,i));
+                    % get self forces
+                    asr = zeros(3,3,pp.npairs(m));
+                    for j = 1:pp.npairs(m)
+                        % get irrep->orbit symmetry
+                        iq = pp.iq{m}(j,1); q = pp.q{m}(j,1); 
+                        % rotate force constants from irrep to orbit
+                        asr(:,:,j) = permute( pp.Q{1}(1:3,1:3,iq) * phi(:,:,pp.i{m}(j)) * pp.Q{1}(1:3,1:3,q), pp.Q{2}(:,iq) );
+                    end
+                    % impose asr on self-forces
+                    asr = -sum(asr(:,:,pp.o{m}(:,1)~=pp.c{m}(1)),3);
+                    % solve for symmetry-adapted force constants
+                    A = double(bvk.W{i}); B = reshape(asr,[],1);
+                    % get force constants as row vectors
+                    bvk.fc{i} = reshape( A \ B , 1, []); 
+                end
+            end
+        end
+
         
         % aux phonons (anharmonic)
         
@@ -3013,7 +3034,7 @@ classdef am_lib
             %
             % Get forces f from the displacement u.
             %
-            % Selecting a METHOD is optional (defaults to METHOD 2):
+            % Selecting a METHOD is optional (defaults to METHOD 2, which is ~ 10x faster):
             %
             % METHOD 1: Build U matrix and compute forces using:
             %           F [3m * 1] = - U [3m * nFcs] * FC [ nFCs * 1] for n pairs, m atoms
@@ -3025,23 +3046,28 @@ classdef am_lib
             % Get [cart] displacement using, for example:
             %     u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
             %
-
+            % Compare forces obtained from the two methods:
+            %     u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
+            %     tic; f1 = get_bvt_forces(bvt,pt,u,1); toc
+            %     tic; f2 = get_bvt_forces(bvt,pt,u,2); toc
+            %     plot(f1(:),f2(:),'.')
+            %
             import am_lib.*            
 
             if nargin ~= 4; method=2; end
             
             switch method
-                case 1; 
+                case 1
                     % get U matrix and indexing
                     [U,I] = get_bvt_U_matrix(bvt,pt,u);
                     % solve for forces f [3m * 1] = - U [3m * nFcs] * FC [ nFCs * 1]: n pairs, m atoms
                     f(I) = - U * [bvt.fc{:}].';
                     % rearrange forces 
                     f = reshape(f,size(u));
-                case 2; 
+                case 2
                     % get sizes
                     [~,natoms,nsteps] = size(u);
-                    % get anharmonic forces explicitly
+                    % build anharmonic force constant matrices for bonds
                     for m = 1:bvt.natoms
                         phi{m} = zeros(3,9*pt.npairs(m));
                     for j = 1:pt.npairs(m)
@@ -3315,7 +3341,37 @@ classdef am_lib
     
     methods (Static)
         
-        % library of simple functions
+        % benchmarking
+        
+        function t = benchmark_(fnct_,inputs)
+            % fnct_ = @(A) outerc_(A,A,A); 
+            % x = [1,2,5,10,20,50,100,200,500,1000,2000,5000];
+            % for i=1:numel(x); inputs{i}=single(rand(3,x(i))); end
+            % loglog(x,benchmark_(fnct_,inputs),'-')
+            
+            % estimate run times
+            ninputs = numel(inputs);
+            for i = 1:ninputs
+                tic
+                    fnct_(inputs{i}); 
+                t(i) = toc;
+            end
+            
+            % estimate number of runs which fit in 10 seconds
+            nruns = max([round(10./t);ones(size(t))]);
+            
+            % take avergaes
+            for i = 1:ninputs
+                tic
+                    for j = 1:nruns(i)
+                        fnct_(inputs{i});
+                    end
+                t(i) = toc/nruns(i);
+            end
+        end
+        
+
+        % numerical precision
 
         function [C] = mod_(A)
             C = mod(A+am_lib.tiny,1)-am_lib.tiny;
@@ -3325,10 +3381,61 @@ classdef am_lib
             C = round(A,-log10(am_lib.tiny));
         end
 
-        function [C] = matmul_(A,B,varargin)
-            % high dimensional matrix multiplication: A [(m,n),(a,b)] * B [(n,p),(b,c)] = C [(m,p),(a,c)]
+
+        % vectorization
+        
+        function [A] = aug_(A,n)
+            % squeeze in 1's in vector A at positions n
+            ex_ = any([1:(numel(n)+numel(A))]==n(:),1);
+            A(~ex_) = A; 
+            A( ex_) = 1;
+        end
+        
+        function [A] = ext_(A,n)
+            % remove positions n of vector A
+            ex_ = any(1:numel(A)==n(:),1);
+            A = A(~ex_);
+        end
+        
+        function [C] = matmul_(A,B,applysqueeze)
+            % matrix multiple the first two dimensions and entry-wise the rest
+            %
+            %       A [(m,n),(a,1,c,d,1,f,...)]   
+            %     * B [(n,p),(1,b,c,1,e,f,...)] 
+            %   ` = C [(m,p),(a,b,c,d,e,f,...)]
+            %
             aug_ = @(x,i,y) [x(1:(i-1)),y,x(i:end)]; 
-            C = squeeze(sum(bsxfun(@times, reshape(A,aug_(size(A),3,1)), reshape(B,aug_(size(B),1,1))), 2));
+            C = sum( reshape(A,aug_(size(A),3,1)) .* reshape(B,aug_(size(B),1,1)) , 2);
+            
+            if nargin == 2; applysqueeze = true; end
+            if applysqueeze; C = squeeze(C); end
+        end
+        
+        function [C] = matmulp_(A,B,applysqueeze)
+            % high dimensional matrix multiplication: 
+            %
+            %       A [(m,n),(a,b)]
+            %     * B [(n,p),(b,c)]
+            %     = C [(m,p),(a,c)]
+            %
+            % Explicit:
+            %     A = rand(4,3,3,1); B = rand(3,2,1,5);
+            %     [a{1:4}]=size(A); [b{1:4}]=size(B); C=zeros(a{1},b{2},a{3},b{4});
+            %     for b4 = 1:b{4}; for b2 = 1:b{2}
+            %     for a4 = 1:a{4}; for a3 = 1:a{3}; for a2 = 1:a{2}; for a1 = 1:a{1}
+            %         C(a1,b2,a3,b4) = C(a1,b2,a3,b4) + A(a1,a2,a3,a4)*B(a2,b2,a4,b4);
+            %     end; end; end; end
+            %     end; end
+            %     C - matmulp_(A,B)
+            %
+
+            import am_lib.sum_
+            
+            C = permute(sum_( permute(A,[1,2,6,3,4,5]) ...
+                           .* permute(B,[6,1,2,5,3,4]), [2,5]),[1,3,4,6,2,5]);
+            
+            if nargin == 2; applysqueeze = true; end
+            if applysqueeze; C = squeeze(C); end
         end
 
         function [C] = flatten_(A)
@@ -3337,7 +3444,8 @@ classdef am_lib
 
         function [C] = kron_(A,B)
             % define high dimensional kronecker self-product: for i=[1:size(A,3)]; C(:,:,i)=kron(A(:,:,i),B(:,:,i)); end
-            C = reshape(bsxfun(@times, permute(A,[4 1 5 2 3]), permute(B,[1 4 2 5 3])), size(A,1)*size(B,1),[],size(A,3));
+            C = reshape( permute(A,[4 1 5 2 3]) ...
+                      .* permute(B,[1 4 2 5 3]), size(A,1)*size(B,1),[],size(A,3));
         end
         
         function [C] = kronpow_(A,n)
@@ -3350,57 +3458,182 @@ classdef am_lib
             end
         end
 
-        function [C] = sortc_(A)
-            % column vector-based rank, sort, unique with numeric precision
-            import am_lib.rnd_
-            [C] = sortrows(rnd_(A).').'; 
-        end
-
-        function [C] = rankc_(A)
-            % column vector-based rank, sort, unique with numeric precision
-            import am_lib.rnd_
-            C = sortrowsc(rnd_(A).',[1:size(A,1)]).'; 
-        end                 
-
-        function [I] = match_(A,B)
-            % find the indicies I which permute column entries of A to match B
-            % for example: A=[[1;4;3],[1;3;4],[3;1;4]]; B=[3;1;4]; X=match_(A,B); accessc_(A,X)-B
-            import am_lib.*
-            [~,iA]=sort(A); [~,iB]=sort(B); iB(iB)=[1:numel(iB)]; I = accessc_(iA,iB);
-        end
-        
-        function [C,inds] = uniquecol_(A)
-            % get unique values with numeric precision
-            import am_lib.rnd_
-            [~,inds] = unique(rnd_(A).','rows','stable'); C=A(:,inds);
-        end
-        
-        function [C] = uniquemask_(A)
-            % returns a matrix with column vectors marking the first
-            % occurance of a value in each column
-            import am_lib.rnd_
+        function [C] = osum_(A,B,i)
+            % define outer sum of two vector arrays
+            % 
+            % i = 1: add first dimension
+            %       A [ m,a,b,1,d,...]
+            %     * B [ p,a,b,c,1,...]
+            %   ` = C [(m,p),a,b,c,d,...]
+            %
+            % i = 2: add second dimension
+            %       A [m,n]
+            %     * B [m,p]
+            %     = C [m,(n,p)]
+            %
             
-            C = false(size(A));
-            for i = 1:size(A,2)
-                [~,b]=unique(rnd_(A(:,i))); C(b,i) = true;
+            n=size(A); m=size(B);
+            
+            if     i == 2
+                C = reshape(A,n(1),n(2),1) + reshape(B,m(1),1,m(2));
+                C = reshape(C,n(1),n(2)*m(2));
+            elseif i == 1
+                C = reshape(A,[1,n(1),n(2:end)]) + reshape(B,[m(1),1,m(2:end)]);
+                C = reshape(C,[n(1)*m(1),max([n(2:end);m(2:end)])]);
             end
         end
 
-        function [C] = osum_(A,B)
-            % define outer sum of two vector arrays
-            C = reshape(repmat(A,[1,size(B,2)]),size(A,1),[]) + reshape(repmat(B,[size(A,2),1]),size(B,1),[]);
-        end
-
-        function [C] = outerc_(A,B)
-            % outer product of each column of A against each column of B
-            % check with: 
-            %       A=rand(3,3);B=rand(3,3); 
-            %       for i = 1:3 C(:,:,i) = A(:,i)*(B(:,i).'); end
-            %       outerc_(A,B) - C
+        function [D] = outerc_(A,B,C)
+            % outer product of each column of A against each column of B (and C)
+            %
+            % Explicit (double):
+            %     A=rand(3,3);B=rand(3,3); 
+            %     D=zeros(size(A,1),size(B,1),size(B,2));
+            %     for i = 1:size(A,2)
+            %     for m = 1:size(A,1); for n = 1:size(B,1)
+            %         D(m,n,i) = D(m,n,i) + A(m,i)*B(n,i); 
+            %     end; end
+            %     end
+            %     outerc_(A,B) - D
+            %
+            % Explicit (triple):
+            %     A=rand(4,5);B=rand(2,5);C=rand(6,5); 
+            %     D=zeros(size(A,1),size(B,1),size(C,1),size(B,2));
+            %     for i = 1:size(A,2)
+            %     for m = 1:size(A,1); for n = 1:size(B,1); for o = 1:size(C,1)
+            %         D(m,n,o,i) = D(m,n,o,i) + A(m,i)*B(n,i)*C(o,i); 
+            %     end; end; end
+            %     end
+            %     outerc_(A,B,C) - D
+            %
+            % Benchmark:
+            %     x = [1,2,5,10,20,50,100,200,500,1000,2E4,5E4,1E5,2E5,5E5]; k = max(x)./x;
+            %     t1 = zeros(1,numel(x));t2 = zeros(1,numel(x));
+            %     for ix = 1:numel(x)
+            %         % benchmark with single precision
+            %         A=single(rand(3,x(ix)));B=single(rand(3,x(ix)));C=single(rand(3,x(ix))); 
+            %         for ik = 1:numel(k)
+            %             % explicit
+            %             tic;
+            %                 D=zeros(size(A,1),size(B,1),size(C,1),size(B,2));
+            %                 for i = 1:size(C,2)
+            %                 for m = 1:size(A,1); for n = 1:size(B,1); for o = 1:size(C,1)
+            %                     D(m,n,o,i) = D(m,n,o,i) + A(m,i)*B(n,i)*C(o,i); 
+            %                 end; end; end
+            %                 end
+            %             t1(ix) = t1(ix) + toc/k(ik);
+            %             % vectorized
+            %             tic;
+            %                 D2=outerc_(A,B,C);
+            %             t2(ix) = t2(ix) + toc/k(ik);
+            %         end
+            %     end
+            %     loglog(x,t1,'s-',x,t2,'o:'); legend('explicit','vectorized')
             
             import am_lib.*
             
-            C = matmul_( permute(A,[1,3,4,2]) , permute(B,[3,1,4,2]) );
+            if     nargin == 2
+                % outer product of two vectors
+                % A [ n, 1, m ] * B [ 1, n, m ] = D [ n, n, m ]; [n,m] = size(A)
+                D = permute(A,[1,3,2]) ...
+                 .* permute(B,[3,1,2]);
+            elseif nargin == 3
+                % outer product of three vectors
+                D = permute(A,[1,3,4,2]) ...
+                 .* permute(B,[3,1,4,2]) ...
+                 .* permute(C,[3,4,1,2]);
+            end
+        end
+        
+        function [C] = tdp_inner_(A,u,w,v)
+            % inner triple dot product
+            %
+            % Explicit:
+            %     rng(1); A = rand(3,4,5,6); u = rand(3,6); w = rand(4,6); v = rand(5,6);
+            %     % apply triple dot product
+            %     n = size(A); B = zeros(n(4),1);
+            %     for m = 1:n(4)
+            %     for i = 1:n(1); for j = 1:n(2); for k = 1:n(3)
+            %         B(m) = B(m) + A(i,j,k,m)*u(i,m)*w(j,m)*v(k,m);
+            %     end; end; end
+            %     end
+            %     B - tdp_(A,u,w,v)
+            
+            import am_lib.*
+            
+            if     isempty(v)
+                % inner double dot prouct
+                C = squeeze(sum_( A .* permute(outerc_(u,w),[1,2,4,3])   , [1,2]  ));
+            elseif isempty(w)
+                % inner double dot prouct
+                C = squeeze(sum_( A .* permute(outerc_(u,v),[1,4,2,3])   , [1,3]  ));
+            elseif isempty(u)
+                % inner double dot prouct
+                C = squeeze(sum_( A .* permute(outerc_(v,w),[4,1,2,3])   , [2,3]  ));
+            else
+                % inner triple dot product
+                C = squeeze(sum_( A .* outerc_(u,w,v) , [1,2,3]));
+            end
+        end
+        
+        function [C] = tdp_outer_(A,u,w,v)
+            % outer triple dot product (omitting one vector will produce a double dot product)
+            
+            import am_lib.*
+            
+            % get sizes
+            n = size(A); n(5) = size(u,2);
+            
+            if     isempty(v)
+                % Explicit:
+                %     rng(1); A = rand(3,3,5,10); u = rand(3,6); w = rand(3,6); v = rand(5,6);
+                %     % apply triple dot product
+                %     n = size(A); n(5) = size(u,2); B = zeros(n(3),n(4),n(5));
+                %     for o = 1:n(4); for p = 1:n(5)
+                %     for i = 1:n(1); for j = 1:n(2); for k = 1:n(3)
+                %         B(k,o,p) = B(k,o,p) + A(i,j,k,o)*u(i,p)*w(j,p);
+                %     end; end; end
+                %     end; end
+                %     B - tdp_outer_(A,u,w,[])
+                C = squeeze(sum_(reshape(outerc_(u,w),n(1),n(2),1,1,n(5)) .* A,[1,2]));
+            elseif isempty(w)
+                % Explicit:
+                %     rng(1); A = rand(3,7,5,10); u = rand(3,6); w = rand(7,6); v = rand(5,6);
+                %     % apply triple dot product
+                %     n = size(A); n(5) = size(u,2); B = zeros(n(2),n(4),n(5));
+                %     for o = 1:n(4); for p = 1:n(5)
+                %     for i = 1:n(1); for j = 1:n(2); for k = 1:n(3)
+                %         % B(k,o,p) = B(k,o,p) + A(i,j,k,o)*u(i,p)*w(j,p)*v(k,p);
+                %         B(j,o,p) = B(j,o,p) + A(i,j,k,o)*u(i,p)*v(k,p);
+                %     end; end; end
+                %     end; end
+                %     B - tdp_outer_(A,u,[],v)
+                C = squeeze(sum_(reshape(outerc_(u,v),n(1),1,n(3),1,n(5)) .* A,[1,3]));
+            elseif isempty(u)
+                % Explicit:
+                %     rng(1); A = rand(7,3,5,10); u = rand(7,6); w = rand(3,6); v = rand(5,6);
+                %     % apply triple dot product
+                %     n = size(A); n(5) = size(u,2); B = zeros(n(1),n(4),n(5));
+                %     for o = 1:n(4); for p = 1:n(5)
+                %     for i = 1:n(1); for j = 1:n(2); for k = 1:n(3)
+                %         B(i,o,p) = B(i,o,p) + A(i,j,k,o)*w(j,p)*v(k,p);
+                %     end; end; end
+                %     end; end
+                %     B - tdp_outer_(A,[],w,v)
+                C = squeeze(sum_(reshape(outerc_(w,v),1,n(2),n(3),1,n(5)) .* A,[2,3]));
+            else
+                % Explicit: 
+                %     rng(1); A = rand(3,3,5,10); u = rand(3,6); w = rand(3,6); v = rand(5,6);
+                %     % apply triple dot product
+                %     n = size(A); n(5) = size(u,2); B = zeros(n(4),n(5));
+                %     for o = 1:n(4); for p = 1:n(5)
+                %     for i = 1:n(1); for j = 1:n(2); for k = 1:n(3)
+                %         B(o,p) = B(o,p) + A(i,j,k,o)*u(i,p)*w(j,p)*v(k,p);
+                %     end; end; end
+                %     end; end
+                %     B - tdp_outer_(A,u,w,v)
+                C = reshape(A,prod(n(1:3)),n(4)).' * reshape(outerc_(u,w,v),prod(n(1:3)),n(5));
+            end
         end
         
         function [C] = normc_(A)
@@ -3440,8 +3673,90 @@ classdef am_lib
             C = C .* ~all(A==0,2);
         end
        
+        function [A] = sum_(A,n,varargin)
+            % sum over dimensions n: sum_(A,[2,3])
+            for i = 1:numel(n)
+                A = sum(A,n(i),varargin{:});
+            end
+        end
+
+        
+        % matching
+        
+        function [C] = maxabs_(A)
+            C = max(abs(A(:)));
+        end
+        
+        function [C] = minmax_(A)
+            C = [min(A(:)),max(A(:))];
+        end
+        
+        function [C] = sortc_(A)
+            % column vector-based rank, sort, unique with numeric precision
+            import am_lib.rnd_
+            [C] = sortrows(rnd_(A).').'; 
+        end
+
+        function [C] = rankc_(A)
+            % column vector-based rank, sort, unique with numeric precision
+            import am_lib.rnd_
+            C = sortrowsc(rnd_(A).',[1:size(A,1)]).'; 
+        end                 
+
+        function [I] = match_(A,B)
+            % find the indicies I which permute column entries of A to match B
+            % for example: A=[[1;4;3],[1;3;4],[3;1;4]]; B=[3;1;4]; X=match_(A,B); accessc_(A,X)-B
+            import am_lib.*
+            [~,iA]=sort(A); [~,iB]=sort(B); iB(iB)=[1:numel(iB)]; I = accessc_(iA,iB);
+        end
+        
+        function [c] = member_(A,B)
+            % get indicies of column vectors A(:,i,j) in matrix B(:,:)
+            % 0 means not A(:,i) is not in B(:,:)
+
+            [~,m,n] = size(A); c = zeros(m,n);
+            for i = 1:m
+            for j = 1:n
+                c(i,j) = member_engine_(A(:,i,j),B,am_lib.tiny);
+            end
+            end
+
+            function c = member_engine_(A,B,tol)
+                c = 1; r = 1; [d1,d2] = size(B);
+                while r <= d1
+                    if abs(B(r,c)-A(r))<tol
+                        r = r+1;
+                    else
+                        c = c+1;
+                        r = 1;
+                    end
+                    if c>d2; c=0; return; end
+                end
+            end
+        end
+        
+        function [C,inds] = uniquecol_(A)
+            % get unique values with numeric precision
+            import am_lib.rnd_
+            [~,inds] = unique(rnd_(A).','rows','stable'); C=A(:,inds);
+        end
+        
+        function [C] = uniquemask_(A)
+            % returns a matrix with column vectors marking the first
+            % occurance of a value in each column
+            import am_lib.rnd_
+            
+            C = false(size(A));
+            for i = 1:size(A,2)
+                [~,b]=unique(rnd_(A(:,i))); C(b,i) = true;
+            end
+        end
+
+        
+        % special mathematical functions 
+        
         function [C] = lorentz_(A)
-        % define gaussian function 
+            % define gaussian function 
             C = 1./(pi*(A.^2+1)); 
             
         end
@@ -3459,6 +3774,9 @@ classdef am_lib
             C = logical(A>0);
         end
 
+        
+        % geometric functions
+        
         function [A] = R_axis_(R)
             % define basic parameters and functions
             tiny = 1E-8; normalize_ = @(v) v/norm(v); 
@@ -3535,6 +3853,9 @@ classdef am_lib
                 Wtes = T' * Wsph * T ;
             end
         end
+        
+        
+        % matrix related
         
         function [A] = merge_(A)
 
@@ -3642,32 +3963,7 @@ classdef am_lib
             F(indep_rows, i_indep) = R(indep_rows, i_dep) \ R(indep_rows, i_indep);
             F(indep_rows, i_dep) = speye(length(i_dep));
         end
-
-        function [c] = member_(A,B)
-            % get indicies of column vectors A(:,i,j) in matrix B(:,:)
-            % 0 means not A(:,i) is not in B(:,:)
-
-            [~,m,n] = size(A); c = zeros(m,n);
-            for i = 1:m
-            for j = 1:n
-                c(i,j) = member_engine_(A(:,i,j),B,am_lib.tiny);
-            end
-            end
-
-            function c = member_engine_(A,B,tol)
-                c = 1; r = 1; [d1,d2] = size(B);
-                while r <= d1
-                    if abs(B(r,c)-A(r))<tol
-                        r = r+1;
-                    else
-                        c = c+1;
-                        r = 1;
-                    end
-                    if c>d2; c=0; return; end
-                end
-            end
-        end
-
+        
         function [A] = force_hermiticity_(A)
             A = (A'+A)/2;
         end
@@ -3792,51 +4088,9 @@ classdef am_lib
             end
         end
         
-        function [h] = plot3_(A,varargin)
-           h = plot3(A(1,:),A(2,:),A(3,:),varargin{:});
-        end
         
-        function [h] = scatter3_(A,varargin)
-           h = scatter3(A(1,:),A(2,:),A(3,:),varargin{:});
-        end
+        % combinatorial 
         
-        function [h] = plothull_(A,varargin)
-            
-            import am_lib.*
-            
-            % initialize figure
-            set(gcf,'color','w'); hold on;
-            
-            % get points in convex hull
-            DT = delaunayTriangulation(A(1,:).',A(2,:).',A(3,:).'); 
-            CH = convexHull(DT); A=A(:,unique(CH));
-            
-            % get and plot faces
-            DT = delaunayTriangulation(A(1,:).',A(2,:).',A(3,:).');
-            CH = convexHull(DT); TR = triangulation(CH,A.');
-            h = trisurf(TR,'FaceColor','black','EdgeColor','none','FaceAlpha',0.01); 
-
-            % get and plot edges
-            FE = featureEdges(TR,pi/100).'; 
-            for i = 1:size(FE,2); plot3_(A(:,FE(:,i)),'-','color','k','linewidth',2); end
-
-            hold off; daspect([1 1 1])
-        end
-        
-        function [h] = plotv3_(A,varargin)
-           A = repelem(A,1,2); A(:,1:2:end)=0;
-           h = plot3(A(1,:),A(2,:),A(3,:),varargin{:});
-        end
-
-        function [h] = spyc_(A)
-            [x,y] = find(A);
-            h = scatter(y,x,200,A(A~=0),'.');
-            set(gca,'YDir','rev'); box on;
-            ylim([0 size(A,1)+1]); xlim([0 size(A,2)+1]); 
-            set(gca,'XTick',[]); set(gca,'YTick',[]);
-            daspect([1 1 1])
-        end       
-
         function [x] = nchoosek_(n,k)
             % much faster than matlab's nchoosek
             kk=min(k,n-k);
@@ -3970,11 +4224,98 @@ classdef am_lib
             end
         end
         
+        
+        % general plotting
+        
+        function [h] = plot3_(A,varargin)
+           h = plot3(A(1,:),A(2,:),A(3,:),varargin{:});
+        end
+        
+        function [h] = scatter3_(A,varargin)
+           h = scatter3(A(1,:),A(2,:),A(3,:),varargin{:});
+        end
+        
+        function [h] = plothull_(A,varargin)
+            
+            import am_lib.*
+            
+            % initialize figure
+            set(gcf,'color','w'); hold on;
+            
+            % get points in convex hull
+            DT = delaunayTriangulation(A(1,:).',A(2,:).',A(3,:).'); 
+            CH = convexHull(DT); A=A(:,unique(CH));
+            
+            % get and plot faces
+            DT = delaunayTriangulation(A(1,:).',A(2,:).',A(3,:).');
+            CH = convexHull(DT); TR = triangulation(CH,A.');
+            h = trisurf(TR,'FaceColor','black','EdgeColor','none','FaceAlpha',0.01); 
+
+            % get and plot edges
+            FE = featureEdges(TR,pi/100).'; 
+            for i = 1:size(FE,2); plot3_(A(:,FE(:,i)),'-','color','k','linewidth',2); end
+
+            hold off; daspect([1 1 1])
+        end
+        
+        function [h] = plotv3_(A,varargin)
+           A = repelem(A,1,2); A(:,1:2:end)=0;
+           h = plot3(A(1,:),A(2,:),A(3,:),varargin{:});
+        end
+
+        function [h] = spyc_(A)
+            [x,y] = find(A);
+            h = scatter(y,x,200,A(A~=0),'.');
+            set(gca,'YDir','rev'); box on;
+            ylim([0 size(A,1)+1]); xlim([0 size(A,2)+1]); 
+            set(gca,'XTick',[]); set(gca,'YTick',[]);
+            daspect([1 1 1])
+        end       
+
+        
+        % correlation and polynomial fitting
+        
+        function       plotcorr_(x,y)
+            % plot correlation x vs y
+            
+            import am_lib.*
+            
+            % plot correlation for dft vs bvk forces on atoms
+            plot(x(:),y(:),'.','color',[1 1 1]*0.70); daspect([1 1 1]); box on;
+            title(sprintf('R^2 = %f',pcorr_(x(:),y(:)).^2)); 
+            
+            % linear regression
+            mv = [-1 1]*max(abs(axis));
+            line( mv, mv, 'linewidth',1.5); 
+            line( mv, pinterp_(mv,x(:),y(:),1) ,'linewidth',1.5,'color','r'); 
+            line( pinterp_(mv,y(:),x(:),1), mv ,'linewidth',1.5,'color','r'); 
+            axis([mv,mv]);
+        end
+        
         function [R] = pcorr_(A,B)
             % pearson's correlation coefficient
             xcor_ = @(A,B) numel(A)*A(:).'*B(:)-sum(A(:))*sum(B(:));
             R = xcor_(A,B)/(sqrt(xcor_(A,A))*sqrt(xcor_(B,B)));
         end
+        
+        function [C] = pfit_(x,y,n)
+            % least squares fit polynomial of degree n to data
+            C = (x(:).^[0:n])\y;
+        end
+        
+        function [y] = peval_(x,C,n)
+            % evaluate least squares fit polynomial of degree n to data
+            y = (x(:).^[0:n])*C;
+        end
+        
+        function [y] = pinterp_(x,x0,y0,n)
+            % interpolate x0 vs y0 data at points x using a polynomial of degree n
+            
+            import am_lib.*
+            
+            y = peval_(x(:),pfit_(x0(:),y0(:),n),n);
+        end
+        
         
         function [str] = verbatim_()
             %VERBATIM  Get the text that appears in the next comment block.
@@ -4053,7 +4394,8 @@ classdef am_lib
             str = [sprintf('%s\n',lines{2:k-2}),lines{k-1}];
         end
         
-        % aux aesthetic
+        
+        % aesthetic
        
         function [cmap] =  get_colormap(palette,n)
 
