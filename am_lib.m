@@ -1,28 +1,5 @@
 classdef am_lib
    
-    % clear;clc;tic;
-    % 
-    % flags='continue';
-    % 
-    % % get primitive and irreducible cells plus mappings
-    % [uc,pc,ic] = get_cells('infile.supercell',flags);
-    % 
-    % % get brillouin zones
-    % [fbz,ibz,bzp] = get_zones(pc,[5,5,5],flags);
-    % 
-    % % get Born-von Karman phonon model
-    % cutoff=5; fname='infile.force_position.4.00-300';
-    % [bvk,ip] = get_bvk(cutoff,pc,uc,fname,flags);
-    % % plot_bvk_dispersion(bvk,bzp)
-    % 
-    % % [sc,s2p,p2s] = get_supercell(pc,diag([2,2,2]));
-    % % sc.p2i = pc.p2i(s2p);
-    % % 
-    % % [ips] = get_irreducible_shells(sc,cutoff);
-    % % [bvks] = get_bvk_model(ips)
-    % 
-    % % [ibz] = get_bvk_dispersion(bvk,ibz);
-    % 
     % 
     % [sc,s2p,p2s] = get_supercell(pc,diag([2,2,2])); sc.u2p=s2p; sc.p2u=p2s; sc.u2i=pc.p2i(s2p);
     % 
@@ -47,35 +24,21 @@ classdef am_lib
     % 
     % 
     % 
-    % % get tight-binding
-    % % cutoff=3; spdf={'d','p'}; nskips=5; fname='EIGENVAL.ibz'; Ef=0;
-    % % [tb,ip] = get_tb(cutoff,pc,spdf,nskips,Ef,fname,flags);
-    % 
-    % % % plot electron band structure along path
-    % % bzp = get_tb_dispersion(tb,bzp);
-    % % 
-    % % % define figure properties
-    % % fig_ = @(h)       set(h,'color','white');
-    % % axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
-    % % 
-    % % figure(1); fig_(gcf); plot(bzp.x,sort(real(bzp.E)),'-k');
-    % % axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy E'); xlabel('Wavevector k');
-    % 
-    % 
-    % 
-    % fprintf('Done in %i seconds!\n',round(toc));
-    % 
     
     properties (Constant)
-        usemex    = true;
         tiny      = 1E-4; % precision of atomic coordinates
         eps       = 1E-8; % numerical precision
         units_eV  = 0.06465555; % sqrt( [eV/Ang^2] * [1/amu] ) --> 0.06465555 [eV]
         units_THz = 98.22906;   % sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz=1/ps]
         units_GHz = 98229.06;   % sqrt( [eV/Ang^2] * [1/amu] ) --> 98229.06 [GHz=1/fs]
         
-        default_poscar = 'infile.poscar';
-        default_force_position = 'infile.force_position';
+        % mex compiler parameters
+        usemex    = true;
+        FC        = 'ifort'; 
+        FFLAGS    = '-O3 -parallel -fpp -fPIC -lmx -lmex -lmat -nofor_main -bundle';
+        MPATH     = '/Applications/MATLAB_R2016b.app';
+        LIBS      = ['-L',am_lib.MPATH,'/bin/maci64 -I',am_lib.MPATH,'/extern/include'];
+        EXT       = '.mexmaci64';
     end
     
     % program level
@@ -112,21 +75,57 @@ classdef am_lib
                     [bvk,pp] = get_bvk(pc,uc,md,opts.cutoff2);
                     % get triplet shells
                     bvt = []; pt = [];
-                    % plot correlation for dft vs bvk forces on atoms
-                    figure('color','white'); plot_bvk_vs_aimd(uc,md,bvk,pp); drawnow;
                 else
                     % get pair shells
                     [bvk,pp] = get_bvk(pc,uc,md,opts.cutoff2);
                     % get triplet shells
                     [bvt,pt] = get_bvt(pc,uc,md,opts.cutoff3,bvk,pp);
-                    % plot correlation for dft vs bvk forces on atoms
-                    figure('color','white'); plot_bvk_vs_aimd(uc,md,bvk,pp,bvt,pt); drawnow;
                 end
                 % save results
                 save(sname,'uc','pc','md','bvk','pp','bvt','pt');
             end
+            
+            % plot results
+                % plot correlation for dft vs bvk forces on atoms
+                figure('color','white'); plot_bvk_vs_aimd(uc,md,bvk,pp,bvt,pt); drawnow;
         end
-        
+
+        function [uc,pc,tb,pp] = get_tightbinding(opts)
+            % opts.continue=true;
+            % opts.poscar='POSCAR';
+            % opts.eigenval='EIGENVAL.scf';
+            % opts.spdf={'p','d'};
+            % opts.nskips=5; 
+            % opts.Ef=0; 
+            % opts.cutoff2=3;
+            
+            import am_lib.*
+
+            % check inputs
+            for f = {opts.poscar}
+            if ~exist(f{:},'file'); error('File not found: %s',f{:}); end
+            end
+
+            % file name to save to/load from
+            sname = sprintf('%s_%s_%02i_%0.2f_%0.2f_%s.mat',...
+                opts.poscar, opts.eigenval, opts.nskips, ...
+                opts.Ef, opts.cutoff2, strjoin(opts.spdf{:},'+') );
+            if and(exist(sname,'file'),opts.continue); load(sname); else
+
+                % get cells
+                [uc,pc] = get_cells(opts.poscar); 
+                % get tb
+                [tb,pp] = get_tb(pc,get_supercell(pc,diag([5,5,5])),cutoff,spdf,nskips,Ef,fname);
+                % save results
+                save(sname,'uc','pc','tb','pp');
+                
+            end
+            
+            % plot results
+                % plot correlation for dft vs bvk forces on atoms
+                figure('color','white'); plot_bvk_vs_aimd(uc,md,bvk,pp,bvt,pt); drawnow;
+        end
+     
     end
     
     % core
@@ -1155,8 +1154,9 @@ classdef am_lib
             bzl = bzl_(recbas,n,nks,x,k);
         end
 
-        function [bz]         = get_dispersion(bvk,bz,flag)
+        function [bz]         = get_dispersion(model,bz,flag)
             % Get phonon and electron dispersions on bz.
+            % model is either bvk or tb
             %
             % Q: Are the eigenvalues and eigenvectors the same at
             %    symmetry-equivalent positions in reciprocal space?
@@ -1193,12 +1193,14 @@ classdef am_lib
                 case 'electron'
 
                     % get eigenvalues
-                    bz.nbands = tb.nbands; bz.E = zeros(tb.nbands,bz.nks); bz.V = zeros(tb.nbands,tb.nbands,bz.nks);
+                    bz.nbands = model.nbands; 
+                    bz.E = zeros(bz.nbands,bz.nks); 
+                    bz.V = zeros(bz.nbands,bz.nbands,bz.nks);
                     for i = 1:bz.nks
                         % define input ...
-                        input = num2cell([tb.vsk{:},[bz.recbas*bz.k(:,i)].']);
+                        input = num2cell([model.vsk{:},[bz.recbas*bz.k(:,i)].']);
                         % ... and evaluate (V are column vectors)
-                        [bz.V(:,:,i),bz.E(:,i)] = eig(  force_hermiticity_(tb.H(input{:})) ,'vector');
+                        [bz.V(:,:,i),bz.E(:,i)] = eig(  force_hermiticity_(model.H(input{:})) ,'vector');
                         % sort energies
                         [bz.E(:,i),inds]=sort(bz.E(:,i)); bz.V(:,:,i)=bz.V(:,inds,i);
                     end
@@ -1206,13 +1208,15 @@ classdef am_lib
                 case 'phonon'
             
                     % get eigenvalues
-                    bz.nbranches = bvk.nbranches; bz.hw = zeros(bz.nbranches,bz.nks); bz.U = zeros(bz.nbranches,bz.nbranches,bz.nks);
+                    bz.nbranches = model.nbranches; 
+                    bz.hw = zeros(bz.nbranches,bz.nks); 
+                    bz.U  = zeros(bz.nbranches,bz.nbranches,bz.nks);
                     for i = 1:bz.nks
                         % define input ...
                         % input = num2cell([bvk.fc{:},bz.k(:,i).',bvk.mass]); % [pc-frac]
-                        input = num2cell([bvk.fc{:},(bz.recbas*bz.k(:,i)).',bvk.mass]); % [cart]
+                        input = num2cell([model.fc{:},(bz.recbas*bz.k(:,i)).',model.mass]); % [cart]
                         % ... and evaluate (U are column vectors)
-                        [bz.U(:,:,i),bz.hw(:,i)] = eig( force_hermiticity_(bvk.D(input{:})) ,'vector');
+                        [bz.U(:,:,i),bz.hw(:,i)] = eig( force_hermiticity_(model.D(input{:})) ,'vector');
                         % correct units
                         bz.hw(:,i) = sqrt(real(bz.hw(:,i))) * am_lib.units_eV;
                         % sort energies
@@ -1222,23 +1226,27 @@ classdef am_lib
             fprintf('(%.f secs)\n',toc);
         end
         
-        function plot_dispersion(bvk,bzp,flag)
+        function plot_dispersion(model,bzp,flag)
+            % model is either bvk or tb
             
             import am_lib.*
             
-            % get phonon band structure along path
-            bzp = get_dispersion(bvk,bzp,flag);
-            
-            % and plot the results
+            % define figure properties
             fig_ = @(h)       set(h,'color','white');
             axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
             fig_(gcf);
             
             switch lower(strtrim(flag))
                 case 'electron'
+                    % get electron band structure along path
+                    bzp = get_dispersion(model,bzp,flag);
+                    % plot results
                     plot(bzp.x,sort(bzp.E),'-k');
                     axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [eV]'); xlabel('Wavevector k');
                 case 'phonon'
+                    % get phonon band structure along path
+                    bzp = get_dispersion(model,bzp,flag);
+                    % plot results
                     plot(bzp.x,sort(real(bzp.hw)*1E3),'-k',bzp.x,-sort(abs(imag(bzp.hw))),':r');
                     axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [meV]'); xlabel('Wavevector k');
             end
@@ -1347,7 +1355,7 @@ classdef am_lib
             
             % get force constants
             fprintf(' ... solving for harmonic force constants '); tic;
-            bvk = get_bvk_force_constants(bvk,uc,pp,md);
+            bvk = get_bvk_force_constants(uc,md,bvk,pp);
             fprintf('(%.f secs)\n',toc);
 
             % enforce asr
@@ -1421,7 +1429,7 @@ classdef am_lib
             bvk.D = matlabFunction(D);
         end
 
-        function [bvk]        = get_bvk_force_constants(bvk,uc,pp,md)
+        function [bvk]        = get_bvk_force_constants(uc,md,bvk,pp)
             % Extracts symmetry adapted force constants.
             %
             % Q: What is the difference of these methods? 
@@ -1623,7 +1631,7 @@ classdef am_lib
             method = 1;
             f_phi =         get_bvk_forces(bvk,pp,u,method);
             % compute anharmonic forces
-            if nargin > 4
+            if and(~isempty(bvt),~isempty(pt))
             f_phi = f_phi + get_bvt_forces(bvt,pt,u,method);
             end
             
@@ -1736,7 +1744,7 @@ classdef am_lib
             
             % get force constants
             fprintf(' ... solving for anharmonic (3rd-order) force constants '); tic;
-            bvt = get_bvt_force_constants(bvk,uc,pp,md,bvt,pt);
+            bvt = get_bvt_force_constants(uc,md,bvk,pp,bvt,pt);
             fprintf('(%.f secs)\n',toc);
         end
 
@@ -1879,8 +1887,19 @@ classdef am_lib
 
         end
         
-        function [bvt]        = get_bvt_force_constants(bvk,uc,pp,md,bvt,pt)
+        function [bvt]        = get_bvt_force_constants(uc,md,bvk,pp,bvt,pt)
             % Extracts symmetry adapted third-order force constants.
+            %
+            % Q: How to ensure that the extraction process is working
+            %    correctly? Is it working correctly?
+            % A: Yes, it works. Checked it by doing the reverse operation and
+            %    extracting force constants from a known displacement-force
+            %    set using: 
+            % 
+            %         u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
+            %         md.force = matmul_( inv(md.bas), get_bvt_forces(bvt,pt,u,1) + get_bvk_forces(bvk,pp,u,1) );
+            %         [cmp] = get_bvt_force_constants(uc,md,bvk,pp,bvt,pt);
+            %         plot([bvt.fc{:}],[bvt2.fc{:}],'.')
             %
             % Q: How to factor out displacements from third-rank tensors?
             % A: Need to create the matrix 
@@ -1911,14 +1930,16 @@ classdef am_lib
             f = matmul_( md.bas, md.force );
 
             % subtract harmonic forces
-            f = f - get_bvk_forces(bvk,pp,u);
+            if and(~isempty(bvk),~isempty(pp))
+                f = f - get_bvk_forces(bvk,pp,u);
+            end
 
             % get U matrix and indexing I
             [U,I] = get_bvt_U_matrix(bvt,pt,u);
 
             % solve for force constants
             fc = - U \ f(I);
-
+            
             % save force constants
             s_id = repelem([1:bvt.nshells],cellfun(@(x)size(x,2),bvt.W));
             for s = 1:bvt.nshells; bvt.fc{s} = double(fc(s_id==s)).'; end
@@ -3020,7 +3041,7 @@ classdef am_lib
                     asr = zeros(3,3,pp.npairs(m));
                     for j = 1:pp.npairs(m)
                         % get irrep->orbit symmetry
-                        iq = pp.iq{m}(j,1); q = pp.q{m}(j,1); 
+                        iq = pp.iq{m}(j,1); q = pp.q{m}(j,1);
                         % rotate force constants from irrep to orbit
                         asr(:,:,j) = permute( pp.Q{1}(1:3,1:3,iq) * phi(:,:,pp.i{m}(j)) * pp.Q{1}(1:3,1:3,q), pp.Q{2}(:,iq) );
                     end
@@ -3029,7 +3050,7 @@ classdef am_lib
                     % solve for symmetry-adapted force constants
                     A = double(bvk.W{i}); B = reshape(asr,[],1);
                     % get force constants as row vectors
-                    bvk.fc{i} = reshape( A \ B , 1, []); 
+                    bvk.fc{i} = reshape( A \ B , 1, []);
                 end
             end
         end
@@ -4327,7 +4348,6 @@ classdef am_lib
             y = peval_(x(:),pfit_(x0(:),y0(:),n),n);
         end
         
-        
         function [str] = verbatim_()
             %VERBATIM  Get the text that appears in the next comment block.
             %  Returns the text of the first comment block following the call.  The
@@ -4814,14 +4834,10 @@ cmap = map_(n,cmap);
             
             import am_lib.*
             
-            % system configurations
-            FC = 'ifort'; 
-            FFLAGS = '-O3 -parallel -fpp -fPIC -lmx -lmex -lmat -nofor_main -bundle';
-            MPATH = '/Applications/MATLAB_R2016b.app';
-            LIBS = ['-L',MPATH,'/bin/maci64 -I',MPATH,'/extern/include'];
+            % initialize counter
+            i=0;
             
             % mex functions
-            i=0;
             i=i+1; f{i} = 'uc2ws_mex'; fid=fopen([f{i},'.f90'],'w'); fprintf(fid,verbatim_()); fclose(fid); 
             %{
             ! ifort -O3 -parallel -fpp -fPIC -L/Applications/MATLAB_R2016b.app/bin/maci64 -I/Applications/MATLAB_R2016b.app/extern/include -lmx -lmex -lmat -nofor_main -bundle ./uc2ws_mex.f90 -o uc2ws_mex.mexmaci64
@@ -4903,10 +4919,10 @@ cmap = map_(n,cmap);
             % compile everything
             fprintf('Building mex functions:\n')
             for i = 1:numel(f)
-                if system([FC,' ',FFLAGS,' ',LIBS,' ',f{i},'.f90 -o ',f{i},'.mexmaci64'])
+                if system([am_lib.FC,' ',am_lib.FFLAGS,' ',am_lib.LIBS,' ',f{i},'.f90 -o ',f{i},am_lib.EXT])
                     warning(' ... %s (failed)\n',f{i})
                 else
-                    fprintf(' ... %s (successful)\n',f{i});
+                    fprintf(' ... %s (succeeded)\n',f{i});
                 end
             end
         
