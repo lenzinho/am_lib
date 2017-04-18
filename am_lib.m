@@ -1186,7 +1186,6 @@ classdef am_lib
             %     hw-hw(:,1) < am_lib.eps
             %
 
-            
             import am_lib.* 
             
             fprintf(' ... computing dispersion '); tic; 
@@ -1911,27 +1910,8 @@ classdef am_lib
             u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
             f = matmul_( md.bas, md.force );
 
-            % get harmonic forces
-            for m = 1:pp.pc_natoms
-                phi{m} = zeros(3,3*pp.npairs(m));
-            for j = 1:pp.npairs(m)
-                % get indicies
-                i = pp.i{m}(j); iq = pp.iq{m}(j);
-                % get irrep force constant indicies
-                iphi = reshape(bvk.W{i}*bvk.fc{i}(:),3,3);
-                % rotate force constants from irrep to orbit
-                phi{m}(1:3,[1:3]+3*(j-1)) = pp.Q{1}(1:3,1:3,iq) * permute(iphi,pp.Q{2}(:,iq)) * pp.Q{1}(1:3,1:3,iq).';
-            end
-            end
-            % compute forces on every atom at every step
-            f_phi = zeros(3,md.natoms,md.nsteps);
-            for j = 1:md.nsteps
-                for m = 1:pp.pc_natoms
-                    f_phi(1:3,pp.c{m},j) = - phi{m} * reshape(u(:,pp.o{m},j), size(pp.o{m}).*[3,1]);
-                end
-            end
             % subtract harmonic forces
-            f = f - f_phi;
+            f = f - get_bvk_forces(bvk,pp,u);
 
             % get U matrix and indexing I
             [U,I] = get_bvt_U_matrix(bvt,pt,u);
@@ -3070,9 +3050,6 @@ classdef am_lib
             %           F [3 * m] = - FC [3 * 9n] * U [9n * m]: 
             %           for n pairs, m atoms (9 ispans  outer displacement product)
             %
-            % Get [cart] displacement using, for example:
-            %     u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
-            %
             % Compare forces obtained from the two methods:
             %     u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
             %     tic; f1 = get_bvt_forces(bvt,pt,u,1); toc
@@ -3135,11 +3112,10 @@ classdef am_lib
                  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0;
                  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0;
                  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1].';
-            % initialize arrays 
+            % initialize arrays
             nsteps = size(u,3);
             nFCs = sum(cellfun(@(x)size(x,2),bvt.W));
             U = zeros(3*sum(nsteps*pt.ncenters),nFCs);
-            F = zeros(3*sum(nsteps*pt.ncenters),1);
             I = zeros(3*sum(nsteps*pt.ncenters),1);
             X = reshape(1:numel(u),size(u));
 
@@ -3154,6 +3130,7 @@ classdef am_lib
             for s = 1:bvt.nshells
                 ex_ = [pt.i{m}==s]; 
                 if any(ex_)
+                    % get number of things
                     npairs = sum(ex_);
                     nFCs   = size(bvt.W{s},2);
                     natoms = pt.ncenters(m)*nsteps; 
@@ -4322,8 +4299,7 @@ classdef am_lib
             % linear regression
             mv = [-1 1]*max(abs(axis));
             line( mv, mv, 'linewidth',1.5); 
-            line( mv, pinterp_(mv,x(:),y(:),1) ,'linewidth',1.5,'color','r'); 
-            line( pinterp_(mv,y(:),x(:),1), mv ,'linewidth',1.5,'color','r'); 
+            line( mv, pinterp_(mv,x(:),y(:),1) ,'linestyle','--','linewidth',1.5,'color','r'); 
             axis([mv,mv]);
         end
         
