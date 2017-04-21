@@ -46,29 +46,35 @@ classdef am_lib
     methods (Static)
         
         function [uc,pc,md,bvk,pp,bvt,pt] = get_phonons(opts)
+            %
+            % clear; clc;
+            %
             % opts.continue=true;
-            % opts.poscar='POSCAR';
-            % opts.force_position='infile.force_position';
+            % opts.fposcar='POSCAR';
+            % opts.fforce_position='infile.force_position';
             % opts.cutoff2=3;
             % opts.cutoff3=3; % ignored if set to zero
             % opts.dt=2; %fs 
+            %
+            % [uc,pc,md,bvk,pp,bvt,pt] = get_phonons(opts)
+            %
             
             import am_lib.*
 
             % check inputs
-            for f = {opts.poscar,opts.force_position}
+            for f = {opts.fposcar,opts.fforce_position}
             if ~exist(f{:},'file'); error('File not found: %s',f{:}); end
             end
 
             % file name to save to/load from
             sname = sprintf('%s_%s_%0.2f_%0.2f.mat',...
-                opts.poscar, opts.force_position, opts.cutoff2, opts.cutoff3);
+                opts.fposcar, opts.fforce_position, opts.cutoff2, opts.cutoff3);
             if and(exist(sname,'file'),opts.continue); load(sname); else
 
                 % get cells
-                [uc,pc] = get_cells(opts.poscar); 
+                [uc,pc] = get_cells(opts.fposcar); 
                 % load md
-                [md] = load_md(uc,opts.force_position,opts.dt);
+                [md] = load_md(uc,opts.fforce_position,opts.dt);
                 % get both pairs and triplets?
                 if opts.cutoff3==0
                     % get pair shells
@@ -90,40 +96,52 @@ classdef am_lib
                 figure('color','white'); plot_bvk_vs_aimd(uc,md,bvk,pp,bvt,pt); drawnow;
         end
 
-        function [uc,pc,tb,pp] = get_tightbinding(opts)
+        function [uc,pc,dft,tb,pp] = get_tightbinding(opts)
+            % clear;clc
+            % 
+            % import am_lib.*
+            % 
             % opts.continue=true;
-            % opts.poscar='POSCAR';
-            % opts.eigenval='EIGENVAL.scf';
+            % opts.fposcar='POSCAR';
+            % opts.feigenval='EIGENVAL.scf';
             % opts.spdf={'p','d'};
             % opts.nskips=5; 
-            % opts.Ef=0; 
+            % opts.Ef=12.8174; % grep OUTCAR for E-fermi  
             % opts.cutoff2=3;
-            
+            % 
+            % [uc,pc,dft,tb,pp] = get_tightbinding(opts);
+            %
+            % NOTE: correlation coefficient for a good fit should exceed
+            % 0.99. For VN with pd orbitals and a pair cutoff of 3 Ang
+            % (second neighbor), R^2 = 0.998.
+
             import am_lib.*
 
             % check inputs
-            for f = {opts.poscar}
+            for f = {opts.fposcar}
             if ~exist(f{:},'file'); error('File not found: %s',f{:}); end
             end
 
             % file name to save to/load from
             sname = sprintf('%s_%s_%02i_%0.2f_%0.2f_%s.mat',...
-                opts.poscar, opts.eigenval, opts.nskips, ...
-                opts.Ef, opts.cutoff2, strjoin(opts.spdf{:},'+') );
+                opts.fposcar, opts.feigenval, opts.nskips, ...
+                opts.Ef, opts.cutoff2, strjoin(opts.spdf,'+') );
             if and(exist(sname,'file'),opts.continue); load(sname); else
 
                 % get cells
-                [uc,pc] = get_cells(opts.poscar); 
+                [uc,pc] = get_cells(opts.fposcar); 
+                % load dft
+                [dft]   = load_eigenval(opts.feigenval,opts.Ef);
                 % get tb
-                [tb,pp] = get_tb(pc,get_supercell(pc,diag([5,5,5])),cutoff,spdf,nskips,Ef,fname);
+                [tb,pp] = get_tb(pc,get_supercell(pc,diag([5,5,5])),dft,opts.cutoff2,opts.spdf,opts.nskips);
                 % save results
-                save(sname,'uc','pc','tb','pp');
+                save(sname,'uc','pc','dft','tb','pp');
                 
             end
             
             % plot results
                 % plot correlation for dft vs bvk forces on atoms
-                figure('color','white'); plot_bvk_vs_aimd(uc,md,bvk,pp,bvt,pt); drawnow;
+                figure('color','white'); plot_tb_vs_dft(tb,dft); drawnow;
         end
      
     end
@@ -134,11 +152,11 @@ classdef am_lib
 
         % vasp
 
-        function           save_poscar(uc,fname)
+        function           save_poscar(uc,fposcar)
             n = size(uc.tau,3);
             for i = 1:n
-                if n == 1; fid=fopen(sprintf('%s'     ,fname,i),'w'); else
-                           fid=fopen(sprintf('%s_%06i',fname,i),'w');
+                if n == 1; fid=fopen(sprintf('%s'     ,fposcar,i),'w'); else
+                           fid=fopen(sprintf('%s_%06i',fposcar,i),'w');
                 end
                 fprintf(fid,'%s \n',sprintf('POSCAR %i of %i',i,n)); 
                 fprintf(fid,'%12.8f \n',1.0);  % latpar
@@ -153,9 +171,9 @@ classdef am_lib
             end
         end
 
-        function [uc]    = load_poscar(fname)
+        function [uc]    = load_poscar(fposcar)
             import am_lib.*
-            fid=fopen(fname,'r');              % open file
+            fid=fopen(fposcar,'r');              % open file
             fgetl(fid); uc.units='frac';       % skip header but write units instead
             latpar=sscanf(fgetl(fid),'%f');    % read lattice parameter
             a1=sscanf(fgetl(fid),'%f %f %f');  % first basis vector
@@ -213,123 +231,55 @@ classdef am_lib
             end
         end
 
-        function [dft]   = load_eigenval(fname,Ef)
-            fid=fopen(fname);
-            % skip first five lines
-            for i = 1:5; fgetl(fid); end
-            buffer = strsplit(strtrim(fgetl(fid)));
-            dft.nelecs = sscanf(buffer{1},'%i');
-            dft.nks    = sscanf(buffer{2},'%i');
-            dft.nbands = sscanf(buffer{3},'%i');
-            for i = 1:dft.nks
-                % skip line
-                fgetl(fid);
-                % get kpnts
+        function [dft]   = load_eigenval(feigenval,Ef)
+            % load dispersion [frac-recp] and shift Fermi energy to zero
+            
+            fprintf(' ... loading dft band structure from %s ',feigenval); tic;
+            
+            fid=fopen(feigenval);
+                % skip first five lines
+                for i = 1:5; fgetl(fid); end
                 buffer = strsplit(strtrim(fgetl(fid)));
-                dft.k(1,i) = sscanf(buffer{1},'%f');
-                dft.k(2,i) = sscanf(buffer{2},'%f');
-                dft.k(3,i) = sscanf(buffer{3},'%f');
-                % loop over bands
-                for j = 1:dft.nbands
+                dft.nelecs = sscanf(buffer{1},'%i');
+                dft.nks    = sscanf(buffer{2},'%i');
+                dft.nbands = sscanf(buffer{3},'%i');
+                for i = 1:dft.nks
+                    % skip line
+                    fgetl(fid);
+                    % get kpnts
                     buffer = strsplit(strtrim(fgetl(fid)));
-                    dft.E(j,i)  = sscanf(buffer{2},'%f');
+                    dft.k(1,i) = sscanf(buffer{1},'%f');
+                    dft.k(2,i) = sscanf(buffer{2},'%f');
+                    dft.k(3,i) = sscanf(buffer{3},'%f');
+                    % loop over bands
+                    for j = 1:dft.nbands
+                        buffer = strsplit(strtrim(fgetl(fid)));
+                        dft.E(j,i)  = sscanf(buffer{2},'%f');
+                    end
+                    dft.E(:,i) = sort(dft.E(:,i));
                 end
-                dft.E(:,i) = sort(dft.E(:,i));
-            end
-            % correct fermi energy
-            dft.E = dft.E - Ef; 
-            % close file
+                % zero fermi and sort bands in increasing order
+                dft.E = sort(dft.E - Ef); 
+                % close file
             fclose(fid);
+            
+            fprintf('(%.f secs)\n',toc);
         end
 
-        function [md]    = load_md(uc,fname,dt)
+        function [md]    = load_md(uc,fforces,dt)
             %
-            % First, preprocess the outcar using the bash function below. Then,
-            % call load_md on the file produced.
+            % Loads outcar preprocessed with outcar2fp.sh (generate_script).
             %
-            % #!/bin/bash
-            % # Preprocess outcar to remove the last run, which may not have finished
-            % # Antonio Mei Nov/2014
-            % # Antonio Mei Jan/2017
-            % usage_ () {
-            %     echo "Creates infile.force_position based on supplied outcar files."
-            %     echo ""
-            %     echo "Usage: $0 [-h] [-t] [-f] -o <outcar_list> -n <natoms> [-c <compress_name>]"
-            %     echo ""
-            %     echo "Example: $0 -f -t -o \"\$(find . -name "OUTCAR*" | grep 4.00-300)\" -n 250"
-            %     echo ""
-            %     echo "-h : prints this message"
-            %     echo "-n : [REQUIRED] number of atoms in the simulation cell"
-            %     echo "-o : [REQUIRED] list of outcar files to parse"
-            %     echo "-t : trims the last md run (useful for removing runs which have not completed)"
-            %     echo "-f : overwrites existing infile.force_position"
-            %     echo "-c : compresses infile.force_position to a tar.gz file"
-            %     echo ""
-            %     echo "infile.force_position file contents:"
-            %     echo "   x position   y position   z position     x force      y force      z force"
-            %     exit 1
-            % }
-            %
-            % main_ () {
-            %     # trim the last md run which may not have completed
-            %     trim_ () { tac $1 | awk '!found && /POSITION/{found=1;next}1' | tac ; }
-            %     # get position and forces
-            %     get_  () { cat $2 | grep -h -A $(($1+1)) POSITION  ; }
-            %     # cut header lines
-            %     cut_  () { cat $1 | sed '/^--$/d' | sed '/--/d' | sed '/POSITION/d' ; }
-            %     # compress produced infile.force_position
-            %     compress_ () { tar -zcvf infile.force_position.tar.gz infile.force_position ; }
-            %     #
-            %     if ${ISFORCE}; then
-            %         if [ -f "./infile.force_position" ]; then
-            %             rm ./infile.force_position
-            %             printf " ... ./infile.force_position overwritten\n"
-            %         fi
-            %     fi
-            %     #
-            %     if ${ISTRIM}; then
-            %         printf " ... trim:\n"
-            %         for F in "${FLIST}"; do
-            %             printf " ...     %-100s\n" "${F}"
-            %             trim_ ${F} | get_ ${NATOMS} | cut_ >> infile.force_position
-            %         done
-            %     else
-            %         printf " ... batch parsing without trim\n"
-            %         get_ ${NATOMS} "${FLIST}" | cut_ >> infile.force_position
-            %     fi
-            %     #
-            %     printf " ... infile.force_position created\n"
-            %     #
-            %     if ${ISCOMPRESS}; then
-            %         printf " ... infile.force_position.tar.gz compressed\n"
-            %         compress_ 
-            %     fi
-            % }
-            %
-            % ISCOMPRESS=false; ISTRIM=false; ISFORCE=false;
-            % if (($# == 0)); then usage_; exit 1; fi
-            % while getopts "n:o:htfc" o; do
-            %     case "${o}" in
-            %         o)  FLIST=${OPTARG} ;;
-            %         n)  NATOMS=${OPTARG} ;;
-            %         c)  ISCOMPRESS=true ;;
-            %         t)  ISTRIM=true ;;
-            %         f)  ISFORCE=true ;;
-            %         h)  usage_; exit 0 ;;
-            %         *)  usage_; exit 1 ;;
-            %     esac
-            % done
-            % main_
 
             import am_lib.*
             
             fprintf(' ... loading displacements vs forces'); tic;
 
             % count number of lines in file and check that all runs completed properly
-            nlines = count_lines_(fname); if mod(nlines,uc.natoms)~=0; error('lines appear to be missing.'); end;
+            nlines = count_lines_(fforces); if mod(nlines,uc.natoms)~=0; error('lines appear to be missing.'); end;
 
             % open file and parse: use single precision here, solves for force constants much faster
-            fid = fopen(fname); fd = reshape(single(fscanf(fid,'%f')),6,uc.natoms,nlines/uc.natoms); fclose(fid);
+            fid = fopen(fforces); fd = reshape(single(fscanf(fid,'%f')),6,uc.natoms,nlines/uc.natoms); fclose(fid);
             
             % convert to [uc-frac]
             fd(1:3,:,:) = matmul_(inv(uc.bas),fd(1:3,:,:));
@@ -349,93 +299,18 @@ classdef am_lib
 
         end
 
-        function [en]    = load_band_energies(nbands,fname)
+        function [en]    = load_band_energies(nbands,fbands)
             %
-            % First, preprocess the outcar using the bash function below. Then,
-            % call load_md on the file produced.
-            %
-            % #!/bin/bash
-            % # Preprocess outcar to remove the last run, which may not have finished
-            % # Antonio Mei Nov/2014
-            % # Antonio Mei Jan/2017
-            % usage_ () {
-            %     echo "Creates infile.electron_energies based on supplied outcar files."
-            %     echo ""
-            %     echo "Usage: $0 [-h] [-t] [-f] -o <outcar_list> -n <nbands> [-c <compress_name>]"
-            %     echo ""
-            %     echo "Example: $0 -f -t -o \"\$(find . -name "OUTCAR*" | grep 4.00-300)\" -n 751"
-            %     echo ""
-            %     echo "-h : prints this message"
-            %     echo "-n : [REQUIRED] number of bands"
-            %     echo "-o : [REQUIRED] list of outcar files to parse"
-            %     echo "-t : trims the last md run (useful for removing runs which have not completed)"
-            %     echo "-f : overwrites existing infile.electron_energies"
-            %     echo "-c : compresses infile.electron_energies to a tar.gz file"
-            %     echo ""
-            %     echo "infile.electron_energies file contents:"
-            %     echo "   n index    En energy    fn occupation"
-            %     exit 1
-            % }
-            % main_ () {
-            %     # trim the last md run which may not have completed
-            %     trim_ () { tac $1 | awk '!found && /POSITION/{found=1;next}1' | tac ; }
-            %     # get energies
-            %     get_  () { cat $2 | grep -h -A ${1} occupation  ; }
-            %     # cut header lines
-            %     cut_  () { cat $1 | sed '/^--$/d' | sed '/--/d' | sed '/occupation/d' ; }
-            %     # compress produced infile.electron_energies
-            %     compress_ () { tar -zcvf infile.electron_energies.tar.gz infile.electron_energies ; }
-            %     #
-            %     if ${ISFORCE}; then
-            %         if [ -f "./infile.electron_energies" ]; then
-            %             rm ./infile.electron_energies
-            %             printf " ... ./infile.electron_energies overwritten\n"
-            %         fi
-            %     fi
-            %     # 
-            %     if ${ISTRIM}; then
-            %         printf " ... trim:\n"
-            %         for F in "${FLIST}"; do
-            %             printf " ...     %-100s\n" "${F}"
-            %             trim_ ${F} | get_ ${NBANDS} | cut_ >> infile.electron_energies
-            %         done
-            %     else
-            %         printf " ... batch parsing without trim\n"
-            %         get_ ${NBANDS} "${FLIST}" | cut_ >> infile.electron_energies
-            %     fi
-            %     #
-            %     awk '{ print $2 }' infile.electron_energies > infile.electron_energies.tmp && mv infile.electron_energies.tmp infile.electron_energies
-            %     #
-            %     printf " ... infile.electron_energies created\n"
-            %     #
-            %     if ${ISCOMPRESS}; then
-            %         printf " ... infile.electron_energies.tar.gz compressed\n"
-            %         compress_ 
-            %     fi
-            % }
-            % ISCOMPRESS=false; ISTRIM=false; ISFORCE=false;
-            % if (($# == 0)); then usage_; exit 1; fi
-            % while getopts "n:o:htfc" o; do
-            %     case "${o}" in
-            %         o)  FLIST=${OPTARG} ;;
-            %         n)  NBANDS=${OPTARG} ;;
-            %         c)  ISCOMPRESS=true ;;
-            %         t)  ISTRIM=true ;;
-            %         f)  ISFORCE=true ;;
-            %         h)  usage_; exit 0 ;;
-            %         *)  usage_; exit 1 ;;
-            %     esac
-            % done
-            % main_
+            % Loads outcar preprocessed with outcar2en.sh (generate_script).
             %
             
             import am_lib.*
             
             % count number of lines in file and check that all runs completed properly
-            nlines = count_lines_(fname); if mod(nlines,nbands)~=0; error('lines appear to be missing.'); end;
+            nlines = count_lines_(fbands); if mod(nlines,nbands)~=0; error('lines appear to be missing.'); end;
 
             % open file and parse
-            nsteps=nlines/nbands; fid=fopen(fname); en=reshape(fscanf(fid,'%f'),nbands,nsteps); fclose(fid);
+            nsteps=nlines/nbands; fid=fopen(fbands); en=reshape(fscanf(fid,'%f'),nbands,nsteps); fclose(fid);
 
         end
         
@@ -740,7 +615,7 @@ classdef am_lib
 
         % unit cells
 
-        function [uc,pc,ic]   = get_cells(fname)
+        function [uc,pc,ic]   = get_cells(fposcar)
             % wrapper routine
             % fname = 'infile.supercell' (poscar)
             
@@ -750,7 +625,7 @@ classdef am_lib
             fprintf(' ... solving for cells and symmetries'); tic
             
             % load poscar
-            uc = load_poscar(fname);
+            uc = load_poscar(fposcar);
 
             % get primitive cell
             [pc,p2u,u2p] = get_primitive_cell(uc);  % write_poscar(get_supercell(pc,eye(3)*2),'POSCAR.2x2')
@@ -1948,11 +1823,9 @@ classdef am_lib
         
         % electrons
 
-        function [tb,pp]      = get_tb(pc,uc,cutoff,spdf,nskips,Ef,fname)
-            % for paper:
-            % cutoff = 3; % Angstroms 
-            % fname = 'EIGENVAL'
-
+        function [tb,pp]      = get_tb(pc,uc,dft,cutoff,spdf,nskips)
+            
+            
             import am_lib.*
             
             % get irreducible shells
@@ -1963,16 +1836,10 @@ classdef am_lib
             % [cart] print shell results
             print_pairs(uc,pp)
             
-            % load dispersion [frac-recp] and shift Fermi energy to zero
-            fprintf(' ... loading dft band structure'); tic;
-            [dft] = load_eigenval(fname,Ef); 
-            fprintf(' (%.f secs)\n',toc);
-            
             % tight binding model
             fprintf(' ... solving for symbolic matrix elements and hamiltonian'); tic;
             tb = get_tb_model(tb,pp,uc,spdf);
             fprintf(' (%.f secs)\n',toc);
-            
             
             % get tight binding matrix elements
             fprintf(' ... solving for tight binding matrix elements '); tic;
@@ -2030,7 +1897,7 @@ classdef am_lib
             % define function to get bond vector
             vec_ = @(xy) uc2ws(uc.bas*(uc.tau(:,xy(2,:))-uc.tau(:,xy(1,:))),pp.bas);
             
-            % construct symbolic dynamical matrix
+            % construct symbolic hamiltonian matrix
             H=sym(zeros(tb.nbands)); kvec=sym('k%d',[3,1],'real');
             for p = 1:pp.pc_natoms
             for u = 1:pp.npairs(p)
@@ -2051,38 +1918,45 @@ classdef am_lib
                 rij = vec_(xy); rij(abs(rij)<am_lib.eps) = 0;
                 vsk =  sym(D{i}(:,:,iq)) * permute(tb.vsk{ir},pp.Q{2}(:,iq)) * sym(D{j}(:,:,iq))';
                 
-                % build dynamical matrix
+                % build hamiltonian matrix
                 H(mp,np) = H(mp,np) + vsk .* exp(sym(2i*pi * rij(:).','d') * kvec(:) );
             end
             end
             
             % simplify (speeds evaluation up significantly later)
-            H = simplify(H,'steps',500);
+            H = simplify(rewrite(H,'cos'),'steps',20);
             
             % attach symbolic dynamical matrix to bvk
             tb.H = matlabFunction(H);
         end
 
         function [tb]         = get_tb_matrix_elements(tb,dft,nskips)
-            % Ef     : fermi energy (read from OUTCAR)
             % nskips : number of dft bands to skip (e.g. 5)
-            % fname  : eigenval file (e.g. 'EIGENVAL')
 
             import am_lib.*
+            
+            % copy number of bands to skip
+            tb.nskips = nskips;
 
             % fit neighbor parameter at high symmetry points using poor man's simulated anneal
             d4fc = repelem(tb.d,cellfun(@(x)size(x,2),tb.W)); nfcs=numel(d4fc); x=zeros(1,nfcs); 
             d=unique(rnd_(d4fc)); d=conv([d,Inf],[1 1]/2,'valid'); nds = numel(d); r_best = Inf;
             
             % set simulated annealing temeprature and optimization options
-            kT = 20; kT_decay_ = @(kT,i) kT .* exp(-i/50); rand_ = @(x) (0.5-rand(size(x))).*abs(x./max(x));
+            kT = 20; kT_decay_ = @(kT,i) kT .* exp(-i/10); rand_ = @(x) (0.5-rand(size(x))).*abs(x./max(x));
             opts = optimoptions('lsqnonlin','Display','None','MaxIter',7);
             
-            % define cost function on select kpoints
-            kpt_id = round(linspace(1,dft.nks,20)); cost_ = @(x) dft.E([1:tb.nbands]+nskips,kpt_id) - sort(eval_energies_(tb,x,dft.k(:,kpt_id)));
+            % select bands
+            bnd_id = [1:tb.nbands]+tb.nskips;
+            
+            % define cost function
+            kpt_id = 1:max(round(dft.nks/20),1):dft.nks;
+            % kpt_id = [1:dft.nks];
+            cost_ = @(x) dft.E(bnd_id,kpt_id) - eval_energies_(tb,x,dft.k(:,kpt_id));
 
             % poor man's simulated annealing: loop over distances, incorporating each shell at a time
-            for j = 1:nds
+            % it appears that ignoring the loop over distance is better, at least for cases with small pair cutoffs
+            for j = nds % 2:nds
                 for i = 1:30
                     % simulated annealing
                     if i ~= 1; x = x_best + rand_(x_best) * kT_decay_(kT,i); end
@@ -2093,8 +1967,8 @@ classdef am_lib
                     % save r_best parameter
                     if r < r_best; r_best = r; x_best = x; 
                         % plot band structure (quick and dirty)
-                        plot([1:dft.nks], sort(real(eval_energies_(tb,x,dft.k))),'-k',...
-                             [1:dft.nks], dft.E([1:(end-nskips)]+nskips,:),':r');
+                        plot([1:dft.nks], eval_energies_(tb,x,dft.k),'-k',...
+                             [1:dft.nks], dft.E(bnd_id,:),':r');
                         set(gca,'XTick',[]); axis tight; grid on; 
                         ylabel('Energy E'); xlabel('Wavevector k'); drawnow;
                     end
@@ -2102,7 +1976,8 @@ classdef am_lib
             end
 
             % redefine cost function on all kpoints
-            cost_ = @(x) dft.E([1:tb.nbands]+nskips,:) - sort(eval_energies_(tb,x,dft.k(:,:)));
+            kpt_id = [1:dft.nks];
+            cost_ = @(x) dft.E(bnd_id,kpt_id) - eval_energies_(tb,x,dft.k(:,kpt_id));
             
             % final pass with all parameters and all kpoints
             [x,~] = lsqnonlin_(cost_,x,false(1,nfcs),[],[],opts);
@@ -2195,7 +2070,17 @@ classdef am_lib
             ylabel('Nesting [a.u.]'); set(gca,'YTickLabel',[]); xlabel('Wavevector k'); 
 
         end
-        
+
+        function plot_tb_vs_dft(tb,dft)
+            
+            import am_lib.*
+            
+            % plot correlation
+            plotcorr_( flatten_( dft.E([1:tb.nbands]+tb.nskips,:)        ) , ...
+                       flatten_( eval_energies_(tb,[tb.vsk{:}],dft.k) ) );
+            xlabel('dft energies [eV]'); ylabel('tb energies [eV]');  
+        end
+
         function get_nesting_vs_ef()
             
             import am_lib.*
@@ -2685,7 +2570,7 @@ classdef am_lib
             end
         end
         
-        
+
         % aux brillouin zones
         
         function [fbz]         = get_fbz(pc,n)
@@ -3245,6 +3130,8 @@ classdef am_lib
                 % evaluate H
                 E(:,m) = real(eig(tb.H(input{:})));
             end
+            % sort values
+            E = sort(E);
         end
         
         
@@ -3282,8 +3169,8 @@ classdef am_lib
         
         % aux functions
 
-        function [fq] = fftinterp(f,q)
-            % fourier interpolate f(k) at points q; v must be periodic over [0,1)
+        function [fq] = fftinterp(f,q,nstrides)
+            % fourier interpolate f(k) at points q; f must be periodic over [0,1)
             %
             % generate f using like this:
             %
@@ -3292,24 +3179,39 @@ classdef am_lib
             % k = [xk(:),yk(:),zk(:)];
             % f = cos(2*pi*xk)+cos(2*pi*yk)+cos(2*pi*zk);
             %
-
-            % define flatten
-            flatten_ = @(x) x(:);
-
-            % mesh dimensions
-            n = size(f);
-
-            % generate Fourier mesh
+            
+            % get dimensions
+            n = size(f); if numel(n)==3; n(4) = 1; end
+            
+            % generate Fourier mesh r
             fftmesh_ = @(N) [0:(N-1)]-floor(N/2);
-            [x,y,z]=meshgrid(fftmesh_(n(1)),fftmesh_(n(2)),fftmesh_(n(3)));
+            [x,y,z] = meshgrid(fftmesh_(n(1)),fftmesh_(n(2)),fftmesh_(n(3)));
             r = [x(:),y(:),z(:)].';
+            
+            % get fourier coefficients on r mesh 
+            c = zeros(prod(n(1:3)),n(4));
+            for j = 1:n(4); c(:,j) = reshape(fftshift(fftn( f(:,:,:,j) )),[],1); end
+            
+            % interpolate f onto q
+            if     nargin == 2
+                % all in one go
+                [fq] = fftinterp_engine(r,n,c,q);
+            elseif nargin == 3
+                % one stride at a time (helps prevent memory overload)
+                nqs = size(q,2); j_id = sum([1:nqs]>=round(linspace(1,nqs+1,nstrides+1)).',1);
+                % evaluate
+                for j = 1:nstrides; fq(j_id==j,:) = fftinterp_engine(r,n,c,q(:,j_id==j)); end
+            end
+            
+            function [fq] = fftinterp_engine(r,n,c,q)
 
-            % construct inverse Fourier transform kernel
-            Ki = ones(size(q,2),size(r,2)); i2pi = sqrt(-1)*2*pi;
-            for i = 1:3; Ki = Ki.*exp(i2pi*q(i,:).'*r(i,:))./sqrt(n(i)); end
+                % construct inverse Fourier transform kernel
+                Ki = ones(size(q,2),size(r,2)); i2pi = sqrt(-1)*2*pi;
+                for i = 1:3; Ki = Ki.*exp(i2pi*q(i,:).'*r(i,:))./sqrt(n(i)); end
 
-            % perform interpolation 
-            fq = Ki * flatten_(fftshift(fftn( f ))) / sqrt(prod(n));
+                % perform interpolation 
+                fq = real( Ki * c ) / sqrt(prod(n(1:3)));
+            end
         end
 
         function [y] = nlinspace(d1, d2, n)
@@ -4318,7 +4220,8 @@ classdef am_lib
             title(sprintf('R^2 = %f',pcorr_(x(:),y(:)).^2)); 
             
             % linear regression
-            mv = [-1 1]*max(abs(axis));
+            % mv = [-1 1]*max(abs(axis));
+            mv = minmax_([x(:);y(:)]);
             line( mv, mv, 'linewidth',1.5); 
             line( mv, pinterp_(mv,x(:),y(:),1) ,'linestyle','--','linewidth',1.5,'color','r'); 
             axis([mv,mv]);
@@ -4961,9 +4864,179 @@ cmap = map_(n,cmap);
     end
     
     
-    % unix functions
+    % unix functions and scripts
     
     methods (Static)
+        
+        % stand-alone
+        
+        function generate_scripts()
+            
+            import am_lib.*
+            
+            % initialize counter
+            i=0; fprintf('Generating scripts:\n')
+            
+            % scripts functions
+            fname='outcar2fp.sh'; fid=fopen([fname],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); fprintf(' ... %s (succeeded)\n',fname);
+            %{
+            #!/bin/bash
+            # Parse outcar to extract forces and displacements at each timestep.
+            # Antonio Mei Nov/2014
+            # Antonio Mei Jan/2017
+            usage_ () {
+                echo "Creates infile.force_position based on supplied outcar files."
+                echo ""
+                echo "Usage: $0 [-h] [-t] [-f] -o <outcar_list> -n <natoms> [-c <compress_name>]"
+                echo ""
+                echo "Example: $0 -f -t -o \"\$(find . -name "OUTCAR*" | grep 4.00-300)\" -n 250"
+                echo ""
+                echo "-h : prints this message"
+                echo "-n : [REQUIRED] number of atoms in the simulation cell"
+                echo "-o : [REQUIRED] list of outcar files to parse"
+                echo "-t : trims the last md run (useful for removing runs which have not completed)"
+                echo "-f : overwrites existing infile.force_position"
+                echo "-c : compresses infile.force_position to a tar.gz file"
+                echo ""
+                echo "infile.force_position file contents:"
+                echo "   x position   y position   z position     x force      y force      z force"
+                exit 1
+            }
+            
+            main_ () {
+                # trim the last md run which may not have completed
+                trim_ () { tac $1 | awk '!found && /POSITION/{found=1;next}1' | tac ; }
+                # get position and forces
+                get_  () { cat $2 | grep -h -A $(($1+1)) POSITION  ; }
+                # cut header lines
+                cut_  () { cat $1 | sed '/^--$/d' | sed '/--/d' | sed '/POSITION/d' ; }
+                # compress produced infile.force_position
+                compress_ () { tar -zcvf infile.force_position.tar.gz infile.force_position ; }
+                #
+                if ${ISFORCE}; then
+                    if [ -f "./infile.force_position" ]; then
+                        rm ./infile.force_position
+                        printf " ... ./infile.force_position overwritten\n"
+                    fi
+                fi
+                #
+                if ${ISTRIM}; then
+                    printf " ... trim:\n"
+                    for F in "${FLIST}"; do
+                        printf " ...     %-100s\n" "${F}"
+                        trim_ ${F} | get_ ${NATOMS} | cut_ >> infile.force_position
+                    done
+                else
+                    printf " ... batch parsing without trim\n"
+                    get_ ${NATOMS} "${FLIST}" | cut_ >> infile.force_position
+                fi
+                #
+                printf " ... infile.force_position created\n"
+                #
+                if ${ISCOMPRESS}; then
+                    printf " ... infile.force_position.tar.gz compressed\n"
+                    compress_ 
+                fi
+            }
+            
+            ISCOMPRESS=false; ISTRIM=false; ISFORCE=false;
+            if (($# == 0)); then usage_; exit 1; fi
+            while getopts "n:o:htfc" o; do
+                case "${o}" in
+                    o)  FLIST=${OPTARG} ;;
+                    n)  NATOMS=${OPTARG} ;;
+                    c)  ISCOMPRESS=true ;;
+                    t)  ISTRIM=true ;;
+                    f)  ISFORCE=true ;;
+                    h)  usage_; exit 0 ;;
+                    *)  usage_; exit 1 ;;
+                esac
+            done
+            main_
+            %}
+            
+            fname='outcar2en.sh'; fid=fopen([fname],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); fprintf(' ... %s (succeeded)\n',fname);
+            %{
+            #!/bin/bash
+            # Preprocess outcar to remove the last run, which may not have finished
+            # Antonio Mei Nov/2014
+            # Antonio Mei Jan/2017
+            usage_ () {
+                echo "Creates infile.electron_energies based on supplied outcar files."
+                echo ""
+                echo "Usage: $0 [-h] [-t] [-f] -o <outcar_list> -n <nbands> [-c <compress_name>]"
+                echo ""
+                echo "Example: $0 -f -t -o \"\$(find . -name "OUTCAR*" | grep 4.00-300)\" -n 751"
+                echo ""
+                echo "-h : prints this message"
+                echo "-n : [REQUIRED] number of bands"
+                echo "-o : [REQUIRED] list of outcar files to parse"
+                echo "-t : trims the last md run (useful for removing runs which have not completed)"
+                echo "-f : overwrites existing infile.electron_energies"
+                echo "-c : compresses infile.electron_energies to a tar.gz file"
+                echo ""
+                echo "infile.electron_energies file contents:"
+                echo "   n index    En energy    fn occupation"
+                exit 1
+            }
+            main_ () {
+                # trim the last md run which may not have completed
+                trim_ () { tac $1 | awk '!found && /POSITION/{found=1;next}1' | tac ; }
+                # get energies
+                get_  () { cat $2 | grep -h -A ${1} occupation  ; }
+                # cut header lines
+                cut_  () { cat $1 | sed '/^--$/d' | sed '/--/d' | sed '/occupation/d' ; }
+                # compress produced infile.electron_energies
+                compress_ () { tar -zcvf infile.electron_energies.tar.gz infile.electron_energies ; }
+                #
+                if ${ISFORCE}; then
+                    if [ -f "./infile.electron_energies" ]; then
+                        rm ./infile.electron_energies
+                        printf " ... ./infile.electron_energies overwritten\n"
+                    fi
+                fi
+                # 
+                if ${ISTRIM}; then
+                    printf " ... trim:\n"
+                    for F in "${FLIST}"; do
+                        printf " ...     %-100s\n" "${F}"
+                        trim_ ${F} | get_ ${NBANDS} | cut_ >> infile.electron_energies
+                    done
+                else
+                    printf " ... batch parsing without trim\n"
+                    get_ ${NBANDS} "${FLIST}" | cut_ >> infile.electron_energies
+                fi
+                #
+                awk '{ print $2 }' infile.electron_energies > infile.electron_energies.tmp && mv infile.electron_energies.tmp infile.electron_energies
+                #
+                printf " ... infile.electron_energies created\n"
+                #
+                if ${ISCOMPRESS}; then
+                    printf " ... infile.electron_energies.tar.gz compressed\n"
+                    compress_ 
+                fi
+            }
+            ISCOMPRESS=false; ISTRIM=false; ISFORCE=false;
+            if (($# == 0)); then usage_; exit 1; fi
+            while getopts "n:o:htfc" o; do
+                case "${o}" in
+                    o)  FLIST=${OPTARG} ;;
+                    n)  NBANDS=${OPTARG} ;;
+                    c)  ISCOMPRESS=true ;;
+                    t)  ISTRIM=true ;;
+                    f)  ISFORCE=true ;;
+                    h)  usage_; exit 0 ;;
+                    *)  usage_; exit 1 ;;
+                esac
+            done
+            main_
+            %}
+            
+                    
+        end
+        
+
+        % matlab-integrated
         
         function [n] = count_lines_(fname)
             if ispc
