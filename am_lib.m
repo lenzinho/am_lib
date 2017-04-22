@@ -1101,7 +1101,54 @@ classdef am_lib
             fprintf('(%.f secs)\n',toc);
         end
         
-        function plot_dispersion(model,bzp,flag)
+        function [nesting]    = get_nesting(fbz,ibz,degauss,Ep)
+            % get nesting function on ibz at probing energies Ep using smearing degauss
+            % degauss, degauss = 0.04 61x61x61 kpoint mesh
+            
+            import am_lib.*
+            
+            % number of probing energies
+            nEps = numel(Ep);
+            
+            % get momentum conserving q-point triplets
+            qqq = get_qqq(fbz,ibz);
+
+            % copy irreducible energies onto fbz mesh
+            E = fbz2ibz(fbz,ibz,ibz.E);
+            
+            % compute spectral function A on the full mesh
+            A = reshape( sum(lorentz_(( reshape(E,[1,size(E)]) - Ep(:) )/degauss)/degauss,2) , [nEps,fbz.n]);
+
+            % compute nesting on ibz and transfer to ibz
+            nesting = zeros(nEps,ibz.nks); access_ = @(x,i) reshape(x(i),[],1); m = 2;
+            for j = 1:nEps
+                nesting(j,:) = accumarray( fbz.f2i( qqq(1,:,m)).' , ...
+                           access_(A(j,:,:,:),qqq(2,:,m))     ...
+                        .* access_(A(j,:,:,:),qqq(3,:,m))   , [], @sum  )./prod(ibz.n);
+            end
+        end
+        
+        function plot_interpolated(fbz,bzp,x,varargin)
+            % interpolate x, defined on the monkhorst-pack fbz, on [frac] path
+            %
+            % plot_interpolated(fbz,bzp, fbz2ibz(fbz,ibz,ibz.E) ,'-');
+            % hold on; plot_dispersion(tb,bzp,'electron','--');
+            %
+
+            import am_lib.fftinterp_
+            
+            % define figure properties
+            fig_ = @(h)       set(h,'color','white');
+            axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
+            fig_(gcf);
+
+            % plot results
+            nstrides = 5;
+            plot(bzp.x,fftinterp_(permute(reshape(x,[size(x,1),fbz.n]),[2,3,4,1]),bzp.k,nstrides),varargin{:});
+            axs_(gca,bzp.qt,bzp.ql); axis tight; xlabel('Wavevector k');
+        end
+              
+        function plot_dispersion(model,bzp,flag,varargin)
             % model is either bvk or tb
             
             import am_lib.*
@@ -1116,17 +1163,32 @@ classdef am_lib
                     % get electron band structure along path
                     bzp = get_dispersion(model,bzp,flag);
                     % plot results
-                    plot(bzp.x,sort(bzp.E),'-k');
+                    plot(bzp.x,sort(bzp.E),varargin{:});
                     axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [eV]'); xlabel('Wavevector k');
                 case 'phonon'
                     % get phonon band structure along path
                     bzp = get_dispersion(model,bzp,flag);
                     % plot results
-                    plot(bzp.x,sort(real(bzp.hw)*1E3),'-k',bzp.x,-sort(abs(imag(bzp.hw))),':r');
+                    plot(bzp.x,sort(real(bzp.hw)*1E3),'-k',bzp.x,-sort(abs(imag(bzp.hw))),varargin{:});
                     axs_(gca,bzp.qt,bzp.ql); axis tight; ylabel('Energy [meV]'); xlabel('Wavevector k');
             end
             
 
+        end
+        
+        function plot_nesting
+            
+            import am_lib.fftinterp_
+            
+            % define figure properties
+            fig_ = @(h)       set(h,'color','white');
+            axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
+            fig_(gcf);
+
+            % plot results
+            nstrides = 5;
+            plot(bzp.x,fftinterp_(permute(reshape(x,[size(x,1),fbz.n]),[2,3,4,1]),bzp.k,nstrides),varargin{:});
+            axs_(gca,bzp.qt,bzp.ql); axis tight; xlabel('Wavevector k');
         end
         
         function plot_bz(fbz)
@@ -1988,89 +2050,6 @@ classdef am_lib
 
         end
 
-        function [ibz]        = get_nesting(tb,ibz,bzp,Ef,degauss)
-            % Ef, fermi energy
-            % degauss, degauss = 0.04 61x61x61 kpoint mesh
-
-            import am_lib.*
-            
-            % define input ...
-            input = num2cell([tb.vsk{:},bzp.k(:,ik).']);
-            % ... and evaluate
-            bzp.E(:,ik) = sqrt(eig(tb.H(input{:})));
-
-            % evaluate eigenvalues on ibz and save to fbz mesh
-            nbands = 8; E = zeros(nbands,numel(f2i));
-            for i=[1:ibz.nks]; E(:,f2i==i)=repmat(eig(getH(v,ibz.recbas*ibz.k(:,i)),'vector'),1,ibz.w(i)); end
-
-            % define nonzero, reshape array into tensor, flatten
-            expand_ = @(x) reshape(x,ibz.n); flatten_ = @(x) x(:);
-
-            % define fermi list
-            Ef_list = [-1:0.05:0.6];
-
-            % define figure plots
-            colormap(get_colormap('magma',256)); [xx,yy]=meshgrid(bzp.x,Ef_list);
-            fig_ = @(h) set(h,'color','white'); axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
-
-            % loop over fermi levels
-            nEfs = numel(Ef_list); nk_vs_ef = zeros(bzp.nks,nEfs); 
-            for j = 1:nEfs
-                Ef = Ef_list(j);
-
-                % compute spectral function A on the full mesh
-                A = expand_( sum(lorentz_((E-Ef)/degauss)/degauss,1) );
-
-                % compute nesting on ibz and save on fbz mesh
-                n=zeros(ibz.n); for i=[1:ibz.nks]; [q{1:3}]=ind2sub(ibz.n,i2f(i)); n(f2i==i)=(A(:).'*flatten_(circshift(A,[q{:}]-1)))/prod(ibz.n); end
-
-                % interpolate n on [frac] path in strides (memory overload otherwise)
-                nk=zeros(bzp.nks,1); stride=100; for i=[1:stride]'+[0:stride:(bzp.nks-stride)]; nk(i) = real(fftinterp(n,(bzp.bas)*bzp.k(:,i))); end
-
-                nk_vs_ef(:,j) = nk;
-
-                % plot figure
-                figure(1); fig_(gcf); surf(xx.',yy.',nk_vs_ef); 
-                view(2); axis tight; axs_(gca,bzp.qt,bzp.ql); drawnow;
-            end
-
-            
-            
-            % evaluate eigenvalues on ibz and save to on fbz mesh
-            nbands = 8; E = zeros(nbands,numel(f2i));
-            for i = 1:ibz.nks; E(:,f2i==i) = repmat(eig(getH(v,(ibz.recbas*ibz.latpar)*ibz.k(:,i)),'vector'),1,ibz.w(i)); end
-
-            % define nonzero, reshape array into tensor, flatten
-            expand_ = @(x) reshape(x,ibz.n); flatten_ = @(x) x(:);
-
-            % compute spectral function A on the full mesh
-            A = expand_( sum(lorentz_((E-Ef)/degauss)/degauss,1) );
-
-            % compute nesting on ibz and save on fbz mesh
-            n = zeros(ibz.n); m_ = @(i,j) mod(i-1,ibz.n(j))+1; fbz_nks=numel(f2i);
-            for i = 1:ibz.nks; [q{1:3}]=ind2sub(ibz.n,i2f(i)); n(f2i==i) = (A(:).'*flatten_(circshift(A,[q{:}]-1)))/fbz_nks; end
-
-            % define kpoint path (cart)
-            G=[0;0;0]; X1=[0;1;1]/2; X2=[2;1;1]/2; L=[1;1;1]/2; K=[6;3;3]/8; iM = ones(3)-2*eye(3); M=inv(iM);
-            Np = 300; ql={'G','X','K','G','L'}; qs=iM*[G,X2,K,G]; qe=iM*[X1,K,G,L]; nqs = size(qs,2);
-
-            % build path (transform by iM to correct distances ~ 1/nm)
-            [k,x,qt] = get_path(qs,qe,nqs,Np); nks = numel(x); k = M*k;
-
-            % interpolate n on the path in strides (memory overload otherwise)
-            nk = zeros(nks,1); stride=100; for i = [1:stride]'+[0:stride:(nks-stride)]; nk(i) = fftinterp(n, k(:,i)); end
-
-            % define figure properties
-            fig_ = @(h)       set(h,'color','white');
-            axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
-
-            % plot band structure 
-            figure(1); fig_(gcf);
-            semilogy(x,real(nk),'-'); axs_(gca,qt,ql); axis tight; 
-            ylabel('Nesting [a.u.]'); set(gca,'YTickLabel',[]); xlabel('Wavevector k'); 
-
-        end
-
         function plot_tb_vs_dft(tb,dft)
             
             import am_lib.*
@@ -2079,61 +2058,6 @@ classdef am_lib
             plotcorr_( flatten_( dft.E([1:tb.nbands]+tb.nskips,:)        ) , ...
                        flatten_( eval_energies_(tb,[tb.vsk{:}],dft.k) ) );
             xlabel('dft energies [eV]'); ylabel('tb energies [eV]');  
-        end
-
-        function get_nesting_vs_ef()
-            
-            import am_lib.*
-            
-            % define tight binding matrix elements
-            v = [-0.4212,1.1975,-4.1841,-1.0193,-1.0322,-0.0565,0.1132,-0.5218,-0.1680,0.0635,-0.0546,-0.1051,0.4189,0.3061];
-
-            % define gaussian function (N=61,degauss=0.04 is good)
-            degauss = 0.04; lorentz_ = @(x) 1./(pi*(x.^2+1)); % gauss_ = @(x) exp(-abs(x).^2)./sqrt(pi); 
-
-            % evaluate eigenvalues on ibz and save to fbz mesh
-            nbands = 8; E = zeros(nbands,numel(f2i));
-            for i=[1:ibz.nks]; E(:,f2i==i)=repmat(eig(getH(v,ibz.recbas*ibz.k(:,i)),'vector'),1,ibz.w(i)); end
-
-            % define nonzero, reshape array into tensor, flatten
-            expand_ = @(x) reshape(x,ibz.n); flatten_ = @(x) x(:);
-
-            % define fermi list
-            Ef_list = [-1:0.05:0.6];
-
-            % define figure plots
-            colormap(get_colormap('magma',256)); [xx,yy]=meshgrid(bzp.x,Ef_list);
-            fig_ = @(h) set(h,'color','white'); axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
-
-            % loop over fermi levels
-            nEfs = numel(Ef_list); nk_vs_ef = zeros(bzp.nks,nEfs); 
-            for j = 1:nEfs
-                Ef = Ef_list(j);
-
-                % compute spectral function A on the full mesh
-                A = expand_( sum(lorentz_((E-Ef)/degauss)/degauss,1) );
-
-                % compute nesting on ibz and save on fbz mesh
-                n=zeros(ibz.n); for i=[1:ibz.nks]; [q{1:3}]=ind2sub(ibz.n,i2f(i)); n(f2i==i)=(A(:).'*flatten_(circshift(A,[q{:}]-1)))/prod(ibz.n); end
-
-                % interpolate n on [frac] path in strides (memory overload otherwise)
-                nk=zeros(bzp.nks,1); stride=100; for i=[1:stride]'+[0:stride:(bzp.nks-stride)]; nk(i) = real(fftinterp(n,(bzp.bas)*bzp.k(:,i))); end
-
-                nk_vs_ef(:,j) = nk;
-
-                % plot figure
-                figure(1); fig_(gcf); surf(xx.',yy.',nk_vs_ef); 
-                view(2); axis tight; axs_(gca,bzp.qt,bzp.ql); drawnow;
-            end
-
-            % define figure properties
-            colormap((get_colormap('magma',256)));
-            figure(1); fig_(gcf); surf(xx.',yy.',log(nk_vs_ef./max(nk_vs_ef,[],1))); shading interp;
-            view(2); axis tight; axs_(gca,bzp.qt,bzp.ql); ylabel('Energy [eV]'); xlabel('wavevector k'); 
-            % caxis(log([0.14 0.7])); ylim([-1 0.4]); set(gca,'Ytick',[-1:0.2:0.4]);
-
-            set(gca,'LooseInset',get(gca,'TightInset')); set(gcf,'PaperSize',[10 10]);
-            set(gcf,'PaperPosition',[0,0,1.6180,1]*3); print(gcf,'-djpeg','-r600','nesting_vs_Ef.jpeg');
         end
 
         
@@ -2582,7 +2506,7 @@ classdef am_lib
             if numel(n)~=3; error('n must be three integers'); end
                 
             % generate primitive lattice vectors
-            Q_ = @(i) [0:(n(i)-1)]/n(i); [Y{1:3}]=ndgrid(Q_(1),Q_(2),Q_(3)); k=reshape(cat(3+1,Y{:}),[],3).';
+            Q_ = @(i) [0:(n(i)-1)]./n(i); [Y{1:3}]=ndgrid(Q_(1),Q_(2),Q_(3)); k=reshape(cat(3+1,Y{:}),[],3).';
 
             % define irreducible cell creation function and make structure
             fbz_ = @(uc,n,k) struct('units','frac-recp','recbas',inv(uc.bas).',...
@@ -2693,7 +2617,69 @@ classdef am_lib
                 tetrahedron(:,6) = [4,5,7,8];
             end
         end
+        
+        function [y]           = fbz2ibz(fbz,ibz,x)
+            % copy ibz values on fbz grid
+            %
+            %       x [ n , ibz.nks ] ==> y [ n , fbz.nks ]
+            % 
+            % n can be any number of rows
+            %
+            y = zeros(size(x,1),fbz.nks);
+            for i = [1:ibz.nks]; y(:,fbz.f2i==i) = repmat( x(:,i) , [1,sum(fbz.f2i==i)] ); end
 
+        end
+        
+        function [qqq]         = get_qqq(fbz,ibz)
+            % get all possible wavevector triplets which conserve momentum 
+            %        q1 + q2 = q3 (absorbtion) and q1 = q2 + q3 (emission)
+            %        q1 are ibz points
+            % 
+            %        qqq( 1:3 , ibz.nks , [1(abs):2(ems)])
+            %
+            % Check with:
+            %     % NOTE: umklapp triplets are given by values which a reciprocal lattice
+            %     % vector not equal to [0;0;0], i.e. [0;0;1].
+            %     % fbz.k(:,qqq(1,:))+fbz.k(:,qqq(2,:))-fbz.k(:,qqq(3,:))
+            %     check_ = @(x) all(mod_(x(:))<am_lib.eps);
+            %     check_( fbz.k(:,qqq(1,:,1))+fbz.k(:,qqq(2,:,1))-fbz.k(:,qqq(3,:,1)) )
+            %     check_( fbz.k(:,qqq(1,:,2))-fbz.k(:,qqq(2,:,2))-fbz.k(:,qqq(3,:,2)) )  
+
+            import am_lib.mod_
+            
+            sub2inds_ = @(n,q) reshape( ...
+                               sub2ind(n,round(q(1,:).*n(1)+1), ...
+                                         round(q(2,:).*n(2)+1), ...
+                                         round(q(3,:).*n(3)+1)), 1, size(q,2)*size(q,3)*size(q,4) ); 
+
+            % get wavevector triplets
+            ex_ = repelem([1:ibz.nks],fbz.nks); 
+            qqq = zeros(3,ibz.nks.*fbz.nks,2);
+            for i = [1:ibz.nks] 
+                % Procedure: get q1, q2, and q3 vector satisfying:
+                %     q1 + q2 = q3
+                %     q1 + reshape(fbz.k,[3,fbz.n]) - circshift(reshape(fbz.k,[3,fbz.n]),-[0,[q{:}]-1])
+                %     q1 = q2 + (-q3)
+                %     q1 - reshape(fbz.k,[3,fbz.n]) + circshift(reshape(fbz.k,[3,fbz.n]),+[0,[q{:}]-1])
+                %
+                % get shift corresponding to ibz point
+                [q{1:3}]=ind2sub(fbz.n,fbz.i2f(i));
+                % get q1
+                q1 = ([q{:}].'-1)./fbz.n(:);
+                % set q2
+                q2 = reshape(fbz.k,[3,fbz.n]);
+                % get q3: q1 + q2 = q3 (absorption)  q1 = q2 + q3 (emission)
+                %         q  + k  = k' (e scatters)  q  = k  + k' (e+h recombine)
+                q3_abs =       circshift(reshape(fbz.k,[3,fbz.n]),-[0,[q{:}]-1]);
+                q3_ems = mod_(-circshift(reshape(fbz.k,[3,fbz.n]),+[0,[q{:}]-1]));
+                % save indicies
+                qqq(1,ex_==i,1:2) = repmat(sub2inds_(fbz.n,q1),[1,fbz.nks,2]);
+                qqq(2,ex_==i,1:2) = repmat(sub2inds_(fbz.n,q2),[1,1,2]      );
+                qqq(3,ex_==i,1  ) =        sub2inds_(fbz.n,q3_abs)           ;
+                qqq(3,ex_==i,2  ) =        sub2inds_(fbz.n,q3_ems)           ;
+            end
+        end
+        
         
         % aux phonons (harmonic)
 
@@ -3169,51 +3155,6 @@ classdef am_lib
         
         % aux functions
 
-        function [fq] = fftinterp(f,q,nstrides)
-            % fourier interpolate f(k) at points q; f must be periodic over [0,1)
-            %
-            % generate f using like this:
-            %
-            % mpgrid_ = @(N) [0:(N-1)]/N;
-            % [xk,yk,zk]=meshgrid(mpgrid_(n(1)),mpgrid_(n(2)),mpgrid_(n(3)));
-            % k = [xk(:),yk(:),zk(:)];
-            % f = cos(2*pi*xk)+cos(2*pi*yk)+cos(2*pi*zk);
-            %
-            
-            % get dimensions
-            n = size(f); if numel(n)==3; n(4) = 1; end
-            
-            % generate Fourier mesh r
-            fftmesh_ = @(N) [0:(N-1)]-floor(N/2);
-            [x,y,z] = meshgrid(fftmesh_(n(1)),fftmesh_(n(2)),fftmesh_(n(3)));
-            r = [x(:),y(:),z(:)].';
-            
-            % get fourier coefficients on r mesh 
-            c = zeros(prod(n(1:3)),n(4));
-            for j = 1:n(4); c(:,j) = reshape(fftshift(fftn( f(:,:,:,j) )),[],1); end
-            
-            % interpolate f onto q
-            if     nargin == 2
-                % all in one go
-                [fq] = fftinterp_engine(r,n,c,q);
-            elseif nargin == 3
-                % one stride at a time (helps prevent memory overload)
-                nqs = size(q,2); j_id = sum([1:nqs]>=round(linspace(1,nqs+1,nstrides+1)).',1);
-                % evaluate
-                for j = 1:nstrides; fq(j_id==j,:) = fftinterp_engine(r,n,c,q(:,j_id==j)); end
-            end
-            
-            function [fq] = fftinterp_engine(r,n,c,q)
-
-                % construct inverse Fourier transform kernel
-                Ki = ones(size(q,2),size(r,2)); i2pi = sqrt(-1)*2*pi;
-                for i = 1:3; Ki = Ki.*exp(i2pi*q(i,:).'*r(i,:))./sqrt(n(i)); end
-
-                % perform interpolation 
-                fq = real( Ki * c ) / sqrt(prod(n(1:3)));
-            end
-        end
-
         function [y] = nlinspace(d1, d2, n)
             %LINSPACENDIM Linearly spaced multidimensional matrix.
 
@@ -3331,11 +3272,16 @@ classdef am_lib
             %     * B [(n,p),(1,b,c,1,e,f,...)] 
             %   ` = C [(m,p),(a,b,c,d,e,f,...)]
             %
+            
+            if nargin == 2; applysqueeze = true; end
+
             aug_ = @(x,i,y) [x(1:(i-1)),y,x(i:end)]; 
             C = sum( reshape(A,aug_(size(A),3,1)) .* reshape(B,aug_(size(B),1,1)) , 2);
             
-            if nargin == 2; applysqueeze = true; end
-            if applysqueeze; C = squeeze(C); end
+            if applysqueeze; C = squeeze(C); else
+                n = size(C); n(2) = [];
+                C = reshape(C,n);
+            end
         end
         
         function [C] = matmulp_(A,B,applysqueeze)
@@ -4326,6 +4272,59 @@ classdef am_lib
 
             % Construct the output string.
             str = [sprintf('%s\n',lines{2:k-2}),lines{k-1}];
+        end
+        
+        
+        % interpolation
+
+        function [fq] = fftinterp_(f,q,nstrides)
+            % fourier interpolate f(k) at points q; f must be periodic over [0,1)
+            %
+            % generate f using like this:
+            %
+            % mpgrid_ = @(N) [0:(N-1)]/N;
+            % [xk,yk,zk]=meshgrid(mpgrid_(n(1)),mpgrid_(n(2)),mpgrid_(n(3)));
+            % k = [xk(:),yk(:),zk(:)];
+            % f = cos(2*pi*xk)+cos(2*pi*yk)+cos(2*pi*zk);
+            %
+
+            import am_lib.matmul_
+            
+            % get dimensions
+            n = size(f); if numel(n)==3; n(4) = 1; end
+
+            % define function to get kernel
+            fft_kernel_ = @(q,r,n) exp(-2i*pi*matmul_(reshape(r,1,3,[],1),reshape(q,3,1,1,[])))./sqrt(prod(n(1:3)));
+           ifft_kernel_ = @(q,r,n) exp(+2i*pi*matmul_(reshape(q,1,3,[],1),reshape(r,3,1,1,[])))./sqrt(prod(n(1:3)));
+            
+            % get fourier coefficients on r grid
+            switch 'dft'
+                case 'fft'
+                    % generate direct and reciprocal meshes r and k
+                    m_ = @(i) [0:(n(i)-1)]-floor(n(i)/2); [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); r = [Y{1}(:),Y{2}(:),Y{3}(:)].';
+                    % apply transform to get expansion coefficients
+                    c = zeros(prod(n(1:3)),n(4));
+                    for j = 1:n(4); c(:,j) = reshape(fftshift(fftn( f(:,:,:,j) )),[],1) ./ sqrt(prod(n(1:3))); end
+                case 'dft'
+                    % generate direct and reciprocal meshes r and k
+                    m_ = @(i) [0:(n(i)-1)]-floor(n(i)/2); [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); r = [Y{1}(:),Y{2}(:),Y{3}(:)].';
+                    m_ = @(i) [0:(n(i)-1)]./n(i);         [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); k = [Y{1}(:),Y{2}(:),Y{3}(:)].';
+                    % apply transform to get expansion coefficients
+                    c = fft_kernel_(k,r,n) * reshape(f,[],n(4));
+            end
+            
+            % interpolate f onto q
+            if     nargin == 2
+                % all in one go
+                fq = real( ifft_kernel_(q,r,n) * c ).';
+            elseif nargin == 3
+                % one stride at a time (helps prevent memory overload)
+                nqs = size(q,2); j_id = sum([1:nqs]>=round(linspace(1,nqs+1,nstrides+1)).',1);
+                % evaluate
+                for j = 1:nstrides
+                    fq(j_id==j,:) = real( ifft_kernel_(q(:,j_id==j),r,n) * c );
+                end
+            end
         end
         
         
