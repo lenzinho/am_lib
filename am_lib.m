@@ -4325,7 +4325,7 @@ classdef am_lib
         
         % interpolation
 
-        function [fq] = fftinterp_(f,q,n)
+        function [fq] = fftinterp_(f,q,n,algo)
             % fourier interpolate f(k) at points q; f must be periodic over [0,1)
             %
             % generate f using like this:
@@ -4358,9 +4358,11 @@ classdef am_lib
                     n = [m(2:4),m(1)];
                     f = reshape(f,m(1),[]);
             end
+            
+            % set default algorithm to cos interpolation
+            if ~exist('algo','var'); algo = 'cos'; end
 
             % select an algorithm
-            algo = 'cos';
             switch algo
                 case 'fft'
                     % define function to get kernel
@@ -4837,143 +4839,6 @@ cmap = map_(n,cmap);
 
     end
     
-
-    % mex functions
-    
-    methods (Static)
-        
-        function compile_mex()
-            % compile mex functions
-            
-            import am_lib.*
-            
-            % initialize counter
-            i=0;
-            
-            % mex functions
-            i=i+1; f{i} = 'uc2ws_mex'; fid=fopen([f{i},'.f90'],'w'); fprintf(fid,verbatim_()); fclose(fid); 
-            %{
-            ! ifort -O3 -parallel -fpp -fPIC -L/Applications/MATLAB_R2016b.app/bin/maci64 -I/Applications/MATLAB_R2016b.app/extern/include -lmx -lmex -lmat -nofor_main -bundle ./uc2ws_mex.f90 -o uc2ws_mex.mexmaci64
-            #include "fintrf.h"      
-
-            subroutine mexFunction(nlhs, plhs, nrhs, prhs)
-
-                implicit none
-
-                mwPointer plhs(*), prhs(*)
-                integer nlhs, nrhs
-                mwPointer mxGetPr
-                mwPointer mxCreateDoubleMatrix
-                mwPointer mxGetM, mxGetN
-
-                integer :: j
-                real*8, allocatable :: K(:,:)
-                real*8 :: G(3,26) , G2(26) , M(3,3), tiny
-
-                ! [K] = uc2ws(K,M,tiny)
-                if(nrhs .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Three inputs required.')
-                if(nlhs .gt. 1) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','One output produced.')
-                if(mxGetM(prhs(1)) .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 1 requires three-dimensional column vectors.')
-                if(mxGetM(prhs(2)) .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 2 requires a three-dimensional transformation matrix.')
-                if(mxGetN(prhs(2)) .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 2 requires a three-dimensional transformation matrix.')
-                if(mxGetM(prhs(3)) .ne. 1 .or. &
-                 & mxGetN(prhs(3)) .ne. 1) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 3 requires a scalar.')
-
-                ! K
-                allocate( K(3,mxGetN(prhs(1))) )
-                call mxCopyPtrToReal8(mxGetPr(prhs(1)),K,mxGetM(prhs(1))*mxGetN(prhs(1)))
-
-                ! M(3,3)
-                call mxCopyPtrToReal8(mxGetPr(prhs(2)),M,mxGetM(prhs(2))*mxGetN(prhs(2)))
-
-                ! tiny
-                call mxCopyPtrToReal8(mxGetPr(prhs(3)),tiny,mxGetM(prhs(3)))
-
-                ! generate mesh
-                G(1,:) = real([-1,-1,-1, 0, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 0, 1, 1, 1])
-                G(2,:) = real([-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1])
-                G(3,:) = real([-1,-1,-1,-1,-1,-1,-1,-1,-1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1])
-                G = matmul(M,G)
-                G2 = sum(G**2,1)
-
-                ! perform calc
-                do j = 1, size(K,2)
-                    call uc2ws_engine(K(:,j),G,G2,tiny)
-                enddo
-
-                ! output results
-                plhs(1) = mxCreateDoubleMatrix(mxGetM(prhs(1)),mxGetN(prhs(1)),0)
-                call mxCopyReal8ToPtr(K,mxGetPr(plhs(1)),mxGetM(prhs(1))*mxGetN(prhs(1)))
-
-            end subroutine mexFunction
-
-            pure subroutine uc2ws_engine(K,G,G2,tiny)
-                real*8, intent(inout) :: K(3)
-                real*8, intent(in) :: G(3,26), G2(26), tiny
-                real*8  :: P
-                logical :: go
-                integer :: i
-
-                go = .true.
-                do while (go)
-                    go = .false.
-                    do i = 1, 26
-                        P = 2*(K(1)*G(1,i) + K(2)*G(2,i) + K(3)*G(3,i)) - G2(i)
-                        if (P .gt. 1D-8) then
-                            K = K - G(:,i)
-                            go = .true.
-                        endif
-                    enddo
-                enddo
-            end subroutine uc2ws_engine
-            %}
-            
-            
-            % compile everything
-            fprintf('Building mex functions:\n')
-            for i = 1:numel(f)
-                if system([am_lib.FC,' ',am_lib.FFLAGS,' ',am_lib.LIBS,' ',f{i},'.f90 -o ',f{i},am_lib.EXT])
-                    warning(' ... %s (failed)\n',f{i})
-                else
-                    fprintf(' ... %s (succeeded)\n',f{i});
-                end
-            end
-        
-        end
-        
-        function [K] = uc2ws(K,M)
-            % uc2ws uses M real (reciprocal) lattice vectors to reduces K(1:3,:) vectors 
-            % in cartesian (reciprocal) coordinates to the definiging Wigner-Seitz cell.
-
-            if  and( am_lib.usemex , which('uc2ws_mex') )
-                % use mex function if available
-                K = uc2ws_mex(K,M,am_lib.eps);
-            else
-                % generate mesh
-                G = M * [-1,-1,-1, 0, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 0, 1, 1, 1;
-                         -1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1;
-                         -1,-1,-1,-1,-1,-1,-1,-1,-1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1];
-                G2=sum(G.^2,1);
-                % call engine
-                for j = 1:size(K,2); K(:,j) = uc2ws_engine(K(:,j),G,G2,am_lib.eps); end
-            end
-
-            function [K] = uc2ws_engine(K,G,G2,tiny)
-                go = true;
-                while go; go=false;
-                    for i = 1:26
-                        P = 2*K.'*G(:,i)-G2(i);
-                        if P > + tiny
-                            K = K - G(:,i); go=true;
-                        end
-                    end
-                end
-            end
-        end
-        
-    end
-    
-    
     % unix functions and scripts
     
     methods (Static)
@@ -5159,6 +5024,1632 @@ cmap = map_(n,cmap);
         
     end    
     
+
+    % mex functions
+    
+    methods (Static)
+        
+        function compile_mex()
+            % compile mex functions
+            %
+            % to compile the library manually
+            %
+            %       fort -O3 -parallel -fpp -c am_mex_lib.f90
+            %
+            % to compile individual interfaces manually
+            %
+            %       ifort -O3 -parallel -fpp -fPIC -L/Applications/MATLAB_R2016b.app/bin/maci64
+            %       -I/Applications/MATLAB_R2016b.app/extern/include -lmx -lmex -lmat -nofor_main 
+            %       -bundle ./uc2ws_mex.f90 -o uc2ws_mex.mexmaci64    
+            %
+            
+            import am_lib.*
+            
+            % initialize counter
+            i=0;
+            
+            % mex library
+            flib = 'am_mex_lib'; fid=fopen([flib,'.f90'],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); 
+            %{
+module am_mex_lib
+
+    implicit none
+
+    public
+
+    !  $$$$$$\   $$$$$$\  $$\   $$\  $$$$$$\ $$$$$$$$\  $$$$$$\  $$\   $$\ $$$$$$$$\  $$$$$$\
+    ! $$  __$$\ $$  __$$\ $$$\  $$ |$$  __$$\\__$$  __|$$  __$$\ $$$\  $$ |\__$$  __|$$  __$$\
+    ! $$ /  \__|$$ /  $$ |$$$$\ $$ |$$ /  \__|  $$ |   $$ /  $$ |$$$$\ $$ |   $$ |   $$ /  \__|
+    ! $$ |      $$ |  $$ |$$ $$\$$ |\$$$$$$\    $$ |   $$$$$$$$ |$$ $$\$$ |   $$ |   \$$$$$$\
+    ! $$ |      $$ |  $$ |$$ \$$$$ | \____$$\   $$ |   $$  __$$ |$$ \$$$$ |   $$ |    \____$$\
+    ! $$ |  $$\ $$ |  $$ |$$ |\$$$ |$$\   $$ |  $$ |   $$ |  $$ |$$ |\$$$ |   $$ |   $$\   $$ |
+    ! \$$$$$$  | $$$$$$  |$$ | \$$ |\$$$$$$  |  $$ |   $$ |  $$ |$$ | \$$ |   $$ |   \$$$$$$  |
+    !  \______/  \______/ \__|  \__| \______/   \__|   \__|  \__|\__|  \__|   \__|    \______/
+
+    integer    , parameter :: sp      = kind(0.0E0) !> single precision
+    integer    , parameter :: dp      = kind(0.0D0) !> double precision
+    real(dp)   , parameter :: tiny    =  1.0D-5
+    real(dp)   , parameter :: halfpi  =  1.570796326794897_dp
+    real(dp)   , parameter :: sqrtpi  =  1.772453850905516_dp
+    real(dp)   , parameter :: pi      =  3.141592653589793_dp
+    real(dp)   , parameter :: twopi   =  6.283185307179586_dp
+    real(dp)   , parameter :: fourpi  = 12.566370614359172_dp
+    complex(dp), parameter :: cmplx_i = cmplx(0,1,dp)
+    complex(dp), parameter :: itwopi  = cmplx_i*twopi
+
+    ! $$$$$$\ $$\   $$\ $$$$$$$$\ $$$$$$$$\ $$$$$$$\  $$$$$$$$\  $$$$$$\   $$$$$$\  $$$$$$$$\  $$$$$$\
+    ! \_$$  _|$$$\  $$ |\__$$  __|$$  _____|$$  __$$\ $$  _____|$$  __$$\ $$  __$$\ $$  _____|$$  __$$\
+    !   $$ |  $$$$\ $$ |   $$ |   $$ |      $$ |  $$ |$$ |      $$ /  $$ |$$ /  \__|$$ |      $$ /  \__|
+    !   $$ |  $$ $$\$$ |   $$ |   $$$$$\    $$$$$$$  |$$$$$\    $$$$$$$$ |$$ |      $$$$$\    \$$$$$$\
+    !   $$ |  $$ \$$$$ |   $$ |   $$  __|   $$  __$$< $$  __|   $$  __$$ |$$ |      $$  __|    \____$$\
+    !   $$ |  $$ |\$$$ |   $$ |   $$ |      $$ |  $$ |$$ |      $$ |  $$ |$$ |  $$\ $$ |      $$\   $$ |
+    ! $$$$$$\ $$ | \$$ |   $$ |   $$$$$$$$\ $$ |  $$ |$$ |      $$ |  $$ |\$$$$$$  |$$$$$$$$\ \$$$$$$  |
+    ! \______|\__|  \__|   \__|   \________|\__|  \__|\__|      \__|  \__| \______/ \________| \______/
+
+    interface foursort
+        module procedure d_foursort, i_foursort
+    end interface ! foursort
+
+    interface fourrank
+        module procedure d_fourrank, i_fourrank
+    end interface ! fourrank
+
+contains
+
+    !  $$$$$$\ $$$$$$$$\  $$$$$$\ $$$$$$$$\ $$$$$$\  $$$$$$\ $$$$$$$$\ $$$$$$\  $$$$$$\   $$$$$$\
+    ! $$  __$$\\__$$  __|$$  __$$\\__$$  __|\_$$  _|$$  __$$\\__$$  __|\_$$  _|$$  __$$\ $$  __$$\
+    ! $$ /  \__|  $$ |   $$ /  $$ |  $$ |     $$ |  $$ /  \__|  $$ |     $$ |  $$ /  \__|$$ /  \__|
+    ! \$$$$$$\    $$ |   $$$$$$$$ |  $$ |     $$ |  \$$$$$$\    $$ |     $$ |  $$ |      \$$$$$$\
+    !  \____$$\   $$ |   $$  __$$ |  $$ |     $$ |   \____$$\   $$ |     $$ |  $$ |       \____$$\
+    ! $$\   $$ |  $$ |   $$ |  $$ |  $$ |     $$ |  $$\   $$ |  $$ |     $$ |  $$ |  $$\ $$\   $$ |
+    ! \$$$$$$  |  $$ |   $$ |  $$ |  $$ |   $$$$$$\ \$$$$$$  |  $$ |   $$$$$$\ \$$$$$$  |\$$$$$$  |
+    !  \______/   \__|   \__|  \__|  \__|   \______| \______/   \__|   \______| \______/  \______/
+
+    pure function factorial(n) result(y)
+        !
+        implicit none
+        !
+        integer, intent(in) :: n
+        real(dp) :: y
+        !
+        if (n.ge.1) then
+            y = product([1:n])
+        else
+            y = 1
+        endif
+    end function  factorial
+
+    pure function nchoosek(n,k) result (res)
+        !
+        implicit none
+        !
+        integer, intent(in) :: n
+        integer, intent(in) :: k
+        integer :: res
+        !
+        res=factorial(n)/(factorial(k)*factorial(n-k))
+        !
+    end function  nchoosek
+
+    function      perms(n) result(PT)
+        !
+        implicit none
+        !
+        integer, intent(in) :: n
+        integer, allocatable :: P(:,:)
+        integer, allocatable :: PT(:,:)
+        integer :: m
+        !
+        m = product([1:n])
+        !
+        allocate(P(m,n))
+        !
+        call permutate([1:n],P)
+        !
+        allocate(PT,source=transpose(P))
+        !
+        contains
+        recursive subroutine permutate(E, P)
+            !
+            implicit none
+            !
+            integer, intent(in)  :: E(:) ! array of objects 
+            integer, intent(out) :: P(:,:) ! permutations of E 
+            integer :: N, Nfac, i, k, S(size(P,1)/size(E), size(E)-1) 
+            N = size(E); Nfac = size(P,1); 
+            do i = 1, N
+              if( N>1 ) call permutate((/E(:i-1), E(i+1:)/), S) 
+              forall(k=1:Nfac/N) P((i-1)*Nfac/N+k,:) = (/E(i), S(k,:)/) 
+            enddo 
+        end subroutine permutate 
+    end function  perms
+
+    ! $$\   $$\ $$\   $$\ $$\      $$\ $$$$$$$\  $$$$$$$$\ $$$$$$$\        $$$$$$$$\ $$\   $$\ $$$$$$$$\  $$$$$$\  $$$$$$$\ $$\     $$\
+    ! $$$\  $$ |$$ |  $$ |$$$\    $$$ |$$  __$$\ $$  _____|$$  __$$\       \__$$  __|$$ |  $$ |$$  _____|$$  __$$\ $$  __$$\\$$\   $$  |
+    ! $$$$\ $$ |$$ |  $$ |$$$$\  $$$$ |$$ |  $$ |$$ |      $$ |  $$ |         $$ |   $$ |  $$ |$$ |      $$ /  $$ |$$ |  $$ |\$$\ $$  /
+    ! $$ $$\$$ |$$ |  $$ |$$\$$\$$ $$ |$$$$$$$\ |$$$$$\    $$$$$$$  |         $$ |   $$$$$$$$ |$$$$$\    $$ |  $$ |$$$$$$$  | \$$$$  /
+    ! $$ \$$$$ |$$ |  $$ |$$ \$$$  $$ |$$  __$$\ $$  __|   $$  __$$<          $$ |   $$  __$$ |$$  __|   $$ |  $$ |$$  __$$<   \$$  /
+    ! $$ |\$$$ |$$ |  $$ |$$ |\$  /$$ |$$ |  $$ |$$ |      $$ |  $$ |         $$ |   $$ |  $$ |$$ |      $$ |  $$ |$$ |  $$ |   $$ |
+    ! $$ | \$$ |\$$$$$$  |$$ | \_/ $$ |$$$$$$$  |$$$$$$$$\ $$ |  $$ |         $$ |   $$ |  $$ |$$$$$$$$\  $$$$$$  |$$ |  $$ |   $$ |
+    ! \__|  \__| \______/ \__|     \__|\_______/ \________|\__|  \__|         \__|   \__|  \__|\________| \______/ \__|  \__|   \__|
+
+    pure function primes(nprimes)
+        !
+        ! naive approach to generating the first n prime numbers
+        !
+        implicit none
+        !
+        integer, intent(in)  :: nprimes
+        integer, allocatable :: primes(:) ! array that will hold the primes
+        integer :: at, found, i
+        logical :: is_prime
+        !
+        allocate (primes(nprimes))
+        !
+        primes(1) = 2
+        at = 2
+        found = 1
+        do
+            is_prime = .true. ! assume prime
+            do i = 1, found
+                if (modulo(at,primes(i)).eq.0) then ! if divisible by any other element
+                    is_prime = .false.               ! in the array, then not prime.
+                    at = at + 1
+                    continue
+                end if
+            end do
+            found = found + 1
+            primes(found) = at
+            at = at + 1
+            if (found == nprimes) then ! stop when all primes are found
+                exit
+            endif
+        end do
+        !
+    end function  primes
+
+    !  $$$$$$\   $$$$$$\  $$$$$$$\ $$$$$$$$\ $$$$$$\ $$\   $$\  $$$$$$\
+    ! $$  __$$\ $$  __$$\ $$  __$$\\__$$  __|\_$$  _|$$$\  $$ |$$  __$$\
+    ! $$ /  \__|$$ /  $$ |$$ |  $$ |  $$ |     $$ |  $$$$\ $$ |$$ /  \__|
+    ! \$$$$$$\  $$ |  $$ |$$$$$$$  |  $$ |     $$ |  $$ $$\$$ |$$ |$$$$\
+    !  \____$$\ $$ |  $$ |$$  __$$<   $$ |     $$ |  $$ \$$$$ |$$ |\_$$ |
+    ! $$\   $$ |$$ |  $$ |$$ |  $$ |  $$ |     $$ |  $$ |\$$$ |$$ |  $$ |
+    ! \$$$$$$  | $$$$$$  |$$ |  $$ |  $$ |   $$$$$$\ $$ | \$$ |\$$$$$$  |
+    !  \______/  \______/ \__|  \__|  \__|   \______|\__|  \__| \______/
+
+
+    pure function d_foursort(x) result(y)
+        !
+        implicit none
+        !
+        real(dp), intent(in) :: x(4)
+        real(dp) :: y(4)
+        !
+        y = x
+        if (y(1).gt.y(2)) then; y([1,2]) = y([2,1]); endif
+        if (y(3).gt.y(4)) then; y([3,4]) = y([4,3]); endif
+        if (y(1).gt.y(3)) then; y([1,3]) = y([3,1]); endif
+        if (y(2).gt.y(4)) then; y([2,4]) = y([4,2]); endif
+        if (y(2).gt.y(3)) then; y([2,3]) = y([3,2]); endif
+        !
+    end function  d_foursort
+
+    pure function i_foursort(x) result(y)
+        !
+        implicit none
+        !
+        integer, intent(in) :: x(4)
+        integer :: y(4)
+        !
+        y = x
+        if (y(1).gt.y(2)) then; y([1,2]) = y([2,1]); endif
+        if (y(3).gt.y(4)) then; y([3,4]) = y([4,3]); endif
+        if (y(1).gt.y(3)) then; y([1,3]) = y([3,1]); endif
+        if (y(2).gt.y(4)) then; y([2,4]) = y([4,2]); endif
+        if (y(2).gt.y(3)) then; y([2,3]) = y([3,2]); endif
+        !
+    end function  i_foursort
+
+    pure function d_fourrank(n) result(ind)
+        ! borrowed from olle, who took it from stack overflow
+        implicit none
+        !
+        real(dp),intent(in) :: n(4)
+        integer :: ind(4)
+        integer :: low1,high1,low2,high2,highest,lowest,middle1,middle2
+        !    
+        if ( n(1) <= n(2) ) then
+            low1 = 1
+            high1 = 2
+        else 
+            low1 = 2
+            high1 = 1
+        endif
+
+        if ( n(3) <= n(4) ) then
+            low2 = 3
+            high2 = 4
+        else
+            low2 = 4
+            high2 = 3
+        endif
+
+        if ( n(low1) <= n(low2) ) then
+            lowest = low1
+            middle1 = low2
+        else
+            lowest = low2
+            middle1 = low1
+        endif
+
+        if ( n(high1) >= n(high2) ) then
+            highest = high1
+            middle2 = high2
+        else
+            highest = high2
+            middle2 = high1
+        endif
+
+        if ( n(middle1) < n(middle2) ) then
+            ind=(/lowest,middle1,middle2,highest/)
+        else
+            ind=(/lowest,middle2,middle1,highest/)
+        endif
+        !
+    end function  d_fourrank
+
+    pure function i_fourrank(n) result(ind)
+        ! borrowed from olle, who took it from stack overflow
+        implicit none
+        !
+        integer,intent(in) :: n(4)
+        integer :: ind(4)
+        integer :: low1,high1,low2,high2,highest,lowest,middle1,middle2
+        !    
+        if ( n(1) <= n(2) ) then
+            low1 = 1
+            high1 = 2
+        else 
+            low1 = 2
+            high1 = 1
+        endif
+
+        if ( n(3) <= n(4) ) then
+            low2 = 3
+            high2 = 4
+        else
+            low2 = 4
+            high2 = 3
+        endif
+
+        if ( n(low1) <= n(low2) ) then
+            lowest = low1
+            middle1 = low2
+        else
+            lowest = low2
+            middle1 = low1
+        endif
+
+        if ( n(high1) >= n(high2) ) then
+            highest = high1
+            middle2 = high2
+        else
+            highest = high2
+            middle2 = high1
+        endif
+
+        if ( n(middle1) < n(middle2) ) then
+            ind=(/lowest,middle1,middle2,highest/)
+        else
+            ind=(/lowest,middle2,middle1,highest/)
+        endif
+        !
+    end function  i_fourrank
+
+    pure function d_rank(v) result(ind)
+      !
+      ! based on dlasrt2
+      !
+      implicit none
+      !
+      real(dp), intent(in) :: v(:)
+      real(dp), allocatable :: d(:)
+      integer, allocatable :: ind(:)
+      integer :: select, endd, i, j, start, stkpnt, tmpind, stack(2,32), n
+      real(dp) :: d1, d2, d3, dmnmx, tmp
+      !
+      select = 20
+      !
+      n = size(v)
+      !
+      allocate(d,source=v)
+      !
+      allocate(ind,source=[1:n])
+      !
+      if (n.le.1) return
+      !
+      stkpnt = 1
+      stack(1,1) = 1
+      stack(2,1) = n
+      !
+      do
+         start = stack(1, stkpnt)
+         endd = stack(2, stkpnt)
+         stkpnt = stkpnt - 1
+         if(endd-start.gt.0) then
+            do i = start + 1, endd
+               do j = i, start + 1, -1
+                  if(d(j).lt.d(j-1)) then
+                     dmnmx = d(j)
+                     d(j) = d(j-1)
+                     d(j-1) = dmnmx
+                     tmpind = ind(j)
+                     ind(j) = ind(j-1)
+                     ind(j-1) = tmpind
+                  else
+                     exit
+                  end if
+               enddo
+            enddo
+         else if(endd-start.gt.select) then
+            d1 = d(start)
+            d2 = d(endd)
+            i = (start+endd) / 2
+            d3 = d(i)
+            if(d1.lt.d2) then
+               if(d3.lt.d1) then
+                  dmnmx = d1
+               else if(d3.lt.d2) then
+                  dmnmx = d3
+               else
+                  dmnmx = d2
+               end if
+            else
+               if(d3.lt.d2) then
+                  dmnmx = d2
+               else if(d3.lt.d1) then
+                  dmnmx = d3
+               else
+                  dmnmx = d1
+               end if
+            end if
+            i = start - 1
+            j = endd + 1
+            do
+               do
+                  j = j - 1
+                  if (.not.(d(j).gt.dmnmx)) exit
+               enddo
+               do
+                  i = i + 1
+                  if (.not.(d(i).lt.dmnmx)) exit
+               enddo
+               if(i.gt.j) then
+                  exit   
+               else 
+                  tmp = d(i)
+                  d(i) = d(j)
+                  d(j) = tmp
+                  tmpind = ind(j)
+                  ind(j) = ind(i)
+                  ind(i) = tmpind
+               end if
+            enddo
+            if(j-start.gt.endd-j-1) then
+               stkpnt = stkpnt + 1
+               stack(1, stkpnt) = start
+               stack(2, stkpnt) = j
+               stkpnt = stkpnt + 1
+               stack(1, stkpnt) = j + 1
+               stack(2, stkpnt) = endd
+            else
+               stkpnt = stkpnt + 1
+               stack(1, stkpnt) = j + 1
+               stack(2, stkpnt) = endd
+               stkpnt = stkpnt + 1
+               stack(1, stkpnt) = start
+               stack(2, stkpnt) = j
+            end if
+         end if
+         if (.not.(stkpnt.gt.0)) exit
+      enddo
+    end function  d_rank
+
+    pure function i_rank(v) result(ind)
+      !
+      ! based on dlasrt2
+      !
+      implicit none
+      !
+      integer, intent(in) :: v(:)
+      integer, allocatable :: d(:)
+      integer, allocatable :: ind(:)
+      integer :: select, endd, i, j, start, stkpnt, tmpind, stack(2,32), n
+      integer :: d1, d2, d3, dmnmx, tmp
+      !
+      select = 20
+      !
+      n = size(v)
+      !
+      allocate(d,source=v)
+      !
+      allocate(ind,source=[1:n])
+      !
+      if (n.le.1) return
+      !
+      stkpnt = 1
+      stack(1,1) = 1
+      stack(2,1) = n
+      !
+      do
+         start = stack(1, stkpnt)
+         endd = stack(2, stkpnt)
+         stkpnt = stkpnt - 1
+         if(endd-start.gt.0) then
+            do i = start + 1, endd
+               do j = i, start + 1, -1
+                  if(d(j).lt.d(j-1)) then
+                     dmnmx = d(j)
+                     d(j) = d(j-1)
+                     d(j-1) = dmnmx
+                     tmpind = ind(j)
+                     ind(j) = ind(j-1)
+                     ind(j-1) = tmpind
+                  else
+                     exit
+                  end if
+               enddo
+            enddo
+         else if(endd-start.gt.select) then
+            d1 = d(start)
+            d2 = d(endd)
+            i = (start+endd) / 2
+            d3 = d(i)
+            if(d1.lt.d2) then
+               if(d3.lt.d1) then
+                  dmnmx = d1
+               else if(d3.lt.d2) then
+                  dmnmx = d3
+               else
+                  dmnmx = d2
+               end if
+            else
+               if(d3.lt.d2) then
+                  dmnmx = d2
+               else if(d3.lt.d1) then
+                  dmnmx = d3
+               else
+                  dmnmx = d1
+               end if
+            end if
+            i = start - 1
+            j = endd + 1
+            do
+               do
+                  j = j - 1
+                  if (.not.(d(j).gt.dmnmx)) exit
+               enddo
+               do
+                  i = i + 1
+                  if (.not.(d(i).lt.dmnmx)) exit
+               enddo
+               if(i.gt.j) then
+                  exit   
+               else 
+                  tmp = d(i)
+                  d(i) = d(j)
+                  d(j) = tmp
+                  tmpind = ind(j)
+                  ind(j) = ind(i)
+                  ind(i) = tmpind
+               end if
+            enddo
+            if(j-start.gt.endd-j-1) then
+               stkpnt = stkpnt + 1
+               stack(1, stkpnt) = start
+               stack(2, stkpnt) = j
+               stkpnt = stkpnt + 1
+               stack(1, stkpnt) = j + 1
+               stack(2, stkpnt) = endd
+            else
+               stkpnt = stkpnt + 1
+               stack(1, stkpnt) = j + 1
+               stack(2, stkpnt) = endd
+               stkpnt = stkpnt + 1
+               stack(1, stkpnt) = start
+               stack(2, stkpnt) = j
+            end if
+         end if
+         if (.not.(stkpnt.gt.0)) exit
+      enddo
+    end function  i_rank
+
+    ! $$\      $$\  $$$$$$\ $$$$$$$$\ $$\   $$\       $$$$$$$$\ $$\   $$\ $$\   $$\  $$$$$$\ $$$$$$$$\ $$$$$$\  $$$$$$\  $$\   $$\  $$$$$$\
+    ! $$$\    $$$ |$$  __$$\\__$$  __|$$ |  $$ |      $$  _____|$$ |  $$ |$$$\  $$ |$$  __$$\\__$$  __|\_$$  _|$$  __$$\ $$$\  $$ |$$  __$$\
+    ! $$$$\  $$$$ |$$ /  $$ |  $$ |   $$ |  $$ |      $$ |      $$ |  $$ |$$$$\ $$ |$$ /  \__|  $$ |     $$ |  $$ /  $$ |$$$$\ $$ |$$ /  \__|
+    ! $$\$$\$$ $$ |$$$$$$$$ |  $$ |   $$$$$$$$ |      $$$$$\    $$ |  $$ |$$ $$\$$ |$$ |        $$ |     $$ |  $$ |  $$ |$$ $$\$$ |\$$$$$$\
+    ! $$ \$$$  $$ |$$  __$$ |  $$ |   $$  __$$ |      $$  __|   $$ |  $$ |$$ \$$$$ |$$ |        $$ |     $$ |  $$ |  $$ |$$ \$$$$ | \____$$\
+    ! $$ |\$  /$$ |$$ |  $$ |  $$ |   $$ |  $$ |      $$ |      $$ |  $$ |$$ |\$$$ |$$ |  $$\   $$ |     $$ |  $$ |  $$ |$$ |\$$$ |$$\   $$ |
+    ! $$ | \_/ $$ |$$ |  $$ |  $$ |   $$ |  $$ |      $$ |      \$$$$$$  |$$ | \$$ |\$$$$$$  |  $$ |   $$$$$$\  $$$$$$  |$$ | \$$ |\$$$$$$  |
+    ! \__|     \__|\__|  \__|  \__|   \__|  \__|      \__|       \______/ \__|  \__| \______/   \__|   \______| \______/ \__|  \__| \______/
+
+    ! special functions
+
+    pure function legendre(l,m,x) result(y)
+        !
+        ! Associated legrende polynomial
+        !
+        ! W. H. Press, B. P. Flannery, S. A. Teukolsky, and W. T. Vetterling, Numerical Recipes in Fortran 77: The Art
+        ! of Scientific Computing, 2 edition (Cambridge University Press, Cambridge England?; New York, 1992), p 246.
+        !
+        implicit none
+        !
+        integer , intent(in) :: l,m
+        real(dp), intent(in) :: x(:)
+        real(dp), allocatable :: y(:)
+        integer  :: ll
+        real(dp) :: pll(size(x))
+        real(dp) :: pmm(size(x))
+        real(dp) :: pmmp1(size(x))
+        real(dp) :: somx2(size(x))
+        !
+        allocate(y(size(x)))
+        !
+        if ((m.lt.0).or.(m.gt.l).or.(all(abs(x).gt.1.0_dp))) then
+            y = 0
+        endif
+        !
+        pmm=1.0
+        if (m > 0) then
+            somx2=sqrt((1.0_dp-x)*(1.0_dp+x))
+            pmm=product(arth(1.0_dp,2.0_dp,m))*somx2**m
+            if (mod(m,2) == 1) pmm=-pmm
+        end if
+        if (l == m) then
+            y=pmm
+        else
+            pmmp1=x*(2*m+1)*pmm
+            if (l == m+1) then
+                y=pmmp1
+            else
+                do ll=m+2,l
+                    pll=(x*(2*ll-1)*pmmp1-(ll+m-1)*pmm)/(ll-m)
+                    pmm=pmmp1
+                    pmmp1=pll
+                end do
+                y=pll
+            end if
+        end if
+        contains
+        pure function arth(first,increment,n)
+            !
+            implicit none
+            !
+            real(dp), intent(in) :: first
+            real(dp), intent(in) :: increment
+            integer , intent(in) :: n
+            real(dp) :: arth(n)
+            integer  :: k,k2
+            real(dp) :: temp
+            !
+            if (n > 0) arth(1)=first
+            if (n <= 16) then
+                do k=2,n
+                    arth(k)=arth(k-1)+increment
+                enddo
+            else
+                do k=2,8
+                    arth(k)=arth(k-1)+increment
+                end do
+                temp=increment*8
+                k=8
+                do
+                    if (k >= n) exit
+                    k2=k+k
+                    arth(k+1:min(k2,n))=temp+arth(1:min(k,n-k))
+                    temp=temp+temp
+                    k=k2
+                enddo
+            end if
+        end function arth
+    end function  legendre
+
+    pure function laguerre(k,p,x) result(y)
+        ! associated Laguerre polynomial L_k^p(x)(k,p,x)
+        ! Using the expression from Samuel Shaw Ming Wong "Computational Methods in Physics and Engineering", Eq 4-86 p 139
+        ! Note, there is a typographical error on http://mathworld.wolfram.com/AssociatedLaguerrePolynomial.html Eq 10
+        ! Also see Linus Pauling "Introuction to Quantum Mechancs"
+        implicit none 
+        !
+        integer , intent(in) :: k, p
+        real(dp), intent(in) :: x(:)
+        real(dp), allocatable :: y(:)
+        integer :: j
+        !
+        allocate(y,mold=x)
+        y=0.0_dp
+        !
+        do j = 0, k
+            y = y + nchoosek(k+p,k-j) * (-x)**j / factorial(j)
+        enddo
+        !
+    end function  laguerre
+
+    pure function Ylm(l,m,theta,phi)
+        !
+        ! computes spherical harmonics. Theta and phi in radians. size(theta) must equal size(phi); together they define the radial coordinates.
+        !
+        ! W. H. Press, B. P. Flannery, S. A. Teukolsky, and W. T. Vetterling, Numerical Recipes in Fortran 77: The Art
+        ! of Scientific Computing, 2 edition (Cambridge University Press, Cambridge England?; New York, 1992), p 246.
+        ! 
+        implicit none
+        !
+        integer , intent(in) :: l, m
+        real(dp), intent(in) :: theta(:), phi(:)
+        complex(dp), allocatable :: Ylm(:)
+        integer :: n
+        ! 
+        n = size(theta)
+        !
+        allocate(Ylm(n))
+        !
+        Ylm = sqrt( real(2*l+1,dp)/fourpi * factorial(l-m)/real(factorial(l+m),dp) ) * legendre(l,m,cos(theta)) * exp(cmplx_i*m*phi)
+        !
+    end function  Ylm
+
+    pure function heavi(m)
+        !
+        ! A. V. Podolskiy and P. Vogl, Phys. Rev. B 69, 233101 (2004). Eq 15
+        !
+        implicit none
+        !
+        integer, intent(in) :: m
+        real(dp) :: heavi
+        !
+        if (m.ge.0) then
+            heavi = 1.0_dp
+        else
+            heavi = 0.0_dp
+        endif
+        !
+    end function  heavi
+
+    ! heaviside theta functions
+
+    pure function fermi_dirac(x) result(y)
+        !
+        implicit none
+        !
+        real(dp), intent(in) :: x
+        real(dp) :: y
+        real(dp) :: maxarg
+        maxarg = 200.0_dp
+        ! Fermi-Dirac smearing
+        if (x.lt.-maxarg) then
+            y = 0.0_dp
+        elseif (x.gt.maxarg) then
+            y = 1.0_dp
+        else
+            y = 1.0_dp/(1.0_dp + exp(-x))
+        endif
+    end function  fermi_dirac
+    
+    pure function methfessel_paxton(x,n) result(y)
+        ! theta function : PRB 40, 3616 (1989).
+        implicit none
+        !
+        real(dp), intent(in) :: x
+        integer , intent(in) :: n
+        real(dp) :: y
+        
+        real(dp) :: a, hp, arg, hd
+        integer :: i, ni
+        real(dp), parameter :: maxarg = 200.0_dp
+        
+        ! Methfessel-Paxton
+        y = gauss_freq(x * sqrt(2.0_dp) )
+        if (n.eq.0) return
+        hd = 0.0_dp
+        arg = min(maxarg, x**2)
+        hp = exp(- arg)
+        ni = 0
+        a = 1.0_dp / sqrt (pi)
+        do i=1,n
+            hd = 2.0_dp*x*hp-2.0_dp*real(ni,dp)*hd
+            ni = ni+1
+            a = -a/(real(i,dp)*4.0_dp)
+            y = y-a*hd
+            hp = 2.0_dp*x*hd-2.0_dp*real(ni,dp)*hp
+            ni = ni+1
+        enddo
+        contains
+        pure function gauss_freq(x)
+            !     gauss_freq(x) = (1+erf(x/sqrt(2)))/2 = erfc(-x/sqrt(2))/2
+            implicit none
+            !
+            real(dp),intent(in) :: x
+            real(dp)            :: gauss_freq
+            !
+            gauss_freq = 0.5_dp * erfc(-x*0.7071067811865475_dp)
+            !
+        end function  gauss_freq
+    end function  methfessel_paxton
+
+    pure function marzari_vanderbilt(x) result(y)
+        ! theta function: PRL 82, 3296 (1999)
+        ! 1/2*erf(x-1/sqrt(2)) + 1/sqrt(2*pi)*exp(-(x-1/sqrt(2))**2) + 1/2
+        implicit none
+        !
+        real(dp), intent(in) :: x
+        real(dp) :: y
+        real(dp) :: arg, xp
+        real(dp) :: maxarg
+        maxarg = 200.0_dp
+        ! Cold smearing
+         xp = x - 1.0_dp / sqrt (2.0_dp)
+         arg = min (maxarg, xp**2)
+         y = 0.5d0 * erf (xp) + 1.0_dp / sqrt (2.0_dp * pi) * exp (- arg) + 0.5d0
+    end function  marzari_vanderbilt
+
+    pure function erf(x)
+      !---------------------------------------------------------------------
+      !
+      !     Error function - computed from the rational approximations of
+      !     W. J. Cody, Math. Comp. 22 (1969), pages 631-637.
+      !
+      !     for abs(x) le 0.47 erf is calculated directly
+      !     for abs(x) gt 0.47 erf is calculated via erf(x)=1-erfc(x)
+      !
+      implicit none  
+      real(dp), intent(in) :: x
+      real(dp) :: x2, p1(4), q1(4)
+      real(dp) :: erf
+      !
+      p1 = [2.426679552305318E2_dp, 2.197926161829415E1_dp, 6.996383488619136_dp,  -3.560984370181538E-2_dp]
+      q1 = [2.150588758698612E2_dp, 9.116490540451490E1_dp, 1.508279763040779E1_dp, 1.000000000000000_dp]
+      !
+      if (abs(x).gt.6.0_dp) then  
+         !  erf(6)=1-10^(-17) cannot be distinguished from 1
+         erf = sign (1.0_dp, x)  
+      else  
+         if (abs(x).le.0.47_dp) then  
+            x2 = x**2  
+            erf = x*(p1(1)+x2*(p1(2)+x2*(p1(3)+x2*p1(4))))/(q1(1)+x2*(q1(2)+x2*(q1(3)+x2*q1(4))))
+         else  
+            erf = 1.0_dp - erfc(x)  
+         endif
+      endif
+    end function  erf
+
+    pure function erfc(x)
+      !     erfc(x) = 1-erf(x)  - See comments in erf
+      implicit none  
+      real(dp),intent(in) :: x
+      real(dp)            :: erfc
+      real(dp) :: ax, xm2, p2(8), q2(8), p3(5), q3(5), pim1
+      !
+      p2 = [ 3.004592610201616E2_dp,  4.519189537118719E2_dp,  3.393208167343437E2_dp,  1.529892850469404E2_dp,  4.316222722205674E1_dp,  7.211758250883094_dp,    5.641955174789740E-1_dp,-1.368648573827167E-7_dp]
+      q2 = [ 3.004592609569833E2_dp,  7.909509253278980E2_dp,  9.313540948506096E2_dp,  6.389802644656312E2_dp,  2.775854447439876E2_dp,  7.700015293522947E1_dp,  1.278272731962942E1_dp,  1.000000000000000_dp]
+      p3 = [-2.996107077035422E-3_dp,-4.947309106232507E-2_dp,  -2.269565935396869E-1_dp,-2.786613086096478E-1_dp,  -2.231924597341847E-2_dp]
+      q3 = [ 1.062092305284679E-2_dp, 1.913089261078298E-1_dp,  1.051675107067932_dp,    1.987332018171353_dp,     1.000000000000000_dp]
+      pim1 = 0.56418958354775629_dp  ! sqrt(1/pi)
+      ax = abs(x)  
+      if (ax > 26.0_dp) then  
+         !  erfc(26.0)=10^(-296); erfc(9.0)=10^(-37);
+         erfc = 0.0_dp  
+      elseif (ax.gt.4.0_dp) then
+         xm2=(1.0_dp/ax)**2
+         erfc=(1.0_dp/ax)*exp(-2.0_dp)*(pim1+xm2*(p3(1)+xm2*(p3(2)+xm2*(p3(3)+xm2*(p3(4)+xm2*p3(5)))))/(q3(1)+xm2*(q3(2)+xm2*(q3(3)+xm2*(q3(4)+xm2*q3(5))))))
+      elseif(ax.gt.0.47_dp)then
+         erfc=exp(-x**2)*(p2(1)+ax*(p2(2)+ax*(p2(3)+ax*(p2(4)+ax*(p2(5)+ax*(p2(6)+ax*(p2(7)+ax*p2(8))))))))/(q2(1)+ax*(q2(2)+ax*(q2(3)+ax*(q2(4)+ax*(q2(5)+ax*(q2(6)+ax*(q2(7)+ax*q2(8))))))))
+      else
+         erfc=1.0_dp-erf(ax)
+      endif
+      ! erf(-x)=-erf(x)  =>  erfc(-x) = 2-erfc(x)
+      if (x < 0.0_dp) erfc = 2.0_dp - erfc 
+    end function  erfc
+
+    ! delta functions and theta function derivatives
+
+    pure function fermi_dirac_dydx(x) result(y)
+        ! derivative of Fermi-Dirac function: 0.5/(1.0+cosh(x))
+        implicit none
+        real(dp), intent(in) :: x
+        real(dp) :: y
+        !
+        if (abs(x).le.36.0_dp) then
+            y = 1.0_dp/(2.0_dp+exp(-x)+exp(+x))
+        else
+            y = 0.0_dp
+        endif
+    end function  fermi_dirac_dydx
+
+    pure function marzari_vanderbilt_dydx(x) result(y)
+        ! 1/sqrt(pi)*exp(-(x-1/sqrt(2))**2)*(2-sqrt(2)*x)
+        implicit none
+        real(dp), intent(in) :: x
+        real(dp) :: y
+        real(dp) :: arg
+        real(dp) :: sqrtpm1
+        !
+        sqrtpm1 = 0.564189583547756_dp ! 1/sqrt(pi)
+        arg = min(200.0_dp,(x-1.0_dp/sqrt(2.0_dp))**2)
+        y = sqrtpm1*exp(-arg)*(2.0_dp-sqrt(2.0_dp)*x)
+    end function  marzari_vanderbilt_dydx
+
+    pure function methfessel_paxton_dydx(x,n) result(y)
+        ! derivative of the corresponding Methfessel-Paxton wgauss
+        implicit none
+        real(dp), intent(in) :: x
+        integer , intent(in) :: n
+        real(dp) :: y
+        real(dp) :: a, arg, hp, hd
+        integer :: i, ni
+        real(dp) :: sqrtpm1
+        !
+        sqrtpm1 = 0.564189583547756_dp ! 1/sqrt(pi)
+        arg = min(200.0_dp, x**2)
+        y = exp(-arg)*sqrtpm1
+        if (n.eq.0) return
+        hd = 0.0_dp
+        hp = exp(-arg)
+        ni = 0
+        a  = sqrtpm1
+        do i = 1, n
+            hd = 2.0_dp*x*hp-2.0_dp*real(ni,dp)*hd
+            ni = ni+1
+            a  = -a/(real(i,dp)*4.0_dp)
+            hp = 2.0_dp*x*hd-2.0_dp*real(ni,dp)*hp
+            ni = ni+1
+            y  = y+a*hp
+        enddo
+    end function  methfessel_paxton_dydx
+
+    pure function gauss(x) result(y)
+        ! derivative of Fermi-Dirac function: exp( - (x-x_o)^2 / (2*sigma^2) ) / sigma * sqrt( 2 * pi )
+        ! degauss = (sqrt(2)*sigma) => exp(-(x-xo)**2/degauss**2)/(degauss*sqrt(pi))
+        ! set degauss = 1 and center xo = 0
+        implicit none
+        real(dp), intent(in) :: x
+        real(dp) :: y
+        !
+        if (abs(x).le.7.0_dp) then
+            y = exp(-x**2.0_dp)/sqrtpi
+            ! in order to avoid problems for large values of x in the e
+        else
+            y = 0.0_dp
+        endif
+    end function  gauss
+
+    pure function lorentz(x) result(y)
+        ! x = ( E(j,k)-Ep(i) )/degauss 
+        ! derivative of Fermi-Dirac function: 1/( ((x-xo)/degauss)**2 + 1) * 1/(pi * degauss), 
+        ! notice that the 1/degauss factor is taken outside of the equation 
+        implicit none
+        real(dp), intent(in) :: x
+        real(dp) :: y
+        !
+        y = 1.0_dp/( pi * ( x**2 + 1 ) )
+        !
+    end function  lorentz
+
+    ! $$$$$$\ $$\   $$\ $$$$$$$$\ $$$$$$$$\  $$$$$$\  $$$$$$$\   $$$$$$\ $$$$$$$$\ $$$$$$\  $$$$$$\  $$\   $$\
+    !  \_$$  _|$$$\  $$ |\__$$  __|$$  _____|$$  __$$\ $$  __$$\ $$  __$$\\__$$  __|\_$$  _|$$  __$$\ $$$\  $$ |
+    !    $$ |  $$$$\ $$ |   $$ |   $$ |      $$ /  \__|$$ |  $$ |$$ /  $$ |  $$ |     $$ |  $$ /  $$ |$$$$\ $$ |
+    !    $$ |  $$ $$\$$ |   $$ |   $$$$$\    $$ |$$$$\ $$$$$$$  |$$$$$$$$ |  $$ |     $$ |  $$ |  $$ |$$ $$\$$ |
+    !    $$ |  $$ \$$$$ |   $$ |   $$  __|   $$ |\_$$ |$$  __$$< $$  __$$ |  $$ |     $$ |  $$ |  $$ |$$ \$$$$ |
+    !    $$ |  $$ |\$$$ |   $$ |   $$ |      $$ |  $$ |$$ |  $$ |$$ |  $$ |  $$ |     $$ |  $$ |  $$ |$$ |\$$$ |
+    !  $$$$$$\ $$ | \$$ |   $$ |   $$$$$$$$\ \$$$$$$  |$$ |  $$ |$$ |  $$ |  $$ |   $$$$$$\  $$$$$$  |$$ | \$$ |
+    !  \______|\__|  \__|   \__|   \________| \______/ \__|  \__|\__|  \__|  \__|   \______| \______/ \__|  \__|
+
+    ! gaussian method
+
+    function       get_dos_quick(Ep,E,kptw,degauss,flags) result(D)
+        ! flags = fermi, mp, mv, gauss, lorentz
+        implicit none
+        !
+        real(dp), intent(in) :: Ep(:)       ! probing energies
+        real(dp), intent(in) :: E(:,:)      ! E(nbands,nkpts) band energies
+        real(dp), intent(in) :: kptw(:)     ! kptw(nkpts) normalized kpoint weights
+        real(dp), intent(in) :: degauss
+        character(*), intent(in) :: flags
+        real(dp), allocatable :: D(:)
+        integer  :: nEs
+        integer  :: nbands
+        integer  :: nkpts
+        integer  :: i,j,k
+        real(dp) :: xp
+        ! get number of probing energies
+        nEs = size(Ep)
+        ! get n of band
+        nbands = size(E,1)
+        ! get n of kpoints
+        nkpts = size(kptw)
+        ! allocate space for dos
+        allocate(D(nEs))
+        !$OMP PARALLEL PRIVATE(i,j,k) SHARED(D,E,Ep,nEs,kptw)
+        !$OMP DO
+        do i = 1, nEs
+            ! initialize D(i)
+            D(i) = 0.0_dp
+            do j = 1, nbands
+            do k = 1, nkpts
+                xp = ( E(j,k)-Ep(i) )/degauss
+                ! get contribution
+                if     (index(flags,'fermi').ne.0) then
+                    D(i) = D(i) + kptw(k) * fermi_dirac_dydx(x=xp)
+                elseif (index(flags,'mp').ne.0) then
+                    D(i) = D(i) + kptw(k) * methfessel_paxton_dydx(x=xp,n=1)
+                elseif (index(flags,'mv').ne.0) then
+                    D(i) = D(i) + kptw(k) * marzari_vanderbilt_dydx(x=xp)
+                elseif (index(flags,'gauss').ne.0) then
+                    D(i) = D(i) + kptw(k) * gauss(x=xp)
+                elseif (index(flags,'lorentz').ne.0) then
+                    D(i) = D(i) + kptw(k) * lorentz(x=xp)
+                else
+                    stop 'ERROR [get_dos_quick]: flag not recognized'
+                endif
+            enddo
+            enddo
+        enddo
+        !$OMP END DO
+        !$OMP END PARALLEL
+        D = D / degauss
+    end function   get_dos_quick
+
+    function       get_pdos_quick(Ep,E,kptw,degauss,W,flags) result(pD)
+        ! flags = fermi, mp, mv, gauss, lorentz
+        implicit none
+        !
+        real(dp), intent(in) :: Ep(:)    ! probing energies
+        real(dp), intent(in) :: E(:,:)   ! E(nbands,nkpts) band energies
+        real(dp), intent(in) :: W(:,:,:) ! W(nprojections,nbands,nkpts) band weights
+        real(dp), intent(in) :: kptw(:)  ! kptw(nkpts) normalized kpoint weights
+        real(dp), intent(in) :: degauss
+        character(*), intent(in) :: flags
+        real(dp), allocatable :: pD(:,:)
+        integer  :: nEs
+        integer  :: nbands
+        integer  :: nkpts
+        integer  :: nprojections
+        integer  :: i,j,k,l
+        real(dp) :: xp,yp
+        ! get number of probing energies
+        nEs = size(Ep)
+        ! get n of band
+        nbands = size(E,1)
+        ! get n of kpoints
+        nkpts = size(kptw)
+        ! numbe of projections
+        nprojections = size(W,1)
+        ! allocate space for dos
+        allocate(pD(nprojections,nEs))
+        ! initialize
+        pD = 0.0_dp
+        !$OMP PARALLEL PRIVATE(i,j,k,l) SHARED(pD,E,Ep,nEs,kptw)
+        !$OMP DO
+        do i = 1, nEs
+            do j = 1, nbands
+            do k = 1, nkpts
+                xp = ( E(j,k)-Ep(i) )/degauss
+                ! get contribution from this band
+                if     (index(flags,'fermi').ne.0) then
+                    yp = fermi_dirac_dydx(x=xp)
+                elseif (index(flags,'mp').ne.0) then
+                    yp = methfessel_paxton_dydx(x=xp,n=1)
+                elseif (index(flags,'mv').ne.0) then
+                    yp = marzari_vanderbilt_dydx(x=xp)
+                elseif (index(flags,'gauss').ne.0) then
+                    yp = gauss(x=xp)
+                elseif (index(flags,'lorentz').ne.0) then
+                    yp = lorentz(x=xp)
+                else
+                    stop 'ERROR [get_dos_quick]: flag not recognized'
+                endif
+                ! multiply by kpoint weight
+                yp = yp * kptw(k)
+                ! multiply by band weights
+                do l = 1, nprojections
+                    pD(l,i) = pD(l,i) + yp * W(l,j,k)
+                enddo
+            enddo
+            enddo
+        enddo
+        !$OMP END DO
+        !$OMP END PARALLEL
+        pD = pD / degauss
+    end function   get_pdos_quick
+
+    ! DOS properties
+
+    function       get_Ef(E,tet,tetw,nelecs) result(Ef)
+        ! adapted from qe
+        implicit none
+        !
+        real(dp), intent(in) :: E(:,:)
+        integer , intent(in) :: tet(:,:)
+        real(dp), intent(in) :: tetw(:)
+        real(dp), intent(in) :: nelecs
+        real(dp) :: Ef
+        integer  :: i
+        integer  :: ntets
+        integer  :: nbands
+        integer  :: nkpts
+        real(dp) :: Emin    ! absolute lowest band energy
+        real(dp) :: Emax    ! absolute highest band energy
+        real(dp) :: elw     ! lower bound for EF
+        real(dp) :: eup     ! upper bound for EF
+        real(dp) :: idos_up ! number of states for Ef=eup
+        real(dp) :: idos_lw ! number of states for Ef=elw
+        real(dp) :: idos_ep ! number of states for Ef=(elw+eup)/2
+        real(dp) :: try_Ef  ! new Ef to try
+        real(dp) :: crit    ! stopping criterion
+        ! get bands, kpts, tetrahedra
+        nbands = size(E,1)
+        nkpts  = size(E,2)
+        ntets  = sizE(tet,2)
+        ! get lower and upper bracketing bounds
+        Emin = minval(E)
+        Emax = maxval(E)
+        elw = Emin
+        eup = Emax
+        ! initailize bracketing 
+        idos_up = get_idos_at_ep(Ep=eup,E=E,tet=tet,tetw=tetw)
+        idos_lw = get_idos_at_ep(Ep=elw,E=E,tet=tet,tetw=tetw)
+        crit = 1.0d+10
+        ! search for Ef by gradualling reducing bracketted region
+        search : do i = 1, 1000 ! hard-coded 1000 maximum iterations
+            try_Ef = (eup+elw) / 2.0_dp
+            idos_ep = get_idos_at_ep(Ep=try_Ef,E=E,tet=tet,tetw=tetw)
+            if (abs(idos_ep-nelecs).lt.crit) then
+                crit = abs(idos_ep-nelecs)
+                Ef = try_Ef
+            endif
+            ! converged
+            if (abs(idos_ep-nelecs).lt.tiny) then
+                exit search
+            elseif((idos_ep-nelecs).lt.-tiny) then
+                elw = try_Ef
+            else
+                eup = try_Ef
+            endif
+        enddo search
+        ! check convergence
+        if (abs(idos_ep-nelecs).gt.tiny) stop 'ERROR [XX] failed to converge on Ef.'
+        ! check that Ef < highest band
+        if (Ef.gt.Emax) stop 'ERROR [XX]: Ef is above the highest band energy'
+        !
+    end function   get_Ef
+
+    ! tetrahedra methods
+
+    function       get_dos_vs_Ep(Ep,E,tet,tetw) result(D)
+        !
+        implicit none
+        !
+        real(dp), intent(in) :: Ep(:) ! probing energies
+        real(dp), intent(in) :: E(:,:) ! E(nbands,nkpts) band energies
+        integer , intent(in) :: tet(:,:) ! tet(:,ntets) tetrahedra conenctivity
+        real(dp), intent(in) :: tetw(:) ! tetw(ntets) weight of each tetrahedron
+        real(dp), allocatable :: D(:)
+        integer :: nEs
+        integer :: i
+        ! get number of probing energies
+        nEs = size(Ep)
+        ! allocate space for dos
+        allocate(D(nEs))
+        !$OMP PARALLEL PRIVATE(i) SHARED(D,nEs,E,Ep,tet,tetw)
+        !$OMP DO
+        do i = 1, nEs
+            ! get dos
+            D(i) = get_dos_at_ep(Ep=Ep(i),E=E,tet=tet,tetw=tetw)
+        enddo
+        !$OMP END DO
+        !$OMP END PARALLEL
+    end function   get_dos_vs_Ep
+
+    function       get_idos_vs_Ep(Ep,E,tet,tetw) result(iD)
+        !
+        implicit none
+        !
+        real(dp), intent(in) :: Ep(:) ! probing energies
+        real(dp), intent(in) :: E(:,:) ! E(nbands,nkpts) band energies
+        integer , intent(in) :: tet(:,:) ! tet(:,ntets) tetrahedra conenctivity
+        real(dp), intent(in) :: tetw(:) ! tetw(ntets) weight of each tetrahedron
+        real(dp), allocatable :: iD(:)
+        integer :: nEs
+        integer :: i
+        ! get number of probing energies
+        nEs = size(Ep)
+        ! allocate space for dos
+        allocate(iD(nEs))
+        !$OMP PARALLEL PRIVATE(i) SHARED(iD,nEs,E,Ep,tet,tetw)
+        !$OMP DO
+        do i = 1, nEs
+            ! get dos
+            iD(i) = get_idos_at_ep(Ep=Ep(i),E=E,tet=tet,tetw=tetw)
+        enddo
+        !$OMP END DO
+        !$OMP END PARALLEL
+    end function   get_idos_vs_Ep
+
+    function       get_pdos_vs_Ep(Ep,E,tet,tetw,weight) result(pD)
+        !
+        implicit none
+        !
+        real(dp), intent(in) :: Ep(:) ! probing energies
+        real(dp), intent(in) :: E(:,:) ! E(nbands,nkpts) band energies
+        integer,intent(in) :: tet(:,:) ! tet(:,ntets) tetrahedra conenctivity
+        real(dp), intent(in) :: tetw(:) ! tetw(ntets) weight of each tetrahedron
+        real(dp), intent(in) :: weight(:,:,:) ! weights(nprojections,nbands,nkpts), weights (per band per kpoint) for projected dos: can be absolute square of TB or BvK eigenvectors
+        real(dp), allocatable :: pD(:,:)
+        integer  :: nEs
+        integer  :: nbands
+        integer  :: ntets
+        integer  :: nprojections
+        real(dp)   :: wc(4) ! corner tetrahedron weights
+        integer  :: i,j,k,m
+        ! get number of probing energies
+        nEs = size(Ep)
+        ! get n of band
+        nbands = size(E,1)
+        ! get number of tetrahedra
+        ntets = size(tet,2)
+        ! get number of projections
+        nprojections = size(weight,1)
+        ! allocate space 
+        allocate(pD(nprojections,nEs))
+        ! loop over energies, bands, tetrahedra
+        !$OMP PARALLEL PRIVATE(i,j,k,m,wc) SHARED(pD,E,Ep,nEs,tetw,weight)
+        !$OMP DO
+        do i = 1, nEs
+            ! initialize D(i)
+            pD(:,i) = 0.0_dp
+            do j = 1, nbands
+            do k = 1, ntets
+                ! get tetrahedron corner weights
+                wc = get_delta_wc(Ep=Ep(i),Ec=E(j,tet(:,k)))
+                ! loop over projections, increment pDOS with contributions from band j in tetrahedron k
+                do m = 1, nprojections
+                    pD(m,i) = pD(m,i) + tetw(k) * sum(wc * weight(m,j,tet(:,k)) )
+                enddo
+            enddo
+            enddo
+        enddo
+        !$OMP END DO
+        !$OMP END PARALLEL
+    end function   get_pdos_vs_Ep
+
+    pure function  get_theta_wc(Ep,Ec,ntets) result(wc)
+        ! get linear tetrahedron corner weights for delta function with Blochl corrections
+        implicit none
+        !
+        real(dp), intent(in) :: Ep    ! probing energy
+        real(dp), intent(in) :: Ec(4) ! corner energies
+        integer , intent(in) :: ntets
+        real(dp) :: wc(4)
+        real(dp) :: dosEp
+        real(dp) :: etot
+        real(dp) :: c1,c2,c3,c4
+        real(dp) :: e1,e2,e3,e4
+        integer  :: k1,k2,k3,k4
+        integer  :: inds(4)
+        ! rank corner weights in increasing order
+        inds = fourrank(Ec)
+        ! sort weights
+        e1 = Ec(inds(1))
+        e2 = Ec(inds(2))
+        e3 = Ec(inds(3))
+        e4 = Ec(inds(4))
+        ! k1-k4 are the irreducible k-points corresponding to e1-e4
+        k1 = inds(1)
+        k2 = inds(2)
+        k3 = inds(3)
+        k4 = inds(4)
+        ! calculate weights wc
+        if     (Ep.le.e1) then
+            ! Eq B1 from Blochl's PhysRevB.49.16223
+            wc(k1)=0.0_dp
+            wc(k2)=0.0_dp
+            wc(k3)=0.0_dp
+            wc(k4)=0.0_dp
+        elseif (Ep.le.e2) then
+            ! Eq B6 from Blochl's PhysRevB.49.16223
+            c4=0.25_dp/ntets*(Ep-e1)**3/(e2-e1)/(e3-e1)/(e4-e1)
+            ! Eq C2 from Blochl's PhysRevB.49.16223
+            dosEp=3.0_dp/ntets*(Ep-e1)**2/(e2-e1)/(e3-e1)/(e4-e1)
+            ! shortcut for Blochl corrections (Eq.22 PhysRevB.49.16223)
+            etot=e1+e2+e3+e4
+            ! Eq B2 from Blochl's PhysRevB.49.16223
+            wc(k1)=c4*(4.0_dp-(Ep-e1)*(1.0_dp/(e2-e1)+1.0_dp/(e3-e1)+1.0_dp/(e4-e1)))+dosEp*(etot-4.0_dp*e1)*0.025_dp
+            ! Eq B3 from Blochl's PhysRevB.49.16223
+            wc(k2)=c4*(Ep-e1)/(e2-e1)+dosEp*(etot-4.0_dp*e2)*0.025_dp
+            ! Eq B4 from Blochl's PhysRevB.49.16223
+            wc(k3)=c4*(Ep-e1)/(e3-e1)+dosEp*(etot-4.0_dp*e3)*0.025_dp
+            ! Eq B5 from Blochl's PhysRevB.49.16223
+            wc(k4)=c4*(Ep-e1)/(e4-e1)+dosEp*(etot-4.0_dp*e4)*0.025_dp
+        elseif (Ep.le.e3) then
+            ! Eq B11 from Blochl's PhysRevB.49.16223
+            c1=0.25_dp/ntets*(Ep-e1)**2/(e4-e1)/(e3-e1)
+            ! Eq B12 from Blochl's PhysRevB.49.16223
+            c2=0.25_dp/ntets*(Ep-e1)*(Ep-e2)*(e3-Ep)/(e4-e1)/(e3-e2)/(e3-e1)
+            ! Eq B13 from Blochl's PhysRevB.49.16223
+            c3=0.25_dp/ntets*(Ep-e2)**2*(e4-Ep)/(e4-e2)/(e3-e2)/(e4-e1)
+            ! Eq C3 from Blochl's PhysRevB.49.16223
+            dosEp=1.0_dp/ntets/(e3-e1)/(e4-e1)*(3.0_dp*(e2-e1)+6.0_dp*(Ep-e2)-3.0_dp*(e3-e1+e4-e2)*(Ep-e2)**2/(e3-e2)/(e4-e2))
+            ! shortcut for Blochl corrections (Eq.22 PhysRevB.49.16223)
+            etot=e1+e2+e3+e4
+            ! Eq B7 from Blochl's PhysRevB.49.16223
+            wc(k1)=c1+(c1+c2)*(e3-Ep)/(e3-e1)+(c1+c2+c3)*(e4-Ep)/(e4-e1)+dosEp*(etot-4.0_dp*e1)*0.025_dp
+            ! Eq B8 from Blochl's PhysRevB.49.16223
+            wc(k2)=c1+c2+c3+(c2+c3)*(e3-Ep)/(e3-e2)+c3*(e4-Ep)/(e4-e2)+dosEp*(etot-4.0_dp*e2)*0.025_dp
+            ! Eq B9 from Blochl's PhysRevB.49.16223
+            wc(k3)=(c1+c2)*(Ep-e1)/(e3-e1)+(c2+c3)*(Ep-e2)/(e3-e2)+dosEp*(etot-4.0_dp*e3)*0.025_dp
+            ! Eq B10 from Blochl's PhysRevB.49.16223
+            wc(k4)=(c1+c2+c3)*(Ep-e1)/(e4-e1)+c3*(Ep-e2)/(e4-e2)+dosEp*(etot-4.0_dp*e4)*0.025_dp
+        elseif (Ep.le.e4) then
+            ! Eq B18 from Blochl's PhysRevB.49.16223
+            c4=0.25_dp/ntets*(e4-Ep)**3/(e4-e1)/(e4-e2)/(e4-e3)
+            ! Eq C4 from Blochl's PhysRevB.49.16223
+            dosEp=3.0_dp/ntets*(e4-Ep)**2/(e4-e1)/(e4-e2)/(e4-e3)
+            ! shortcut for Blochl corrections (Eq.22 PhysRevB.49.16223)
+            etot=e1+e2+e3+e4
+            ! Eq B14 from Blochl's PhysRevB.49.16223
+            wc(k1)=0.25_dp/ntets-c4*(e4-Ep)/(e4-e1)+dosEp*(etot-4.0_dp*e1)*0.025_dp
+            ! Eq B15 from Blochl's PhysRevB.49.16223
+            wc(k2)=0.25_dp/ntets-c4*(e4-Ep)/(e4-e2)+dosEp*(etot-4.0_dp*e2)*0.025_dp
+            ! Eq B16 from Blochl's PhysRevB.49.16223
+            wc(k3)=0.25_dp/ntets-c4*(e4-Ep)/(e4-e3)+dosEp*(etot-4.0_dp*e3)*0.025_dp
+            ! Eq B17 from Blochl's PhysRevB.49.16223
+            wc(k4)=0.25_dp/ntets-c4*(4.0_dp-(e4-Ep)*(1.0_dp/(e4-e1)+1.0_dp/(e4-e2)+1.0_dp/(e4-e3)))+dosEp*(etot-4.0_dp*e4)*0.025_dp
+        elseif (Ep.ge.e4) then
+            ! Eq B19 from Blochl's PhysRevB.49.16223
+            wc(k1)=0.25_dp/ntets
+            wc(k2)=0.25_dp/ntets
+            wc(k3)=0.25_dp/ntets
+            wc(k4)=0.25_dp/ntets
+        endif
+        ! 
+        wc = wc * ntets
+        !
+    end function   get_theta_wc
+
+    pure function  get_delta_wc(Ep,Ec) result(wc)
+        ! get linear tetrahedron corner weights for delta function with Blochl corrections
+        implicit none
+        !
+        real(dp), intent(in) :: Ep    ! probing energy
+        real(dp), intent(in) :: Ec(4) ! corner energies
+        real(dp) :: wc(4)
+        real(dp) :: dosEp
+        real(dp) :: e1,e2,e3,e4
+        integer  :: k1,k2,k3,k4
+        real(dp) :: o13,f12,f13,f14,f21,f23,f31,f32,f34,f24,f41,f42
+        integer  :: inds(4)
+        ! initialize shortcut
+        o13  = 1.0_dp/3.0_dp
+        ! rank corner weights in increasing order
+        inds = fourrank(Ec)
+        ! sort weights
+        e1 = Ec(inds(1))
+        e2 = Ec(inds(2))
+        e3 = Ec(inds(3))
+        e4 = Ec(inds(4))
+        ! k1-k4 are the irreducible k-points corresponding to e1-e4
+        k1 = inds(1)
+        k2 = inds(2)
+        k3 = inds(3)
+        k4 = inds(4)
+        ! calculate weights wc
+        if     (Ep.le.e1) then
+            ! Eq B1 from Blochl's PhysRevB.49.16223
+            wc(k1)=0.0_dp
+            wc(k2)=0.0_dp
+            wc(k3)=0.0_dp
+            wc(k4)=0.0_dp
+        elseif (Ep.lt.e2) then
+            f12 = (Ep-e2)/(e1-e2)
+            f21 = 1.0_dp - f12
+            f13 = (Ep-e3)/(e1-e3)
+            f31 = 1.0_dp - f13
+            f14 = (Ep-e4)/(e1-e4)
+            f41 = 1.0_dp - f14
+            dosEp  = 3.0_dp * f21 * f31 * f41 / (Ep-e1)
+            wc(k1) = o13 * (f12 + f13 + f14)
+            wc(k2) = o13 * f21
+            wc(k3) = o13 * f31
+            wc(k4) = o13 * f41
+            wc = wc * dosEp
+        elseif (Ep.lt.e3) then
+            f13 = (Ep-e3)/(e1-e3)
+            f31 = 1.0_dp - f13
+            f14 = (Ep-e4)/(e1-e4)
+            f41 = 1.0_dp-f14
+            f23 = (Ep-e3)/(e2-e3)
+            f32 = 1.0_dp - f23
+            f24 = (Ep-e4)/(e2-e4)
+            f42 = 1.0_dp - f24
+            dosEp  = 3.0_dp * (f23*f31 + f32*f24)
+            wc(k1) = f14 * o13 + f13*f31*f23 / dosEp
+            wc(k2) = f23 * o13 + f24*f24*f32 / dosEp
+            wc(k3) = f32 * o13 + f31*f31*f23 / dosEp
+            wc(k4) = f41 * o13 + f42*f24*f32 / dosEp
+            dosEp  = dosEp / (e4-e1)
+            wc = wc * dosEp
+        elseif (Ep.lt.e4) then
+            f14 = (Ep-e4)/(e1-e4)
+            f24 = (Ep-e4)/(e2-e4)
+            f34 = (Ep-e4)/(e3-e4)
+            dosEp  = 3.0_dp * f14 * f24 * f34 / (e4-Ep)
+            wc(k1) = f14 * o13
+            wc(k2) = f24 * o13
+            wc(k3) = f34 * o13
+            wc(k4) = (3.0_dp - f14 - f24 - f34 ) * o13
+            wc = wc * dosEp
+        elseif (Ep.gt.e4) then
+            wc(k1)=0.0_dp
+            wc(k2)=0.0_dp
+            wc(k3)=0.0_dp
+            wc(k4)=0.0_dp
+       endif
+       !
+    end function   get_delta_wc
+
+    pure function  get_idos_at_Ep(Ep,E,tet,tetw) result(idos)
+        ! return integrated DOS at Ep
+        implicit none
+        !
+        real(dp), intent(in) :: Ep
+        real(dp), intent(in) :: E(:,:)
+        integer , intent(in) :: tet(:,:)
+        real(dp), intent(in) :: tetw(:) ! weight of irreducible tetrahedron
+        real(dp) :: idos
+        real(dp) :: Ec(4)
+        real(dp) :: e1,e2,e3,e4
+        integer  :: i,j
+        integer  :: nbands
+        integer  :: ntets
+        ! get bands, kpts, tetrahedra
+        nbands = size(E,1)
+        ntets  = sizE(tet,2)
+        !
+        idos = 0.0_dp
+        do j = 1, ntets
+            do i = 1, nbands
+                ! get energies at the vertices of the j-th tethedron in ascending order
+                Ec(1:4) = foursort(E(i,tet(:,j)))
+                ! map to 
+                e1 = Ec(1)
+                e2 = Ec(2)
+                e3 = Ec(3)
+                e4 = Ec(4)
+                ! calculate sum over k of the integrated charge
+                if     (Ep.le.e1) then
+                    ! Eq A1 from Blochl's PhysRevB.49.16223
+                    ! do nothing
+                elseif (Ep.le.e2) then
+                    ! Eq A2 from Blochl's PhysRevB.49.16223
+                    idos = idos + tetw(j)*(Ep-e1)**3/(e2-e1)/(e3-e1)/(e4-e1)
+                elseif (Ep.le.e3) then
+                    ! Eq A3 from Blochl's PhysRevB.49.16223
+                    idos = idos + tetw(j)/(e3-e1)/(e4-e1)*((e2-e1)**2+3.0_dp*(e2-e1)*(Ep-e2)+3.0_dp*(Ep-e2)**2-(e3-e1+e4-e2)/(e3-e2)/(e4-e2)*(Ep-e2)**3)
+                elseif (Ep.le.e4) then
+                    ! Eq A4 from Blochl's PhysRevB.49.16223
+                    idos = idos + tetw(j)*(1.0_dp-(e4-Ep)**3/(e4-e1)/(e4-e2)/(e4-e3))
+                elseif (Ep.ge.e4) then
+                    ! Eq A5 from Blochl's PhysRevB.49.16223
+                    idos = idos + tetw(j) 
+                endif
+            enddo
+        enddo
+    end function   get_idos_at_Ep
+
+    pure function  get_dos_at_Ep(Ep,E,tet,tetw) result(dosEp)
+        ! returns DOS at Ep
+        implicit none
+        !
+        real(dp), intent(in) :: Ep
+        real(dp), intent(in) :: E(:,:)
+        integer , intent(in) :: tet(:,:)
+        real(dp), intent(in) :: tetw(:) ! weight of irreducible tetrahedron
+        real(dp) :: dosEp
+        real(dp) :: Ec(4)
+        real(dp) :: e1,e2,e3,e4
+        integer :: i,j
+        integer :: nbands
+        integer :: ntets
+        ! get bands, kpts, tetrahedra
+        nbands = size(E,1)
+        ntets  = sizE(tet,2)
+        !
+        dosEp = 0.0_dp
+        do j = 1, ntets
+            do i = 1, nbands
+                ! get energies at the vertetxes of the j-th tethedron in ascending order
+                Ec(1:4) = foursort(E(i,tet(:,j)))
+                ! map to 
+                e1 = Ec(1)
+                e2 = Ec(2)
+                e3 = Ec(3)
+                e4 = Ec(4)
+                ! calculate sum over k of the integrated charge
+                if     (Ep.le.e1) then
+                    ! Eq C1 from Blochl's PhysRevB.49.16223
+                    ! do nothing
+                elseif (Ep.le.e2) then
+                    ! Eq C2 from Blochl's PhysRevB.49.16223
+                    dosEp = dosEp + tetw(j)*3.0_dp*(Ep-e1)**2/(e2-e1)/(e3-e1)/(e4-e1)
+                elseif (Ep.le.e3) then
+                    ! Eq C3 from Blochl's PhysRevB.49.16223
+                    dosEp = dosEp + tetw(j)/(e3-e1)/(e4-e1)*(3.0_dp*(e2-e1)+6.0_dp*(Ep-e2)-3.0_dp*(e3-e1+e4-e2)/(e3-e2)/(e4-e2)*(Ep-e2)**2)
+                elseif (Ep.le.e4) then
+                    ! Eq C4 from Blochl's PhysRevB.49.16223
+                    dosEp = dosEp + tetw(j)*(3.0_dp*(e4-Ep)**2/(e4-e1)/(e4-e2)/(e4-e3))
+                elseif (Ep.ge.e4) then
+                    ! Eq C1 from Blochl's PhysRevB.49.16223
+                    ! do nothing
+                endif
+            enddo
+        enddo
+        !
+    end function   get_dos_at_Ep
+
+    ! $$\      $$\ $$$$$$\  $$$$$$\   $$$$$$\  $$$$$$$$\ $$\       $$\        $$$$$$\  $$\   $$\ $$$$$$$$\  $$$$$$\  $$\   $$\  $$$$$$\
+    ! $$$\    $$$ |\_$$  _|$$  __$$\ $$  __$$\ $$  _____|$$ |      $$ |      $$  __$$\ $$$\  $$ |$$  _____|$$  __$$\ $$ |  $$ |$$  __$$\
+    ! $$$$\  $$$$ |  $$ |  $$ /  \__|$$ /  \__|$$ |      $$ |      $$ |      $$ /  $$ |$$$$\ $$ |$$ |      $$ /  $$ |$$ |  $$ |$$ /  \__|
+    ! $$\$$\$$ $$ |  $$ |  \$$$$$$\  $$ |      $$$$$\    $$ |      $$ |      $$$$$$$$ |$$ $$\$$ |$$$$$\    $$ |  $$ |$$ |  $$ |\$$$$$$\
+    ! $$ \$$$  $$ |  $$ |   \____$$\ $$ |      $$  __|   $$ |      $$ |      $$  __$$ |$$ \$$$$ |$$  __|   $$ |  $$ |$$ |  $$ | \____$$\
+    ! $$ |\$  /$$ |  $$ |  $$\   $$ |$$ |  $$\ $$ |      $$ |      $$ |      $$ |  $$ |$$ |\$$$ |$$ |      $$ |  $$ |$$ |  $$ |$$\   $$ |
+    ! $$ | \_/ $$ |$$$$$$\ \$$$$$$  |\$$$$$$  |$$$$$$$$\ $$$$$$$$\ $$$$$$$$\ $$ |  $$ |$$ | \$$ |$$$$$$$$\  $$$$$$  |\$$$$$$  |\$$$$$$  |
+    ! \__|     \__|\______| \______/  \______/ \________|\________|\________|\__|  \__|\__|  \__|\________| \______/  \______/  \______/
+
+    pure subroutine uc2ws(K,M,tiny)
+
+        implicit none
+
+        integer :: j
+        real(dp), allocatable, intent(inout) :: K(:,:)
+        real(dp), intent(in) :: M(3,3)
+        real(dp), intent(in) :: tiny
+        real(dp) :: G(3,26) , G2(26)
+
+        ! generate mesh
+        G(1,:) = real([-1,-1,-1, 0, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 0, 1, 1, 1])
+        G(2,:) = real([-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1])
+        G(3,:) = real([-1,-1,-1,-1,-1,-1,-1,-1,-1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+        G = matmul(M,G)
+        G2 = sum(G**2,1)
+
+        ! perform calc
+        ! do j = 1, size(K,2)
+        do concurrent (j = 1:size(K,2))
+            call uc2ws_engine(K(:,j),G,G2,tiny)
+        enddo
+    end subroutine  uc2ws
+
+    pure subroutine uc2ws_engine(K,G,G2,tiny)
+
+        implicit none
+
+        real(dp), intent(inout) :: K(3)
+        real(dp), intent(in) :: G(3,26), G2(26), tiny
+        real(dp)  :: P
+        logical :: go
+        integer :: i
+
+        go = .true.
+        do while (go)
+            go = .false.
+            do i = 1, 26
+                P = 2*(K(1)*G(1,i) + K(2)*G(2,i) + K(3)*G(3,i)) - G2(i)
+                if (P .gt. 1D-8) then
+                    K = K - G(:,i)
+                    go = .true.
+                endif
+            enddo
+        enddo
+    end subroutine  uc2ws_engine
+
+end module
+%}
+            
+            % mex interfaces
+            i=i+1; f{i} = 'uc2ws_mex'; fid=fopen([f{i},'.f90'],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); 
+            %{
+            #include "fintrf.h"
+            subroutine mexFunction(nlhs, plhs, nrhs, prhs)
+
+                use am_mex_lib , only : uc2ws
+
+                implicit none
+
+                mwPointer plhs(*), prhs(*)
+                integer nlhs, nrhs
+                mwPointer mxGetPr
+                mwPointer mxCreateDoubleMatrix
+                mwPointer mxGetM, mxGetN
+
+                real*8, allocatable :: K(:,:)
+                real*8 :: tiny, G(3,26) , G2(26) , M(3,3)
+
+                ! [K] = uc2ws(K,M,tiny)
+                if(nrhs .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Three inputs required.')
+                if(nlhs .gt. 1) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','One output produced.')
+                if(mxGetM(prhs(1)) .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 1 requires three-dimensional column vectors.')
+                if(mxGetM(prhs(2)) .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 2 requires a three-dimensional transformation matrix.')
+                if(mxGetN(prhs(2)) .ne. 3) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 2 requires a three-dimensional transformation matrix.')
+                if(mxGetM(prhs(3)) .ne. 1 .or. &
+                 & mxGetN(prhs(3)) .ne. 1) call mexErrMsgIdAndTxt ('MATLAB:uc2ws_mex','Input 3 requires a scalar.')
+
+                ! inputs 
+                ! K
+                allocate( K(3,mxGetN(prhs(1))) )
+                call mxCopyPtrToReal8(mxGetPr(prhs(1)),K,mxGetM(prhs(1))*mxGetN(prhs(1)))
+                ! M(3,3)
+                call mxCopyPtrToReal8(mxGetPr(prhs(2)),M,mxGetM(prhs(2))*mxGetN(prhs(2)))
+                ! tiny
+                call mxCopyPtrToReal8(mxGetPr(prhs(3)),tiny,mxGetM(prhs(3)))
+
+                ! execute code
+                call uc2ws(K,M,tiny)
+
+                ! output results
+                plhs(1) = mxCreateDoubleMatrix(mxGetM(prhs(1)),mxGetN(prhs(1)),0)
+                call mxCopyReal8ToPtr(K,mxGetPr(plhs(1)),mxGetM(prhs(1))*mxGetN(prhs(1)))
+            end subroutine mexFunction
+            %}
+            
+            
+            % compile everything
+            fprintf('Building mex library:\n')
+                if system([am_lib.FC,' ',am_lib.FFLAGS,' ',am_lib.LIBS,' -c ',flib,'.f90'])
+                    error(' ... %s (failed)\n',flib)
+                else
+                    fprintf(' ... %s (succeeded)\n',flib);
+                end
+            
+            fprintf('Building mex interfaces:\n')
+            for i = 1:numel(f)
+                if system([am_lib.FC,' ',am_lib.FFLAGS,' ',am_lib.LIBS,' ',flib,'.o ',f{i},'.f90 -o ',f{i},am_lib.EXT])
+                    warning(' ... %s (failed)\n',f{i})
+                else
+                    fprintf(' ... %s (succeeded)\n',f{i});
+                end
+            end
+        
+        end
+        
+        function [K] = uc2ws(K,M)
+            % uc2ws uses M real (reciprocal) lattice vectors to reduces K(1:3,:) vectors 
+            % in cartesian (reciprocal) coordinates to the definiging Wigner-Seitz cell.
+
+            if  and( am_lib.usemex , which('uc2ws_mex') )
+                % use mex function if available
+                K = uc2ws_mex(K,M,am_lib.eps);
+            else
+                % generate mesh
+                G = M * [-1,-1,-1, 0, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 1, 1, 1,-1,-1,-1, 0, 0, 0, 1, 1, 1;
+                         -1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1,-1, 0, 1;
+                         -1,-1,-1,-1,-1,-1,-1,-1,-1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+                G2=sum(G.^2,1);
+                % call engine
+                for j = 1:size(K,2); K(:,j) = uc2ws_engine(K(:,j),G,G2,am_lib.eps); end
+            end
+
+            function [K] = uc2ws_engine(K,G,G2,tiny)
+                go = true;
+                while go; go=false;
+                    for i = 1:26
+                        P = 2*K.'*G(:,i)-G2(i);
+                        if P > + tiny
+                            K = K - G(:,i); go=true;
+                        end
+                    end
+                end
+            end
+        end
+        
+    end
     
 end
 
