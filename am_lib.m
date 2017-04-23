@@ -76,16 +76,16 @@ classdef am_lib
                 % load md
                 [md] = load_md(uc,opts.fforce_position,opts.dt);
                 % get both pairs and triplets?
-                if opts.cutoff3==0
+                if or(opts.cutoff3==0,isempty(opts.cutoff3))
                     % get pair shells
                     [bvk,pp] = get_bvk(pc,uc,md,opts.cutoff2);
                     % get triplet shells
                     bvt = []; pt = [];
                 else
-                    % get pair shells
-                    [bvk,pp] = get_bvk(pc,uc,md,opts.cutoff2);
-                    % get triplet shells
-                    [bvt,pt] = get_bvt(pc,uc,md,opts.cutoff3,bvk,pp);
+                    % get pair shells ( do not fit for pair force constants here )
+                    [bvk,pp] = get_bvk(pc,uc,md,opts.cutoff2,'-identify -model');
+                    % get triplet shells ( fit for pair and triplets simultaneously here )
+                    [bvt,pt,bvk] = get_bvt(pc,uc,md,opts.cutoff3,bvk,pp,'-identify -model -fit');
                 end
                 % save results
                 save(sname,'uc','pc','md','bvk','pp','bvt','pt');
@@ -1114,7 +1114,7 @@ classdef am_lib
             qqq = get_qqq(fbz,ibz);
 
             % copy irreducible energies onto fbz mesh
-            E = fbz2ibz(fbz,ibz,ibz.E);
+            E = ibz2fbz(fbz,ibz,ibz.E);
             
             % compute spectral function A on the full mesh
             A = reshape( sum(lorentz_(( reshape(E,[1,size(E)]) - Ep(:) )/degauss)/degauss,2) , [nEps,fbz.n]);
@@ -1131,7 +1131,7 @@ classdef am_lib
         function plot_interpolated(fbz,bzp,x,varargin)
             % interpolate x, defined on the monkhorst-pack fbz, on [frac] path
             %
-            % plot_interpolated(fbz,bzp, fbz2ibz(fbz,ibz,ibz.E) ,'-');
+            % plot_interpolated(fbz,bzp, ibz2fbz(fbz,ibz,ibz.E) ,'-');
             % hold on; plot_dispersion(tb,bzp,'electron','--');
             %
 
@@ -1143,8 +1143,7 @@ classdef am_lib
             fig_(gcf);
 
             % plot results
-            nstrides = 5;
-            plot(bzp.x,fftinterp_(permute(reshape(x,[size(x,1),fbz.n]),[2,3,4,1]),bzp.k,nstrides),varargin{:});
+            plot(bzp.x,fftinterp_(x,bzp.k,fbz.n),varargin{:});
             axs_(gca,bzp.qt,bzp.ql); axis tight; xlabel('Wavevector k');
         end
               
@@ -1176,19 +1175,12 @@ classdef am_lib
 
         end
         
-        function plot_nesting
+        function plot_nesting(ibz,fbz,bzp,degauss,Ep,varargin)
             
-            import am_lib.fftinterp_
-            
-            % define figure properties
-            fig_ = @(h)       set(h,'color','white');
-            axs_ = @(h,qt,ql) set(h,'Box','on','XTick',qt,'Xticklabel',ql);
-            fig_(gcf);
+            import am_lib.*
 
             % plot results
-            nstrides = 5;
-            plot(bzp.x,fftinterp_(permute(reshape(x,[size(x,1),fbz.n]),[2,3,4,1]),bzp.k,nstrides),varargin{:});
-            axs_(gca,bzp.qt,bzp.ql); axis tight; xlabel('Wavevector k');
+            plot_interpolated(fbz,bzp, ibz2fbz(fbz,ibz,get_nesting(fbz,ibz,degauss,Ep)) ,varargin{:})
         end
         
         function plot_bz(fbz)
@@ -1276,29 +1268,39 @@ classdef am_lib
 
         % phonons (harmonic)
 
-        function [bvk,pp]     = get_bvk(pc,uc,md,cutoff)
+        function [bvk,pp]     = get_bvk(pc,uc,md,cutoff2,flags)
             
             import am_lib.*
 
+            if nargin<5; flags='-identify -model -fit -enforce'; end
+
             % get irreducible shells
-            fprintf(' ... identifying pairs '); tic;
-            [bvk,pp] = get_pairs(pc,uc,cutoff);
-            fprintf('(%.f secs)\n',toc);
+            fprintf(' ... identifying pairs ');
+            if strfind(flags,'-identify'); tic;
+                [bvk,pp] = get_pairs(pc,uc,cutoff2);
+                fprintf('(%.f secs)\n',toc);
+            else; fprintf('(skipped)\n'); end
             
             % force constant model
-            fprintf(' ... determining harmonic force constant interdependancies and dynamical matrix '); tic;
-            bvk = get_bvk_model(bvk,pp,uc);
-            fprintf('(%.f secs)\n',toc);
+            fprintf(' ... determining harmonic force constant interdependancies and dynamical matrix ');
+            if strfind(flags,'-model'); tic;
+                bvk = get_bvk_model(bvk,pp,uc);
+                fprintf('(%.f secs)\n',toc);
+            else; fprintf('(skipped)\n'); end
             
             % get force constants
-            fprintf(' ... solving for harmonic force constants '); tic;
-            bvk = get_bvk_force_constants(uc,md,bvk,pp);
-            fprintf('(%.f secs)\n',toc);
+            fprintf(' ... solving for harmonic force constants ');
+            if strfind(flags,'-fit'); tic;
+                bvk = get_bvk_force_constants(uc,md,bvk,pp);
+                fprintf('(%.f secs)\n',toc);
+            else; fprintf('(skipped)\n'); end
 
             % enforce asr
-            fprintf(' ... enforcing acoustic sum rules '); tic;
-            bvk = set_bvk_acoustic_sum_rules(bvk,pp);
-            fprintf('(%.f secs)\n',toc);
+            fprintf(' ... enforcing acoustic sum rules '); 
+            if strfind(flags,'-enforce'); tic;
+                bvk = set_bvk_acoustic_sum_rules(bvk,pp);
+                fprintf('(%.f secs)\n',toc);
+            else; fprintf('(skipped)\n'); end
         end
  
         function [bvk]        = get_bvk_model(ip,pp,uc)
@@ -1388,8 +1390,8 @@ classdef am_lib
             f = matmul_( md.bas, md.force );
 
             % select a method (method 1 is the most accurate)
-            method = 1;
-            switch method
+            algo = 1;
+            switch algo
                 case 1
                     % Method incorporating full intrinsic and crystalographic symmetries 
                     % Note that ASR are automatically enforced when this method is used!
@@ -1560,20 +1562,23 @@ classdef am_lib
             
             import am_lib.*
             
-            % get displacement and forces in [cart]
-            u = matmul_(uc.bas,mod_(md.tau-uc.tau+.5)-.5);
-            f = matmul_(uc.bas,md.force);
+            % select algo 2 which is faster
+            algo = 2;
             
-            % compute harmonic forces
-            method = 1;
-            f_phi =         get_bvk_forces(bvk,pp,u,method);
-            % compute anharmonic forces
-            if and(~isempty(bvt),~isempty(pt))
-            f_phi = f_phi + get_bvt_forces(bvt,pt,u,method);
-            end
+            % [cart] get displacements
+            u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
+            % [cart] get aimd forces
+            f_aimd= matmul_( md.bas, md.force );
+            % [cart]  get harmonic forces
+            f_har = get_bvk_forces(bvk,pp,u,algo); 
+            % [cart] get anharmnoic forces
+            f_anh = 0; 
+            if nargin == 6; if and(~isempty(bvt),~isempty(pt))
+            f_anh = get_bvt_forces(bvt,pt,u,algo);
+            end; end
             
             % plot correlation
-            plotcorr_(f_phi(:),f(:)); xlabel('aimd force [eV/Ang]'); ylabel('bvk force [eV/Ang]');  
+            plotcorr_(f_anh(:)+f_har(:),f_aimd(:)); xlabel('aimd force [eV/Ang]'); ylabel('bvk force [eV/Ang]');
         end
 
         function [T,KE,PE,q_sk] = plot_md_stats(uc,md,fbz,bvk)
@@ -1665,24 +1670,32 @@ classdef am_lib
         
         % phonons (anharmonic)
         
-        function [bvt,pt]     = get_bvt(pc,uc,md,cutoff,bvk,pp)
+        function [bvt,pt,bvk] = get_bvt(pc,uc,md,cutoff3,bvk,pp,flags)
             
             import am_lib.*
+            
+            if nargin<7; flags='-identify -model -fit'; end
 
             % get irreducible shells
-            fprintf(' ... identifying triplets '); tic;
-            [bvt,pt] = get_triplets(pc,uc,cutoff);
-            fprintf('(%.f secs)\n',toc);
+            fprintf(' ... identifying triplets '); 
+            if strfind(flags,'-identify'); tic;
+                [bvt,pt] = get_triplets(pc,uc,cutoff3);
+                fprintf('(%.f secs)\n',toc);
+            else; fprintf('(skipped)\n'); end
             
             % get force constant model
-            fprintf(' ... determining anharmonic force constant interdependancies '); tic;
-            bvt = get_bvt_model(bvt,pt);
-            fprintf('(%.f secs)\n',toc);
+            fprintf(' ... determining anharmonic force constant interdependancies ');
+            if strfind(flags,'-model'); tic;
+                bvt = get_bvt_model(bvt,pt);
+                fprintf('(%.f secs)\n',toc);
+            else; fprintf('(skipped)\n'); end
             
             % get force constants
-            fprintf(' ... solving for anharmonic (3rd-order) force constants '); tic;
-            bvt = get_bvt_force_constants(uc,md,bvk,pp,bvt,pt);
-            fprintf('(%.f secs)\n',toc);
+            fprintf(' ... solving for anharmonic (3rd-order) force constants '); 
+            if strfind(flags,'-fit'); tic;
+                [bvt,bvk] = get_bvt_force_constants(uc,md,bvk,pp,bvt,pt);
+                fprintf('(%.f secs)\n',toc);
+            else; fprintf('(skipped)\n'); end
         end
 
         function [bvt]        = get_bvt_model(it,pt)
@@ -1824,8 +1837,9 @@ classdef am_lib
 
         end
         
-        function [bvt]        = get_bvt_force_constants(uc,md,bvk,pp,bvt,pt)
-            % Extracts symmetry adapted third-order force constants.
+        function [bvt,bvk]    = get_bvt_force_constants(uc,md,bvk,pp,bvt,pt)
+            % Extracts symmetry adapted third-order force constant and
+            % second order force constants 
             %
             % Q: How to ensure that the extraction process is working
             %    correctly? Is it working correctly?
@@ -1866,22 +1880,57 @@ classdef am_lib
             u = matmul_( md.bas, mod_( md.tau-uc.tau +.5 )-.5 );
             f = matmul_( md.bas, md.force );
 
-            % subtract harmonic forces
-            if and(~isempty(bvk),~isempty(pp))
-                f = f - get_bvk_forces(bvk,pp,u);
+            % choose the algorthim to extract third order anharmonic force
+            % constants; algorithm 2 is more accurate
+            switch 2
+                case 1
+                    % subtract harmonic forces first than get anharmonic
+                    % force constants from the residuals
+                    
+                    % [cart] subtract harmonic forces
+                    if and(~isempty(bvk),~isempty(pp))
+                        f = f - get_bvk_forces(bvk,pp,u);
+                    end
+
+                    % get U matrix and indexing I
+                    [U,I] = get_bvt_U_matrix(bvt,pt,u);
+
+                    % [cart] solve for force constants
+                    fc = - U \ f(I);
+
+                    % save force constants
+                    s_id = repelem([1:bvt.nshells],cellfun(@(x)size(x,2),bvt.W));
+                    for s = 1:bvt.nshells; bvt.fc{s} = double(fc(s_id==s)).'; end
+                    
+                case 2
+                    % get the second order harmonic and third order anharmonic
+                    % force constants all in one go without first subtrating the
+                    % harmonic forces.
+                    
+                    % get U matrix and indexing I
+                    [Uh,Ih] = get_bvk_U_matrix(bvk,pp,u);
+                    % get U matrix and indexing I
+                    [Ua,Ia] = get_bvt_U_matrix(bvt,pt,u);
+                    % check that indicies match
+                    if maxabs_(Ih-Ia)>am_lib.eps
+                        error('indicies do not match');
+                        % this case has not yet been coded...
+                    else
+                        I = Ih;
+                    end
+
+                    % solve for force constants
+                    fc = - [ Uh, Ua ] \ f(I);
+
+                    % save harmonic and anharmnoic force constants
+                    h_id = repelem([1:bvk.nshells],cellfun(@(x)size(x,2),bvk.W));
+                    a_id = repelem([1:bvt.nshells],cellfun(@(x)size(x,2),bvt.W));
+                    s_id = [h_id,bvk.nshells+a_id];
+                    for s = 1:bvk.nshells; bvk.fc{s} = double(fc(s_id==s            ).'); end
+                    for s = 1:bvt.nshells; bvt.fc{s} = double(fc(s_id==s+bvk.nshells).'); end
             end
-
-            % get U matrix and indexing I
-            [U,I] = get_bvt_U_matrix(bvt,pt,u);
-
-            % solve for force constants
-            fc = - U \ f(I);
-            
-            % save force constants
-            s_id = repelem([1:bvt.nshells],cellfun(@(x)size(x,2),bvt.W));
-            for s = 1:bvt.nshells; bvt.fc{s} = double(fc(s_id==s)).'; end
         end
-
+        
         
         % electrons
 
@@ -2618,7 +2667,7 @@ classdef am_lib
             end
         end
         
-        function [y]           = fbz2ibz(fbz,ibz,x)
+        function [y]           = ibz2fbz(fbz,ibz,x)
             % copy ibz values on fbz grid
             %
             %       x [ n , ibz.nks ] ==> y [ n , fbz.nks ]
@@ -2683,7 +2732,7 @@ classdef am_lib
         
         % aux phonons (harmonic)
 
-        function [f]   = get_bvk_forces(bvk,pp,u,method)
+        function [f]   = get_bvk_forces(bvk,pp,u,algo)
             %
             % Get forces f from the displacement u.
             %
@@ -2708,9 +2757,9 @@ classdef am_lib
 
             import am_lib.*            
 
-            if nargin ~= 4; method=2; end
+            if nargin ~= 4; algo=2; end
             
-            switch method
+            switch algo
                 case 1
                     % get U matrix and indexing
                     [U,I] = get_bvk_U_matrix(bvk,pp,u);
@@ -2929,9 +2978,9 @@ classdef am_lib
         
         % aux phonons (anharmonic)
         
-        function [f]   = get_bvt_forces(bvt,pt,u,method)
+        function [f]   = get_bvt_forces(bvt,pt,u,algo)
             %
-            % Get forces f from the displacement u.
+            % Get forces f [cart] from the displacement u [cart].
             %
             % Selecting a METHOD is optional (defaults to METHOD 2, which is ~ 10x faster):
             %
@@ -2950,9 +2999,9 @@ classdef am_lib
             %
             import am_lib.*            
 
-            if nargin ~= 4; method=2; end
+            if nargin ~= 4; algo=2; end
             
-            switch method
+            switch algo
                 case 1
                     % get U matrix and indexing
                     [U,I] = get_bvt_U_matrix(bvt,pt,u);
@@ -2984,7 +3033,7 @@ classdef am_lib
                                       reshape(u(:,flatten_(pt.o{m}(:,:,2)),:),3,[]) );
                         % reshape ux [3 x 3 x (npairs*natoms)] -> [9 x npairs x ncenters x nsteps]
                         ux = reshape(ux,9*pt.npairs(m),pt.ncenters(m),nsteps);
-                        % solve for forces
+                        % compute forces
                         f(1:3,pt.c{m},:) = - matmul_(phi{m} , ux);
                     end
             end
@@ -3107,7 +3156,7 @@ classdef am_lib
             end;end;end
         end
         
-        function E = eval_energies_(tb,x,k)
+        function E       = eval_energies_(tb,x,k)
             % get hamiltonians
             nks = size(k,2); E = zeros(tb.nbands,nks); recbas = inv(tb.bas).';
             for m = 1:nks
@@ -3561,7 +3610,6 @@ classdef am_lib
             end
         end
 
-        
         % matching
         
         function [C] = maxabs_(A)
@@ -4277,7 +4325,7 @@ classdef am_lib
         
         % interpolation
 
-        function [fq] = fftinterp_(f,q,nstrides)
+        function [fq] = fftinterp_(f,q,n)
             % fourier interpolate f(k) at points q; f must be periodic over [0,1)
             %
             % generate f using like this:
@@ -4288,43 +4336,106 @@ classdef am_lib
             % f = cos(2*pi*xk)+cos(2*pi*yk)+cos(2*pi*zk);
             %
 
-            import am_lib.matmul_
+            import am_lib.*
             
-            % get dimensions
-            n = size(f); if numel(n)==3; n(4) = 1; end
+            % input formats:
+            %
+            %       f [nbands, kx*ky*kz ]   or   f [ kx,  ky,  kz ]   or   f [ nbands, kx, ky, kz ]
+            %
+            % the first format requires n to be input as well
+            m = size(f);
+            switch numel(m)
+                case 2
+                    if nargin ~= 3
+                        error('fbz dimensions n are required');
+                    else
+                        n = [n,m(1)];
+                    end
+                case 3
+                    n = [m,1];
+                    f = reshape(f,1,[]);
+                case 4
+                    n = [m(2:4),m(1)];
+                    f = reshape(f,m(1),[]);
+            end
 
-            % define function to get kernel
-            fft_kernel_ = @(q,r,n) exp(-2i*pi*matmul_(reshape(r,1,3,[],1),reshape(q,3,1,1,[])))./sqrt(prod(n(1:3)));
-           ifft_kernel_ = @(q,r,n) exp(+2i*pi*matmul_(reshape(q,1,3,[],1),reshape(r,3,1,1,[])))./sqrt(prod(n(1:3)));
-            
-            % get fourier coefficients on r grid
-            switch 'dft'
+            % select an algorithm
+            algo = 'cos';
+            switch algo
                 case 'fft'
-                    % generate direct and reciprocal meshes r and k
+                    % define function to get kernel
+                    ifft_kernel_ = @(k,r,n) exp(+2i*pi*matmul_(reshape(k,1,3,[],1),reshape(r,3,1,1,[])))./sqrt(prod(n(1:3)));
+                    % generate direct mesh r
                     m_ = @(i) [0:(n(i)-1)]-floor(n(i)/2); [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); r = [Y{1}(:),Y{2}(:),Y{3}(:)].';
-                    % apply transform to get expansion coefficients
-                    c = zeros(prod(n(1:3)),n(4));
+                    % get fft expansion coefficients: c [ nrs, n ]
+                    c = zeros(prod(n(1:3)),n(4)); f = permute(reshape(f,[n(4),n(1:3)]),[2,3,4,1]);
                     for j = 1:n(4); c(:,j) = reshape(fftshift(fftn( f(:,:,:,j) )),[],1) ./ sqrt(prod(n(1:3))); end
+                    % interpolate f on q
+                    fq = real( ifft_kernel_(q,r,n) * c ).';
                 case 'dft'
+                    % define function to get kernel
+                     fft_kernel_ = @(k,r,n) exp(-2i*pi*matmul_(reshape(r,1,3,[],1),reshape(k,3,1,1,[])))./sqrt(prod(n(1:3)));
+                    ifft_kernel_ = @(k,r,n) exp(+2i*pi*matmul_(reshape(k,1,3,[],1),reshape(r,3,1,1,[])))./sqrt(prod(n(1:3)));
                     % generate direct and reciprocal meshes r and k
                     m_ = @(i) [0:(n(i)-1)]-floor(n(i)/2); [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); r = [Y{1}(:),Y{2}(:),Y{3}(:)].';
                     m_ = @(i) [0:(n(i)-1)]./n(i);         [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); k = [Y{1}(:),Y{2}(:),Y{3}(:)].';
-                    % apply transform to get expansion coefficients
-                    c = fft_kernel_(k,r,n) * reshape(f,[],n(4));
+                    % get dft expansion coefficients: c [ nrs, n ]
+                    c = fft_kernel_(k,r,n) * f.';
+                    % interpolate f on q
+                    fq = real( ifft_kernel_(q,r,n) * c ).';
+                case 'cos'
+                    % cosine transform kernel
+                     cos_kernel_ = @(k,r,n) cos( 2*pi*matmul_(reshape(r,1,3,[],1),reshape(k,3,1,1,[])))./sqrt(prod(n(1:3)));
+                    icos_kernel_ = @(k,r,n) cos( 2*pi*matmul_(reshape(k,1,3,[],1),reshape(r,3,1,1,[])))./sqrt(prod(n(1:3)));
+                    % generate direct and reciprocal meshes r and k
+                    m_ = @(i) [0:(n(i)-1)]-floor(n(i)/2); [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); r = [Y{1}(:),Y{2}(:),Y{3}(:)].';
+                    m_ = @(i) [0:(n(i)-1)]./n(i);         [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); k = [Y{1}(:),Y{2}(:),Y{3}(:)].';
+                    % get dft expansion coefficients: c [ nrs, n ]
+                    c = cos_kernel_(k,r,n) * f.';
+                    % interpolate f on q
+                    fq = ( icos_kernel_(q,r,n) * c ).';
+                case 'star'
+                    % testing star function: DOES NOT WORK.
+                    % DOES NOT WORK. DOES NOT WORK. DOES NOT WORK. 
+                    % DOES NOT WORK. DOES NOT WORK. DOES NOT WORK. 
+                    % DOES NOT WORK. DOES NOT WORK. DOES NOT WORK. 
+                    % DOES NOT WORK. DOES NOT WORK. DOES NOT WORK. 
+                    x=1;
+                    % define function to get kernel
+                     fft_kernel_ = @(k,r,n) exp(-2i*pi*matmul_(reshape(r,1,3,[],1),reshape(k,3,1,1,[])))./sqrt(prod(x*n(1:3)));
+                    ifft_kernel_ = @(k,r,n) exp(+2i*pi*matmul_(reshape(k,1,3,[],1),reshape(r,3,1,1,[])))./sqrt(prod(x*n(1:3)));
+                    % generate direct and reciprocal meshes r and k
+                    m_ = @(i) [0:(x*n(i)-1)]-floor(x*n(i)/2); [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); r = [Y{1}(:),Y{2}(:),Y{3}(:)].';
+                    m_ = @(i) [0:(n(i)-1)]./n(i);             [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); k = [Y{1}(:),Y{2}(:),Y{3}(:)].';
+                    % conver to [cart]  
+                    r = uc.bas*r;     r = uc2ws( r, diag(n(1:3))*uc.bas     );
+                    k = fbz.recbas*k; k = uc2ws( k, diag(n(1:3))*fbz.recbas );
+                    q = fbz.recbas*q; q = uc2ws( q, diag(n(1:3))*fbz.recbas );
+                    % get symmetrically equivalent r-points (stars)
+                    r4sym = uc2ws( uc.bas*r, diag(n(1:3))*uc.bas     );
+                    [~,~,~,R] = get_symmetries(pc); R=matmul_(pc.bas,matmul_(R,inv(pc.bas))); nRs=size(R,3);
+                    PM = member_(uc2ws(matmul_(R,r4sym),diag(n(1:3))*uc.bas),r4sym); A = get_connectivity(PM);
+                    i2f = round(findrow_(A)).'; f2i = [1:numel(i2f)]*A; nstars=numel(i2f); 
+            %         % get star function kernel
+                    K=fft_kernel_(k,r,n); Ki=ifft_kernel_(q,r,n); Z = [f2i==[1:max(f2i)].']; K = Z*K; Ki=Ki/Z;
+
+
+                    K = sum(exp(+2i*pi*matmul_(reshape(                  k, 1, 3, 1,[]    ), ....
+                                               reshape(matmul_(R,r(:,i2f)), 3, 1,[], 1,nRs))) ,3)./nRs./sqrt(prod(x*n(1:3))) .* sum(f2i==[1:numel(i2f)].',2);
+
+                    Ki= sum(exp(-2i*pi*matmul_(reshape(                  q, 1, 3,[], 1    ), ...
+                                               reshape(matmul_(R,r(:,i2f)), 3, 1, 1,[],nRs))),3)./nRs./sqrt(prod(x*n(1:3)));% .* sqrt(sum(f2i==[1:numel(i2f)].',2)).';
+            % r = matmul_(R,r(:,i2f(3)));
+            %         % get factorization matrix (to accumlate rows of matrix)
+            %         K=fft_kernel_(k,r,n); Ki=ifft_kernel_(q,r,n); %Z = [f2i==[1:max(f2i)].']; K = Z*K; Ki=Ki/Z;
+                    % get dft expansion coefficients: c [ nrs, n ]
+                    c = K * f.';
+                    % interpolate f on q
+                    fq = ( Ki * c ).';
+                    
+                    [~,a,b]=unique(rnd_(c),'rows','stable'); a=a.'; b=b.';
             end
             
-            % interpolate f onto q
-            if     nargin == 2
-                % all in one go
-                fq = real( ifft_kernel_(q,r,n) * c ).';
-            elseif nargin == 3
-                % one stride at a time (helps prevent memory overload)
-                nqs = size(q,2); j_id = sum([1:nqs]>=round(linspace(1,nqs+1,nstrides+1)).',1);
-                % evaluate
-                for j = 1:nstrides
-                    fq(j_id==j,:) = real( ifft_kernel_(q(:,j_id==j),r,n) * c );
-                end
-            end
         end
         
         
