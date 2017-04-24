@@ -33,9 +33,9 @@ classdef am_lib
         units_GHz = 98229.06;   % sqrt( [eV/Ang^2] * [1/amu] ) --> 98229.06 [GHz=1/fs]
         
         % mex compiler parameters
-        usemex    = true;
+        usemex    = false;
         FC        = 'ifort'; 
-        FFLAGS    = '-O3 -parallel -fpp -fPIC -lmx -lmex -lmat -nofor_main -bundle';
+        FFLAGS    = '-O3 -parallel -fpp -fPIC -lmx -lmex -lmat -nofor_main -bundle -implicitnone -assume realloc_lhs';
         MPATH     = '/Applications/MATLAB_R2016b.app';
         LIBS      = ['-L',am_lib.MPATH,'/bin/maci64 -I',am_lib.MPATH,'/extern/include'];
         EXT       = '.mexmaci64';
@@ -5694,13 +5694,13 @@ module am_mex_lib
         elw = Emin
         eup = Emax
         ! initailize bracketing 
-        idos_up = get_idos_at_ep(Ep=eup,E=E,tet=tet,tetw=tetw)
-        idos_lw = get_idos_at_ep(Ep=elw,E=E,tet=tet,tetw=tetw)
+        idos_up = get_tet_idos_engine(Ep=eup,E=E,tet=tet,tetw=tetw)
+        idos_lw = get_tet_idos_engine(Ep=elw,E=E,tet=tet,tetw=tetw)
         crit = 1.0d+10
         ! search for Ef by gradualling reducing bracketted region
         search : do i = 1, 1000 ! hard-coded 1000 maximum iterations
             try_Ef = (eup+elw) / 2.0_dp
-            idos_ep = get_idos_at_ep(Ep=try_Ef,E=E,tet=tet,tetw=tetw)
+            idos_ep = get_tet_idos_engine(Ep=try_Ef,E=E,tet=tet,tetw=tetw)
             if (abs(idos_ep-nelecs).lt.crit) then
                 crit = abs(idos_ep-nelecs)
                 Ef = try_Ef
@@ -5723,7 +5723,7 @@ module am_mex_lib
 
     ! tetrahedra methods
 
-    function       get_dos_vs_Ep(Ep,E,tet,tetw) result(D)
+    function       get_dos_tet(Ep,E,tet,tetw) result(D)
         !
         implicit none
         !
@@ -5746,9 +5746,9 @@ module am_mex_lib
         enddo
         !$OMP END DO
         !$OMP END PARALLEL
-    end function   get_dos_vs_Ep
+    end function   get_dos_tet
 
-    function       get_idos_vs_Ep(Ep,E,tet,tetw) result(iD)
+    function       get_idos_tet(Ep,E,tet,tetw) result(iD)
         !
         implicit none
         !
@@ -5767,19 +5767,19 @@ module am_mex_lib
         !$OMP DO
         do i = 1, nEs
             ! get dos
-            iD(i) = get_idos_at_ep(Ep=Ep(i),E=E,tet=tet,tetw=tetw)
+            iD(i) = get_tet_idos_engine(Ep=Ep(i),E=E,tet=tet,tetw=tetw)
         enddo
         !$OMP END DO
         !$OMP END PARALLEL
-    end function   get_idos_vs_Ep
+    end function   get_idos_tet
 
-    function       get_pdos_vs_Ep(Ep,E,tet,tetw,weight) result(pD)
+    function       get_pdos_tet(Ep,E,tet,tetw,weight) result(pD)
         !
         implicit none
         !
         real(dp), intent(in) :: Ep(:) ! probing energies
         real(dp), intent(in) :: E(:,:) ! E(nbands,nkpts) band energies
-        integer,intent(in) :: tet(:,:) ! tet(:,ntets) tetrahedra conenctivity
+        integer , intent(in) :: tet(:,:) ! tet(:,ntets) tetrahedra conenctivity
         real(dp), intent(in) :: tetw(:) ! tetw(ntets) weight of each tetrahedron
         real(dp), intent(in) :: weight(:,:,:) ! weights(nprojections,nbands,nkpts), weights (per band per kpoint) for projected dos: can be absolute square of TB or BvK eigenvectors
         real(dp), allocatable :: pD(:,:)
@@ -5787,7 +5787,7 @@ module am_mex_lib
         integer  :: nbands
         integer  :: ntets
         integer  :: nprojections
-        real(dp)   :: wc(4) ! corner tetrahedron weights
+        real(dp) :: wc(4) ! corner tetrahedron weights
         integer  :: i,j,k,m
         ! get number of probing energies
         nEs = size(Ep)
@@ -5818,7 +5818,7 @@ module am_mex_lib
         enddo
         !$OMP END DO
         !$OMP END PARALLEL
-    end function   get_pdos_vs_Ep
+    end function   get_pdos_tet
 
     pure function  get_theta_wc(Ep,Ec,ntets) result(wc)
         ! get linear tetrahedron corner weights for delta function with Blochl corrections
@@ -5995,7 +5995,7 @@ module am_mex_lib
        !
     end function   get_delta_wc
 
-    pure function  get_idos_at_Ep(Ep,E,tet,tetw) result(idos)
+    pure function  get_tet_idos_engine(Ep,E,tet,tetw) result(idos)
         ! return integrated DOS at Ep
         implicit none
         !
@@ -6032,17 +6032,17 @@ module am_mex_lib
                     idos = idos + tetw(j)*(Ep-e1)**3/(e2-e1)/(e3-e1)/(e4-e1)
                 elseif (Ep.le.e3) then
                     ! Eq A3 from Blochl's PhysRevB.49.16223
-                    idos = idos + tetw(j)/(e3-e1)/(e4-e1)*((e2-e1)**2+3.0_dp*(e2-e1)*(Ep-e2)+3.0_dp*(Ep-e2)**2-(e3-e1+e4-e2)/(e3-e2)/(e4-e2)*(Ep-e2)**3)
+                    idos = idos + tetw(j)/(e3-e1)/(e4-e1)*((e2-e1)**2+3.0_dp*(e2-e1)*(Ep-e2)+3.0_dp*(Ep-e2)**2.0_dp-(e3-e1+e4-e2)/(e3-e2)/(e4-e2)*(Ep-e2)**3.0_dp)
                 elseif (Ep.le.e4) then
                     ! Eq A4 from Blochl's PhysRevB.49.16223
-                    idos = idos + tetw(j)*(1.0_dp-(e4-Ep)**3/(e4-e1)/(e4-e2)/(e4-e3))
+                    idos = idos + tetw(j)*(1.0_dp-(e4-Ep)**3.0_dp/(e4-e1)/(e4-e2)/(e4-e3))
                 elseif (Ep.ge.e4) then
                     ! Eq A5 from Blochl's PhysRevB.49.16223
                     idos = idos + tetw(j) 
                 endif
             enddo
         enddo
-    end function   get_idos_at_Ep
+    end function   get_tet_idos_engine
 
     pure function  get_tet_dos_engine(Ep,E,tet,tetw) result(dosEp)
         ! returns DOS at Ep
@@ -6077,13 +6077,13 @@ module am_mex_lib
                     ! Eq C1 from Blochl's PhysRevB.49.16223
                     dosEp = dosEp*1.0_dp
                     ! do nothing
-                elseif (Ep.lt.e2) then
+                elseif (Ep.le.e2) then
                     ! Eq C2 from Blochl's PhysRevB.49.16223
                     dosEp = dosEp + tetw(j)*3.0_dp*(Ep-e1)**2.0_dp/(e2-e1)/(e3-e1)/(e4-e1)
-                elseif (Ep.lt.e3) then
+                elseif (Ep.le.e3) then
                     ! Eq C3 from Blochl's PhysRevB.49.16223
                     dosEp = dosEp + tetw(j)/(e3-e1)/(e4-e1)*(3.0_dp*(e2-e1)+6.0_dp*(Ep-e2)-3.0_dp*(e3-e1+e4-e2)/(e3-e2)/(e4-e2)*(Ep-e2)**2.0_dp)
-                elseif (Ep.lt.e4) then
+                elseif (Ep.le.e4) then
                     ! Eq C4 from Blochl's PhysRevB.49.16223
                     dosEp = dosEp + tetw(j)*(3.0_dp*(e4-Ep)**2.0_dp/(e4-e1)/(e4-e2)/(e4-e3))
                 elseif (Ep.ge.e4) then
@@ -6200,12 +6200,12 @@ subroutine mexFunction(nlhs, plhs, nrhs, prhs)
     call mxCopyReal8ToPtr(K,mxGetPr(plhs(1)),mxGetM(prhs(1))*mxGetN(prhs(1)))
 end subroutine mexFunction
 %}
-            i=i+1; f{i} = 'get_tet_dos_engine_mex'; fid=fopen([f{i},'.f90'],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); 
+            i=i+1; f{i} = 'get_dos_tet_mex'; fid=fopen([f{i},'.f90'],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); 
 %{
 #include "fintrf.h"
 subroutine mexFunction(nlhs, plhs, nrhs, prhs)
 
-    use am_mex_lib , only : get_tet_dos_engine
+    use am_mex_lib , only : get_dos_tet
 
     implicit none
 
@@ -6214,36 +6214,34 @@ subroutine mexFunction(nlhs, plhs, nrhs, prhs)
     mwPointer mxGetPr
     mwPointer mxCreateDoubleMatrix
     mwPointer mxGetM, mxGetN
-    mwsize   one
 
-    real*8 :: Ep
+    real*8, allocatable :: Ep(:)
     real*8, allocatable :: E(:,:)
     real*8, allocatable :: tetw(:)
     real*8, allocatable :: tet(:,:)
-    real*8 :: dosEp
+    real*8, allocatable :: D(:)
 
     integer :: i
 
-    one = 1
-
-    ! [dosEP] = get_tet_dos_engine(Ep,E,tet,tetw)
-    if(nrhs .ne. 4) call mexErrMsgIdAndTxt ('MATLAB:get_tet_dos_engine_mex','Four inputs required.')
-    if(nlhs .gt. 1) call mexErrMsgIdAndTxt ('MATLAB:get_tet_dos_engine_mex','One output produced.')
-    if(mxGetM(prhs(3)) .ne. 4) call mexErrMsgIdAndTxt ('MATLAB:get_tet_dos_engine_mex','Connectivity list requires four numbers in each column.')
-    if(mxGetN(prhs(3)) .ne. mxGetN(prhs(4))) call mexErrMsgIdAndTxt ('MATLAB:get_tet_dos_engine_mex','Mismatched number of tetrahedra in weights and connectivity list.')
+    ! [D] = get_dos_tet(Ep,E,tet,tetw)
+    if(nrhs .ne. 4) call mexErrMsgIdAndTxt ('MATLAB:get_dos_tet_mex','Four inputs required.')
+    if(nlhs .gt. 1) call mexErrMsgIdAndTxt ('MATLAB:get_dos_tet_mex','One output produced.')
+    if(mxGetM(prhs(3)) .ne. 4) call mexErrMsgIdAndTxt ('MATLAB:get_dos_tet_mex','Connectivity list requires four numbers in each column.')
+    if(mxGetN(prhs(3)) .ne. mxGetN(prhs(4))) call mexErrMsgIdAndTxt ('MATLAB:get_dos_tet_mex','Mismatched number of tetrahedra in weights and connectivity list.')
 
     ! inputs 
     i=0
     ! 1) Ep
     i=i+1
-    call mxCopyPtrToReal8(mxGetPr(prhs(i)),Ep, one)
+    allocate(   Ep( mxGetM(prhs(i))*mxGetN(prhs(i)) ) )
+    call mxCopyPtrToReal8(mxGetPr(prhs(i)),Ep, mxGetM(prhs(i))*mxGetN(prhs(i)))
     ! 2) E(nbands,nkpts)
     i=i+1
-    allocate(   E( mxGetM(prhs(i)), mxGetN(prhs(i))) )
+    allocate(   E( mxGetM(prhs(i)), mxGetN(prhs(i)) ) )
     call mxCopyPtrToReal8(mxGetPr(prhs(i)),E,mxGetM(prhs(i))*mxGetN(prhs(i)))
     ! 3) tet(1:4,ntets)
     i=i+1
-    allocate( tet( mxGetM(prhs(i)), mxGetN(prhs(i))) )
+    allocate( tet( mxGetM(prhs(i)), mxGetN(prhs(i)) ) )
     call mxCopyPtrToReal8(mxGetPr(prhs(i)),tet,mxGetM(prhs(i))*mxGetN(prhs(i)))
     ! 4) tetw(ntets)
     i=i+1
@@ -6251,16 +6249,144 @@ subroutine mexFunction(nlhs, plhs, nrhs, prhs)
     call mxCopyPtrToReal8(mxGetPr(prhs(i)),tetw,mxGetM(prhs(i))*mxGetN(prhs(i)))
 
     ! execute code
-    dosEp = get_tet_dos_engine(Ep,E,nint(tet),tetw)
-    
+    D = get_dos_tet(Ep,E,nint(tet),tetw)
+
     ! outputs
     i=0
-    ! dosEp
+    ! output results
     i=i+1
-    call mxCopyReal8ToPtr(dosEp, mxGetPr(plhs(i)), one)
+    plhs(i) = mxCreateDoubleMatrix(mxGetM(prhs(1)),mxGetN(prhs(1)),0)
+    call mxCopyReal8ToPtr(D,mxGetPr(plhs(1)),mxGetM(prhs(1))*mxGetN(prhs(1)))
+end subroutine mexFunction
+%}
+            i=i+1; f{i} = 'get_idos_tet_mex'; fid=fopen([f{i},'.f90'],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); 
+%{
+#include "fintrf.h"
+subroutine mexFunction(nlhs, plhs, nrhs, prhs)
+
+    use am_mex_lib , only : get_idos_tet
+
+    implicit none
+
+    mwPointer plhs(*), prhs(*)
+    integer nlhs, nrhs
+    mwPointer mxGetPr
+    mwPointer mxCreateDoubleMatrix
+    mwPointer mxGetM, mxGetN
+
+    real*8, allocatable :: Ep(:)
+    real*8, allocatable :: E(:,:)
+    real*8, allocatable :: tetw(:)
+    real*8, allocatable :: tet(:,:)
+    real*8, allocatable :: D(:)
+
+    integer :: i
+
+    ! [D] = get_dos_tet(Ep,E,tet,tetw)
+    if(nrhs .ne. 4) call mexErrMsgIdAndTxt ('MATLAB:get_idos_tet_mex','Four inputs required.')
+    if(nlhs .gt. 1) call mexErrMsgIdAndTxt ('MATLAB:get_idos_tet_mex','One output produced.')
+    if(mxGetM(prhs(3)) .ne. 4) call mexErrMsgIdAndTxt ('MATLAB:get_idos_tet_mex','Connectivity list requires four numbers in each column.')
+    if(mxGetN(prhs(3)) .ne. mxGetN(prhs(4))) call mexErrMsgIdAndTxt ('MATLAB:get_idos_tet_mex','Mismatched number of tetrahedra in weights and connectivity list.')
+
+    ! inputs 
+    i=0
+    ! 1) Ep
+    i=i+1
+    allocate(   Ep( mxGetM(prhs(i))*mxGetN(prhs(i)) ) )
+    call mxCopyPtrToReal8(mxGetPr(prhs(i)),Ep, mxGetM(prhs(i))*mxGetN(prhs(i)))
+    ! 2) E(nbands,nkpts)
+    i=i+1
+    allocate(   E( mxGetM(prhs(i)), mxGetN(prhs(i)) ) )
+    call mxCopyPtrToReal8(mxGetPr(prhs(i)),E,mxGetM(prhs(i))*mxGetN(prhs(i)))
+    ! 3) tet(1:4,ntets)
+    i=i+1
+    allocate( tet( mxGetM(prhs(i)), mxGetN(prhs(i)) ) )
+    call mxCopyPtrToReal8(mxGetPr(prhs(i)),tet,mxGetM(prhs(i))*mxGetN(prhs(i)))
+    ! 4) tetw(ntets)
+    i=i+1
+    allocate( tetw( mxGetM(prhs(i))*mxGetN(prhs(i)) ) )
+    call mxCopyPtrToReal8(mxGetPr(prhs(i)),tetw,mxGetM(prhs(i))*mxGetN(prhs(i)))
+
+    ! execute code
+    D = get_idos_tet(Ep,E,nint(tet),tetw)
+
+    ! outputs
+    i=0
+    ! output results
+    i=i+1
+    plhs(i) = mxCreateDoubleMatrix(mxGetM(prhs(1)),mxGetN(prhs(1)),0)
+    call mxCopyReal8ToPtr(D,mxGetPr(plhs(1)),mxGetM(prhs(1))*mxGetN(prhs(1)))
+end subroutine mexFunction
+%}
+            i=i+1; f{i} = 'get_pdos_tet_mex'; fid=fopen([f{i},'.f90'],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); 
+%{
+#include "fintrf.h"
+subroutine mexFunction(nlhs, plhs, nrhs, prhs)
+
+    use am_mex_lib , only : get_pdos_tet
+
+    implicit none
+
+    mwPointer plhs(*), prhs(*)
+    integer nlhs, nrhs
+    mwPointer mxGetPr
+    mwPointer mxCreateDoubleMatrix
+    mwPointer mxGetM, mxGetN
+
+    real*8, allocatable :: Ep(:)
+    real*8, allocatable :: E(:,:)
+    real*8, allocatable :: tetw(:)
+    real*8, allocatable :: tet(:,:)
+    real*8, allocatable :: weight(:,:,:)
+    real*8, allocatable :: D(:,:)
+
+    integer :: i
+
+    ! [D] = get_dos_tet(Ep,E,tet,tetw)
+    if(nrhs .ne. 5) call mexErrMsgIdAndTxt ('MATLAB:get_pdos_tet_mex','Five inputs required.')
+    if(nlhs .gt. 1) call mexErrMsgIdAndTxt ('MATLAB:get_pdos_tet_mex','One output produced.')
+    if(mxGetM(prhs(3)) .ne. 4) call mexErrMsgIdAndTxt ('MATLAB:get_pdos_tet_mex','Connectivity list requires four numbers in each column.')
+    if(mxGetN(prhs(3)) .ne. mxGetN(prhs(4))) call mexErrMsgIdAndTxt ('MATLAB:get_pdos_tet_mex','Mismatched number of tetrahedra in weights and connectivity list.')
+    if(mxGetN(prhs(2)) .ne. mxGetN(prhs(5))) call mexErrMsgIdAndTxt ('MATLAB:get_pdos_tet_mex','Mismatched number of kpoints in projections weights and connectivity list.')
+
+    ! inputs 
+    i=0
+    ! 1) Ep
+    i=i+1
+    allocate(   Ep( mxGetM(prhs(i))*mxGetN(prhs(i)) ) )
+    call mxCopyPtrToReal8(mxGetPr(prhs(i)),Ep, mxGetM(prhs(i))*mxGetN(prhs(i)))
+    ! 2) E(nbands,nkpts)
+    i=i+1
+    allocate(   E( mxGetM(prhs(i)), mxGetN(prhs(i)) ) )
+    call mxCopyPtrToReal8(mxGetPr(prhs(i)),E,mxGetM(prhs(i))*mxGetN(prhs(i)))
+    ! 3) tet(1:4,ntets)
+    i=i+1
+    allocate( tet( mxGetM(prhs(i)), mxGetN(prhs(i)) ) )
+    call mxCopyPtrToReal8(mxGetPr(prhs(i)),tet,mxGetM(prhs(i))*mxGetN(prhs(i)))
+    ! 4) tetw(ntets)
+    i=i+1
+    allocate( tetw( mxGetM(prhs(i))*mxGetN(prhs(i)) ) )
+    call mxCopyPtrToReal8(mxGetPr(prhs(i)),tetw,mxGetM(prhs(i))*mxGetN(prhs(i)))
+    ! 5) weight(nprojections,nbands,nkpts)
+    i=i+1 
+    allocate( weight( mxGetM(prhs(i)) , mxGetM(prhs(2)) , mxGetN(prhs(2)) ) )
+    call mxCopyPtrToReal8(mxGetPr(prhs(i)),weight,mxGetM(prhs(i))*mxGetM(prhs(2))*mxGetN(prhs(2)))
+
+    ! execute code
+    D = get_pdos_tet(Ep,E,nint(tet),tetw,weight)
+
+    ! outputs
+    i=0
+    ! output results
+    i=i+1
+    plhs(i) = mxCreateDoubleMatrix(mxGetM(prhs(5)),mxGetM(prhs(1))*mxGetN(prhs(1)),0)
+    call mxCopyReal8ToPtr(D,mxGetPr(plhs(1)),mxGetM(prhs(5))*mxGetM(prhs(1))*mxGetN(prhs(1)))
 end subroutine mexFunction
 %}
             
+
+
+
             % compile everything
             
             fprintf('Building mex library:\n')
@@ -6311,12 +6437,20 @@ end subroutine mexFunction
             end
         end
 
-        function [dosEp] = get_tet_dos_engine(Ep,E,tet,tetw)
+        function [D] = get_dos_tet(Ep,E,tet,tetw)
             %
-            if  and( am_lib.usemex , which('get_tet_dos_engine_mex') )
+            if  and( am_lib.usemex , which('get_dos_tet_mex') )
                 % use mex function if available
-                dosEp = get_tet_dos_engine_mex(Ep,E,tet,tetw);
+                D = get_dos_tet_mex(Ep,E,tet,tetw);
             else
+                nEps = numel(Ep); D = zeros(nEps,1);
+                for m = 1:nEps
+                    D(m) = get_dos_tet_engine(Ep(m),E,tet,tetw);
+                end
+                D = reshape(D,size(Ep));
+            end
+
+            function [dosEp] = get_dos_tet_engine(Ep,E,tet,tetw)
                 nbands = size(E,1);
                 ntets = size(tet,2);
                 dosEp = 0;
@@ -6343,6 +6477,59 @@ end subroutine mexFunction
                         end
                     end
                 end
+            end
+        end
+
+        function [D] = get_idos_tet(Ep,E,tet,tetw)
+            %
+            if  and( am_lib.usemex , which('get_idos_tet_mex') )
+                % use mex function if available
+                D = get_idos_tet_mex(Ep,E,tet,tetw);
+            else
+                nEps = numel(Ep); D = zeros(nEps,1);
+                for m = 1:nEps
+                    D(m) = get_dos_tet_engine(Ep(m),E,tet,tetw);
+                end
+                D = reshape(D,size(Ep));
+            end
+
+            function [idos] = get_dos_tet_engine(Ep,E,tet,tetw)
+                nbands = size(E,1);
+                ntets = size(tet,2);
+                idos = 0;
+                for j = 1:ntets
+                    for i = 1:nbands
+                        % get energies at the verticies of the j-th tethedron in ascending order
+                        Ec(1:4) = sort(E(i,tet(:,j)));
+                        % calculate sum over k of the integrated charge
+                        if     Ep<=Ec(1)
+                            % Eq C1 from Blochl's PhysRevB.49.16223
+                            % do nothing
+                        elseif Ep<=Ec(2)
+                            % Eq A2 from Blochl's PhysRevB.49.16223
+                            idos = idos + tetw(j)*(Ep-Ec(1)).^3/(Ec(2)-Ec(1))/(Ec(3)-Ec(1))/(Ec(4)-Ec(1));
+                        elseif Ep<=Ec(3)
+                            % Eq A3 from Blochl's PhysRevB.49.16223
+                            idos = idos + tetw(j)/(Ec(3)-Ec(1))/(Ec(4)-Ec(1))*((Ec(2)-Ec(1)).^2+3.0*(Ec(2)-Ec(1))*(Ep-Ec(2))+3.0*(Ep-Ec(2)).^2.0-(Ec(3)-Ec(1)+Ec(4)-Ec(2))/(Ec(3)-Ec(2))/(Ec(4)-Ec(2))*(Ep-Ec(2)).^3.0);
+                        elseif Ep<=Ec(4)
+                            % Eq A4 from Blochl's PhysRevB.49.16223
+                            idos = idos + tetw(j)*(1.0-(Ec(4)-Ep).^3.0/(Ec(4)-Ec(1))/(Ec(4)-Ec(2))/(Ec(4)-Ec(3)));
+                        elseif Ep>=Ec(4)
+                            % Eq A5 from Blochl's PhysRevB.49.16223
+                            idos = idos + tetw(j);
+                        end
+                    end
+                end
+            end
+        end
+
+        function [D] = get_pdos_tet(Ep,E,tet,tetw)
+            %
+            if  and( am_lib.usemex , which('get_pdos_tet_mex') )
+                % use mex function if available
+                D = get_pdos_tet_mex(Ep,E,tet,tetw);
+            else
+                error('matlab version not yet implemented. mex is required for pdos');
             end
         end
         
