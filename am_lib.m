@@ -1,5 +1,5 @@
 classdef am_lib
-   
+
     % 
     % [sc,s2p,p2s] = get_supercell(pc,diag([2,2,2])); sc.u2p=s2p; sc.p2u=p2s; sc.u2i=pc.p2i(s2p);
     % 
@@ -147,7 +147,7 @@ classdef am_lib
     end
     
     % core
-    
+
     methods (Static)
 
         % vasp
@@ -296,7 +296,6 @@ classdef am_lib
             md = match_cell(md,uc);
             
             fprintf(' (%.f secs)\n',toc);
-
         end
 
         function [en]    = load_band_energies(nbands,fbands)
@@ -311,9 +310,7 @@ classdef am_lib
 
             % open file and parse
             nsteps=nlines/nbands; fid=fopen(fbands); en=reshape(fscanf(fid,'%f'),nbands,nsteps); fclose(fid);
-
         end
-        
         
         % symmetry
 
@@ -470,11 +467,10 @@ classdef am_lib
             for i = 1:nirreps
                 irrep{i} = G(inds==ir(i),inds==ir(i),1:nGs); 
                 % this makes them look nice but multiplcation table is not preserved
-%                 for j = 1:nGs
-%                     irrep{i}(:,:,j) = diag(sort(eig(irrep{i}(:,:,j))));
-%                 end
+                % for j = 1:nGs
+                %     irrep{i}(:,:,j) = diag(sort(eig(irrep{i}(:,:,j))));
+                % end
             end
-
 
             function H = dixon_decomposition_(rr)
                 nbases=size(rr,1);
@@ -2452,7 +2448,6 @@ classdef am_lib
             fprintf('  %-30s    %-30s   %-4s   %-11s   %-11s   %-4s\n',      bar_(30),      bar_(30),bar_(4),bar_(11),bar_(11),bar_(4));
             fprintf('%10.5f %10.5f %10.5f  %10.5f %10.5f %10.5f   %4i   %3i-%3i-%3i   %3i-%3i-%3i   %4i\n', Z(2:end,rankc_(Z(1,:)))); 
         end
-        
     end
         
     
@@ -5050,7 +5045,8 @@ cmap = map_(n,cmap);
             
             % mex library
             flib = 'am_mex_lib'; fid=fopen([flib,'.f90'],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); 
-            %{
+% START OF FORTRAN CODE 
+%{
 module am_mex_lib
 
     implicit none
