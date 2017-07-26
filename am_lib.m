@@ -26,7 +26,7 @@ classdef am_lib
     % 
     
     properties (Constant)
-        tiny      = 1E-4; % precision of atomic coordinates
+        tiny      = 1E-3; % precision of atomic coordinates
         eps       = 1E-8; % numerical precision
         units_eV  = 0.06465555; % sqrt( [eV/Ang^2] * [1/amu] ) --> 0.06465555 [eV]
         units_THz = 98.22906;   % sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz=1/ps]
@@ -159,6 +159,7 @@ classdef am_lib
                 if n == 1; fid=fopen(sprintf('%s'     ,fposcar,i),'w'); else
                            fid=fopen(sprintf('%s_%06i',fposcar,i),'w');
                 end
+                fprintf(fid,' %i ',uc.nspecies); 
                 fprintf(fid,'%s \n',sprintf('POSCAR %i of %i',i,n)); 
                 fprintf(fid,'%12.8f \n',1.0);  % latpar
                 fprintf(fid,'%12.8f %12.8f %12.8f \n',uc.bas(:,1)); 
@@ -174,15 +175,23 @@ classdef am_lib
 
         function [uc]    = load_poscar(fposcar)
             import am_lib.*
-            fid=fopen(fposcar,'r');              % open file
-            fgetl(fid); uc.units='frac';       % skip header but write units instead
+            fid=fopen(fposcar,'r');            % open file
+            header=fgetl(fid); uc.units='frac';% read header (often times contains atomic symbols)
             latpar=sscanf(fgetl(fid),'%f');    % read lattice parameter
             a1=sscanf(fgetl(fid),'%f %f %f');  % first basis vector
             a2=sscanf(fgetl(fid),'%f %f %f');  % second basis vector
             a3=sscanf(fgetl(fid),'%f %f %f');  % third basis vector
             uc.bas=latpar*[a1,a2,a3];          % construct the basis (column vectors)
-            uc.symb=regexp(fgetl(fid), '([^ \s][^\s]*)', 'match');
-            uc.nspecies=sscanf(fgetl(fid),repmat('%f' ,1,length(uc.symb)))';
+            buffer=fgetl(fid);                 % check vasp format
+            if ~isempty(sscanf(buffer,'%f'))
+                % vasp 4 format (symbols are missing, jumps straight to species)
+                uc.symb=regexp(header, '([^ \s][^\s]*)', 'match');
+                uc.nspecies=sscanf(buffer,repmat('%f' ,1,length(uc.symb)))';
+            else
+                % vasp 5 format (symbols are present)
+                uc.symb=regexp(buffer, '([^ \s][^\s]*)', 'match');
+                uc.nspecies=sscanf(fgetl(fid),repmat('%f' ,1,length(uc.symb)))';
+            end
             for i=1:length(uc.nspecies); uc.mass(i)=Z2mass(symb2Z(uc.symb{i})); end
             uc.natoms=sum(uc.nspecies);
             coordtype=lower(strtrim(fgetl(fid)));
@@ -277,7 +286,7 @@ classdef am_lib
             fprintf(' ... loading displacements vs forces'); tic;
 
             % count number of lines in file and check that all runs completed properly
-            nlines = count_lines_(fforces); if mod(nlines,uc.natoms)~=0; error('lines appear to be missing.'); end;
+            nlines = count_lines_(fforces); if mod(nlines,uc.natoms)~=0; error('lines appear to be missing.'); end
 
             % open file and parse: use single precision here, solves for force constants much faster
             fid = fopen(fforces); fd = reshape(single(fscanf(fid,'%f')),6,uc.natoms,nlines/uc.natoms); fclose(fid);
@@ -307,11 +316,12 @@ classdef am_lib
             import am_lib.*
             
             % count number of lines in file and check that all runs completed properly
-            nlines = count_lines_(fbands); if mod(nlines,nbands)~=0; error('lines appear to be missing.'); end;
+            nlines = count_lines_(fbands); if mod(nlines,nbands)~=0; error('lines appear to be missing.'); end
 
             % open file and parse
             nsteps=nlines/nbands; fid=fopen(fbands); en=reshape(fscanf(fid,'%f'),nbands,nsteps); fclose(fid);
         end
+        
         
         % symmetry
 
@@ -332,7 +342,7 @@ classdef am_lib
             % get vectors that preserve periodic boundary conditions
             N=1; T=mod_(pc.tau(:,pc.species==pc.species(N))-pc.tau(:,N)); nTs=size(T,2); T_ck=false(1,nTs);
             for j = 1:nTs; T_ck(j) = check3_( X_(pc.tau(1:3,:,1)-T(:,j),pc.species)-X ); end
-            T=[T(:,T_ck),eye(3)]; T=T(:,rankc_(normc_(T))); 
+            T=[T(:,T_ck),eye(3)]; T=T(:,rankc_(normc_(T))); nTs = size(T,2);
 
             if nargout == 1; return; end
             
@@ -364,7 +374,7 @@ classdef am_lib
 
         function [MT,E,I]     = get_multiplication_table(S)
             % get multiplication table: S(:,:,i)*S(:,:,j) = S(:,:,MT(i,j)
-            
+
             import am_lib.*
             
             if     size(S,1) == 4
@@ -417,7 +427,7 @@ classdef am_lib
             if nargout>2; I = [MT==E]*[1:nSs].'; end
         end
 
-        function [CT,s2c,irrep] = get_irreps(S)
+        function [CT,s2c,irr] = get_irreps(S)
             % s2c = identifies the class to which symmetries belong
             % CT = character table
             % irreps
@@ -464,9 +474,9 @@ classdef am_lib
             [CT,~,s2c] = unique(round(CT),'rows','stable'); CT=CT.'; s2c=s2c(:).';
 
             % get irreducible representations
-            nirreps = numel(ir); irrep = cell(1,nirreps);
+            nirreps = numel(ir); irr = cell(1,nirreps);
             for i = 1:nirreps
-                irrep{i} = G(inds==ir(i),inds==ir(i),1:nGs); 
+                irr{i} = G(inds==ir(i),inds==ir(i),1:nGs); 
                 % this makes them look nice but multiplcation table is not preserved
                 % for j = 1:nGs
                 %     irrep{i}(:,:,j) = diag(sort(eig(irrep{i}(:,:,j))));
@@ -501,6 +511,58 @@ classdef am_lib
                 end
                 H = eye(nbases);
             end
+        end
+        
+        function [s2c]        = get_classes(MT)
+            %
+            % for AX = XB, if elements A and B are conjugate pairs for some other element X in the group,  they are in the same class
+            %
+            import am_lib.*
+
+            nsyms = size(MT,2);
+            % allocate space for conjugacy class
+            s2c = zeros(nsyms,1);
+            % allocate space for conjugate elements
+            conjugates = zeros(nsyms,1);
+            % get inverse indicies
+            I = (MT==1) * [1:size(MT,1)].';
+            % determine conjugacy classes
+            k = 0;
+            for i = 1:nsyms
+            if s2c(i)==0
+                k=k+1;
+                % conjugate each element with all other group elements
+                % A = X(j) * B * X(j)^-1
+                for j = 1:nsyms
+                    conjugates(j) = MT(j,MT(i,I(j)));
+                end
+                % for each subgroup element created by conjugation find the corresponding index of the element in the group
+                % in order to save the class class_id number
+                for j = 1:nsyms
+                    s2c( conjugates(j) ) = k;
+                end
+            end
+            end
+            % relabel classes based on how many elements each class has
+                n=nsyms;
+                occurances = zeros(n,1);
+                for l = 1:n
+                    occurances(l) = sum(s2c(l)==s2c);
+                end
+                %
+                % this quick and dirty procedure lifts degeneracies
+                fwd = rankc_([s2c(:).';occurances(:).']);
+                class_id_sorted = s2c(fwd); 
+                % relabel everything based on order
+                m=1; list_relabled = zeros(n,1); list_relabled(1) = 1;
+                for l = 2:n
+                    if (class_id_sorted(l)~=class_id_sorted(l-1))
+                        m=m+1;
+                    end
+                    list_relabled(l) = m;
+                end
+                % return everything to the original order at call
+                rev(fwd)=[1:n]; s2c=list_relabled(rev);
         end
         
         function pg_code      = identify_pointgroup(R)
@@ -609,7 +671,263 @@ classdef am_lib
             brv_name = brav{pg_code};
         end
 
+        function order        = get_order(S)
 
+            check_ = @(x) any(abs(x(:))>am_lib.eps);
+
+            if size(S,1)==3
+                order = 1; X=S(1:3,1:3);
+                while check_(X - eye(3))
+                    order = order + 1;
+                    X = X*S;
+                end
+            elseif size(S,1) == 4
+                order = 1; X=S(1:4,1:4);
+                while check_(X - eye(4))
+                    order = order + 1;
+                    X = X*S; X(1:3,4)=mod(X(1:3,4),1);
+                end
+            end
+        end
+        
+        function [S,MT]       = generate_sg(sg_code)
+
+            import am_lib.*
+
+            % initialize
+            S = zeros(4,4,192);
+
+            % load recipe
+            recipe = get_recipe(sg_code);
+
+            % mix ingredients 
+            nsyms = 0; k = 0;
+            nsyms = nsyms+1; S(1:4,1:4,nsyms) = eye(4);
+            k = k+1; if recipe(1) == '1'
+                nsyms = nsyms+1; S(1:3,1:3,nsyms) = -eye(3); S(4,4,nsyms)=1;
+            end 
+            k = k+1; ngens = sscanf(recipe(2),'%i');
+            for i = 1:ngens
+                nsyms = nsyms+1;
+            for j = 1:4
+                k=k+1; 
+                switch j 
+                    case 1
+                        S(1:3,1:3,nsyms) = decode_R(recipe(k)); S(4,4,nsyms)=1;
+                    otherwise
+                        S(j-1,4,nsyms) = mod(decode_T(recipe(k)),1);
+                end
+            end
+            end
+
+            % bake the cake (add elements until no new elements are generated)
+            nsyms_last=0; MT = zeros(192,192);
+            while nsyms ~= nsyms_last
+                nsyms_last=nsyms;
+                for i = 1:nsyms_last
+                for j = 1:nsyms_last
+                    if MT(i,j)==0
+                        A = S(:,:,i)*S(:,:,j); A(1:3,4)=mod_(A(1:3,4));
+                        A_id = member_(A(:),reshape(S(:,:,1:nsyms),16,[]));
+                        if A_id == 0
+                            nsyms = nsyms+1; S(:,:,nsyms) = A; MT(i,j) = nsyms;
+                        else
+                            MT(i,j) = A_id;
+                        end
+                    end
+                end
+                end
+            end
+
+            MT = MT(1:nsyms,1:nsyms);
+            S  = S(:,:,1:nsyms);
+
+            function recipe  = get_recipe(sg_id)
+                sg_recipe_database = {...
+                    '000                                     ','100                                     ','01cOOO0                                 ', ...
+                    '01cODO0                                 ','02aDDOcOOO0                             ','01jOOO0                                 ', ...
+                    '01jOOD0                                 ','02aDDOjOOO0                             ','02aDDOjOOD0                             ', ...
+                    '11cOOO0                                 ','11cODO0                                 ','12aDDOcOOO0                             ', ...
+                    '11cOOD0                                 ','11cODD0                                 ','12aDDOcOOD0                             ', ...
+                    '02bOOOcOOO0                             ','02bOODcOOD0                             ','02bOOOcDDO0                             ', ...
+                    '02bDODcODD0                             ','03aDDObOODcOOD0                         ','03aDDObOOOcOOO0                         ', ...
+                    '04aODDaDODbOOOcOOO0                     ','03aDDDbOOOcOOO0                         ','03aDDDbDODcODD0                         ', ...
+                    '02bOOOjOOO0                             ','02bOODjOOD0                             ','02bOOOjOOD0                             ', ...
+                    '02bOOOjDOO0                             ','02bOODjDOO0                             ','02bOOOjODD0                             ', ...
+                    '02bDODjDOD0                             ','02bOOOjDDO0                             ','02bOODjDDO0                             ', ...
+                    '02bOOOjDDD0                             ','03aDDObOOOjOOO0                         ','03aDDObOODjOOD0                         ', ...
+                    '03aDDObOOOjOOD0                         ','03aODDbOOOjOOO0                         ','03aODDbOOOjODO0                         ', ...
+                    '03aODDbOOOjDOO0                         ','03aODDbOOOjDDO0                         ','04aODDaDODbOOOjOOO0                     ', ...
+                    '04aODDaDODbOOOjBBB0                     ','03aDDDbOOOjOOO0                         ','03aDDDbOOOjDDO0                         ', ...
+                    '03aDDDbOOOjDOO0                         ','12bOOOcOOO0                             ','03bOOOcOOOhDDD1BBB                      ', ...
+                    '12bOOOcOOD0                             ','03bOOOcOOOhDDO1BBO                      ','12bDOOcOOO0                             ', ...
+                    '12bDOOcDDD0                             ','12bDODcDOD0                             ','12bDOOcOOD0                             ', ...
+                    '12bOOOcDDO0                             ','12bDDOcODD0                             ','12bOODcODD0                             ', ...
+                    '12bOOOcDDD0                             ','03bOOOcDDOhDDO1BBO                      ','12bDDDcOOD0                             ', ...
+                    '12bDODcODD0                             ','12bDODcODO0                             ','13aDDObOODcOOD0                         ', ...
+                    '13aDDObODDcODD0                         ','13aDDObOOOcOOO0                         ','13aDDObOOOcOOD0                         ', ...
+                    '13aDDObODOcODO0                         ','04aDDObDDOcOOOhODD1OBB                  ','14aODDaDODbOOOcOOO0                     ', ...
+                    '05aODDaDODbOOOcOOOhBBB1ZZZ              ','13aDDDbOOOcOOO0                         ','13aDDDbOOOcDDO0                         ', ...
+                    '13aDDDbDODcODD0                         ','13aDDDbODOcODO0                         ','02bOOOgOOO0                             ', ...
+                    '02bOODgOOB0                             ','02bOOOgOOD0                             ','02bOODgOOF0                             ', ...
+                    '03aDDDbOOOgOOO0                         ','03aDDDbDDDgODB0                         ','02bOOOmOOO0                             ', ...
+                    '03aDDDbOOOmOOO0                         ','12bOOOgOOO0                             ','12bOOOgOOD0                             ', ...
+                    '03bOOOgDDOhDDO1YBO                      ','03bOOOgDDDhDDD1YYY                      ','13aDDDbOOOgOOO0                         ', ...
+                    '04aDDDbDDDgODBhODB1OYZ                  ','03bOOOgOOOcOOO0                         ','03bOOOgDDOcDDO0                         ', ...
+                    '03bOODgOOBcOOO0                         ','03bOODgDDBcDDB0                         ','03bOOOgOODcOOO0                         ', ...
+                    '03bOOOgDDDcDDD0                         ','03bOODgOOFcOOO0                         ','03bOODgDDFcDDF0                         ', ...
+                    '04aDDDbOOOgOOOcOOO0                     ','04aDDDbDDDgODBcDOF0                     ','03bOOOgOOOjOOO0                         ', ...
+                    '03bOOOgOOOjDDO0                         ','03bOOOgOODjOOD0                         ','03bOOOgDDDjDDD0                         ', ...
+                    '03bOOOgOOOjOOD0                         ','03bOOOgOOOjDDD0                         ','03bOOOgOODjOOO0                         ', ...
+                    '03bOOOgOODjDDO0                         ','04aDDDbOOOgOOOjOOO0                     ','04aDDDbOOOgOOOjOOD0                     ', ...
+                    '04aDDDbDDDgODBjOOO0                     ','04aDDDbDDDgODBjOOD0                     ','03bOOOmOOOcOOO0                         ', ...
+                    '03bOOOmOOOcOOD0                         ','03bOOOmOOOcDDO0                         ','03bOOOmOOOcDDD0                         ', ...
+                    '03bOOOmOOOjOOO0                         ','03bOOOmOOOjOOD0                         ','03bOOOmOOOjDDO0                         ', ...
+                    '03bOOOmOOOjDDD0                         ','04aDDDbOOOmOOOjOOO0                     ','04aDDDbOOOmOOOjOOD0                     ', ...
+                    '04aDDDbOOOmOOOcOOO0                     ','04aDDDbOOOmOOOcDOF0                     ','13bOOOgOOOcOOO0                         ', ...
+                    '13bOOOgOOOcOOD0                         ','04bOOOgOOOcOOOhDDO1YYO                  ','04bOOOgOOOcOOOhDDD1YYY                  ', ...
+                    '13bOOOgOOOcDDO0                         ','13bOOOgOOOcDDD0                         ','04bOOOgDDOcDDOhDDO1YBO                  ', ...
+                    '04bOOOgDDOcDDDhDDO1YBO                  ','13bOOOgOODcOOO0                         ','13bOOOgOODcOOD0                         ', ...
+                    '04bOOOgDDDcOODhDDD1YBY                  ','04bOOOgDDDcOOOhDDD1YBY                  ','13bOOOgOODcDDO0                         ', ...
+                    '13bOOOgDDDcDDD0                         ','04bOOOgDDDcDDDhDDD1YBY                  ','04bOOOgDDDcDDOhDDD1YBY                  ', ...
+                    '14aDDDbOOOgOOOcOOO0                     ','14aDDDbOOOgOOOcOOD0                     ','05aDDDbDDDgODBcDOFhODB1OBZ              ', ...
+                    '05aDDDbDDDgODBcDOBhODB1OBZ              ','01nOOO0                                 ','01nOOC0                                 ', ...
+                    '01nOOE0                                 ','02aECCnOOO0                             ','11nOOO0                                 ', ...
+                    '12aECCnOOO0                             ','02nOOOfOOO0                             ','02nOOOeOOO0                             ', ...
+                    '02nOOCfOOE0                             ','02nOOCeOOO0                             ','02nOOEfOOC0                             ', ...
+                    '02nOOEeOOO0                             ','03aECCnOOOeOOO0                         ','02nOOOkOOO0                             ', ...
+                    '02nOOOlOOO0                             ','02nOOOkOOD0                             ','02nOOOlOOD0                             ', ...
+                    '03aECCnOOOkOOO0                         ','03aECCnOOOkOOD0                         ','12nOOOfOOO0                             ', ...
+                    '12nOOOfOOD0                             ','12nOOOeOOO0                             ','12nOOOeOOD0                             ', ...
+                    '13aECCnOOOeOOO0                         ','13aECCnOOOeOOD0                         ','02nOOObOOO0                             ', ...
+                    '02nOOCbOOD0                             ','02nOOEbOOD0                             ','02nOOEbOOO0                             ', ...
+                    '02nOOCbOOO0                             ','02nOOObOOD0                             ','02nOOOiOOO0                             ', ...
+                    '12nOOObOOO0                             ','12nOOObOOD0                             ','03nOOObOOOeOOO0                         ', ...
+                    '03nOOCbOODeOOC0                         ','03nOOEbOODeOOE0                         ','03nOOEbOOOeOOE0                         ', ...
+                    '03nOOCbOOOeOOC0                         ','03nOOObOODeOOO0                         ','03nOOObOOOkOOO0                         ', ...
+                    '03nOOObOOOkOOD0                         ','03nOOObOODkOOD0                         ','03nOOObOODkOOO0                         ', ...
+                    '03nOOOiOOOkOOO0                         ','03nOOOiOODkOOD0                         ','03nOOOiOOOeOOO0                         ', ...
+                    '03nOOOiOODeOOO0                         ','13nOOObOOOeOOO0                         ','13nOOObOOOeOOD0                         ', ...
+                    '13nOOObOODeOOD0                         ','13nOOObOODeOOO0                         ','03bOOOcOOOdOOO0                         ', ...
+                    '05aODDaDODbOOOcOOOdOOO0                 ','04aDDDbOOOcOOOdOOO0                     ','03bDODcODDdOOO0                         ', ...
+                    '04aDDDbDODcODDdOOO0                     ','13bOOOcOOOdOOO0                         ','04bOOOcOOOdOOOhDDD1YYY                  ', ...
+                    '15aODDaDODbOOOcOOOdOOO0                 ','06aODDaDODbOOOcOOOdOOOhBBB1ZZZ          ','14aDDDbOOOcOOOdOOO0                     ', ...
+                    '13bDODcODDdOOO0                         ','14aDDDbDODcODDdOOO0                     ','04bOOOcOOOdOOOeOOO0                     ', ...
+                    '04bOOOcOOOdOOOeDDD0                     ','06aODDaDODbOOOcOOOdOOOeOOO0             ','06aODDaDODbODDcDDOdOOOeFBF0             ', ...
+                    '05aDDDbOOOcOOOdOOOeOOO0                 ','04bDODcODDdOOOeBFF0                     ','04bDODcODDdOOOeFBB0                     ', ...
+                    '05aDDDbDODcODDdOOOeFBB0                 ','04bOOOcOOOdOOOlOOO0                     ','06aODDaDODbOOOcOOOdOOOlOOO0             ', ...
+                    '05aDDDbOOOcOOOdOOOlOOO0                 ','04bOOOcOOOdOOOlDDD0                     ','06aODDaDODbOOOcOOOdOOOlDDD0             ', ...
+                    '05aDDDbDODcODDdOOOlBBB0                 ','14bOOOcOOOdOOOeOOO0                     ','05bOOOcOOOdOOOeOOOhDDD1YYY              ', ...
+                    '14bOOOcOOOdOOOeDDD0                     ','05bOOOcOOOdOOOeDDDhDDD1YYY              ','16aODDaDODbOOOcOOOdOOOeOOO0             ', ...
+                    '16aODDaDODbOOOcOOOdOOOeDDD0             ','07aODDaDODbODDcDDOdOOOeFBFhBBB1ZZZ      ','07aODDaDODbODDcDDOdOOOeFBFhFFF1XXX      ', ...
+                    '15aDDDbOOOcOOOdOOOeOOO0                 ','15aDDDbDODcODDdOOOeFBB0                 ','01dOOO0                                 ', ...
+                    '11dOOO0                                 ','02dOOOfOOO0                             ','02dOOOlOOO0                             ', ...
+                    '02dOOOlDDD0                             ','12dOOOfOOO0                             ','12dOOOfDDD0                             '}; 
+                recipe = sg_recipe_database{sg_id};
+            end
+            function R       = decode_R(str_r)
+                switch str_r
+                case 'a'; R = [  1  0  0;  0  1  0;  0  0  1]; % a
+                case 'b'; R = [ -1  0  0;  0 -1  0;  0  0  1]; % b
+                case 'c'; R = [ -1  0  0;  0  1  0;  0  0 -1]; % c
+                case 'd'; R = [  0  0  1;  1  0  0;  0  1  0]; % d
+                case 'e'; R = [  0  1  0;  1  0  0;  0  0 -1]; % e
+                case 'f'; R = [  0 -1  0; -1  0  0;  0  0 -1]; % f
+                case 'g'; R = [  0 -1  0;  1  0  0;  0  0  1]; % g
+                case 'h'; R = [ -1  0  0;  0 -1  0;  0  0 -1]; % h
+                case 'i'; R = [  1  0  0;  0  1  0;  0  0 -1]; % i
+                case 'j'; R = [  1  0  0;  0 -1  0;  0  0  1]; % j
+                case 'k'; R = [  0 -1  0; -1  0  0;  0  0  1]; % k
+                case 'l'; R = [  0  1  0;  1  0  0;  0  0  1]; % l
+                case 'm'; R = [  0  1  0; -1  0  0;  0  0 -1]; % m
+                case 'n'; R = [  0 -1  0;  1 -1  0;  0  0  1]; % n
+                end
+            end
+            function T       = decode_T(str_t)
+                switch str_t
+                    case 'A'; T = 1/6; % A
+                    case 'B'; T = 1/4; % B
+                    case 'C'; T = 1/3; % C
+                    case 'D'; T = 1/2; % D
+                    case 'E'; T = 2/3; % E
+                    case 'F'; T = 3/4; % F
+                    case 'G'; T = 5/6; % G
+                    case 'O'; T =   0; % O
+                    case 'X'; T =-3/8; % X
+                    case 'Y'; T =-1/4; % Y
+                    case 'Z'; T =-1/8; % Z
+                end
+            end
+        end
+
+        function sg_name      = decode_sg(sg_code)
+            sg_name_database = { ...
+                ' P  1      ' ,' P -1      ', ... % monoclinic space groups
+                ' P 2       ' ,' P 21      ' ,' C 2       ' ,' P m       ', ...
+                ' P c       ' ,' C m       ' ,' C c       ' ,' P 2/m     ', ...
+                ' P 21/m    ' ,' C 2/m     ' ,' P 2/c     ' ,' P 21/c    ', ...
+                ' C 2/c     ', ...                                              % orthorhombic space groups
+                ' P 2 2 2   ' ,' P 2 2 21  ' ,' P 21 21 2 ' ,' P 21 21 21', ...
+                ' C 2 2 21  ' ,' C 2 2 2   ' ,' F 2 2 2   ' ,' I 2 2 2   ', ...
+                ' I 21 21 21' ,' P m m 2   ' ,' P m c 21  ' ,' P c c 2   ', ...
+                ' P m a 2   ' ,' P c a 21  ' ,' P n c 2   ' ,' P m n 21  ', ...
+                ' P b a 2   ' ,' P n a 21  ' ,' P n n 2   ' ,' C m m 2   ', ...
+                ' C m c 21  ' ,' C c c 2   ' ,' A m m 2   ' ,' A b m 2   ', ...
+                ' A m a 2   ' ,' A b a 2   ' ,' F m m 2   ' ,' F d d 2   ', ...
+                ' I m m 2   ' ,' I b a 2   ' ,' I m a 2   ' ,' P m m m   ', ...
+                ' P n n n   ' ,' P c c m   ' ,' P b a n   ' ,' P m m a   ', ...
+                ' P n n a   ' ,' P m n a   ' ,' P c c a   ' ,' P b a m   ', ...
+                ' P c c n   ' ,' P b c m   ' ,' P n n m   ' ,' P m m n   ', ...
+                ' P b c n   ' ,' P b c a   ' ,' P n m a   ' ,' C m c m   ', ...
+                ' C m c a   ' ,' C m m m   ' ,' C c c m   ' ,' C m m a   ', ...
+                ' C c c a   ' ,' F m m m   ' ,' F d d d   ' ,' I m m m   ', ...
+                ' I b a m   ' ,' I b c a   ' ,' I m m a   ', ...                % tetragonal space groups  
+                ' P 4       ' ,' P 41      ' ,' P 42      ' ,' P 43      ', ...
+                ' I 4       ' ,' I 41      ' ,' P -4      ' ,' I -4      ', ...
+                ' P 4/m     ' ,' P 42/m    ' ,' P 4/n     ' ,' P 42/n    ', ...
+                ' I 4/m     ' ,' I 41/a    ' ,' P 4 2 2   ' ,' P 4 21 2  ', ...
+                ' P 41 2 2  ' ,' P 41 21 2 ' ,' P 42 2 2  ' ,' P 42 21 2 ', ...
+                ' P 43 2 2  ' ,' P 43 21 2 ' ,' I 4 2 2   ' ,' I 41 2 2  ', ...
+                ' P 4 m m   ' ,' P 4 b m   ' ,' P 42 c m  ' ,' P 42 n m  ', ...
+                ' P 4 c c   ' ,' P 4 n c   ' ,' P 42 m c  ' ,' P 42 b c  ', ...
+                ' I 4 m m   ' ,' I 4 c m   ' ,' I 41 m d  ' ,' I 41 c d  ', ...
+                ' P -4 2 m  ' ,' P -4 2 c  ' ,' P -4 21 m ' ,' P -4 21 c ', ...
+                ' P -4 m 2  ' ,' P -4 c 2  ' ,' P -4 b 2  ' ,' P -4 n 2  ', ...
+                ' I -4 m 2  ' ,' I -4 c 2  ' ,' I -4 2 m  ' ,' I -4 2 d  ', ...
+                ' P 4/m m m ' ,' P 4/m c c ' ,' P 4/n b m ' ,' P 4/n n c ', ...
+                ' P 4/m b m ' ,' P 4/m n c ' ,' P 4/n m m ' ,' P 4/n c c ', ...
+                ' P 42/m m c' ,' P 42/m c m' ,' P 42/n b c' ,' P 42/n n m', ...
+                ' P 42/m b c' ,' P 42/m n m' ,' P 42/n m c' ,' P 42/n c m', ...
+                ' I 4/m m m ' ,' I 4/m c m ' ,' I 41/a m d' ,' I 41/a c d', ... % rhombohedral space groups  
+                ' P 3       ' ,' P 31      ' ,' P 32      ' ,' R 3       ', ...
+                ' P -3      ' ,' R -3      ' ,' P 3 1 2   ' ,' P 3 2 1   ', ...
+                ' P 31 1 2  ' ,' P 31 2 1  ' ,' P 32 1 2  ' ,' P 32 2 1  ', ...
+                ' R 3 2     ' ,' P 3 m 1   ' ,' P 3 1 m   ' ,' P 3 c 1   ', ...
+                ' P 3 1 c   ' ,' R 3 m     ' ,' R 3 c     ' ,' P -3 1 m  ', ...
+                ' P -3 1 c  ' ,' P -3 m 1  ' ,' P -3 c 1  ' ,' R -3 m    ', ...
+                ' R -3 c    ', ...                                              % hexagonal space groups   
+                ' P 6       ' ,' P 61      ' ,' P 65      ' ,' P 62      ', ...
+                ' P 64      ' ,' P 63      ' ,' P -6      ' ,' P 6/m     ', ...
+                ' P 63/m    ' ,' P 6 2 2   ' ,' P 61 2 2  ' ,' P 65 2 2  ', ...
+                ' P 62 2 2  ' ,' P 64 2 2  ' ,' P 63 2 2  ' ,' P 6 m m   ', ...
+                ' P 6 c c   ' ,' P 63 c m  ' ,' P 63 m c  ' ,' P -6 m 2  ', ...
+                ' P -6 c 2  ' ,' P -6 2 m  ' ,' P -6 2 c  ' ,' P 6/m m m ', ...
+                ' P 6/m c c ' ,' P 63/m c m' ,' P 63/m m c', ...                % cubic space groups
+                ' P 2 3     ' ,' F 2 3     ' ,' I 2 3     ' ,' P 21 3    ', ...
+                ' I 21 3    ' ,' P m 3     ' ,' P n 3     ' ,' F m 3     ', ...
+                ' F d 3     ' ,' I m 3     ' ,' P a 3     ' ,' I a 3     ', ...
+                ' P 4 3 2   ' ,' P 42 3 2  ' ,' F 4 3 2   ' ,' F 41 3 2  ', ...
+                ' I 4 3 2   ' ,' P 43 3 2  ' ,' P 41 3 2  ' ,' I 41 3 2  ', ...
+                ' P -4 3 m  ' ,' F -4 3 m  ' ,' I -4 3 m  ' ,' P -4 3 n  ', ...
+                ' F -4 3 c  ' ,' I -4 3 d  ' ,' P m 3 m   ' ,' P n 3 n   ', ...
+                ' P m 3 n   ' ,' P n 3 m   ' ,' F m 3 m   ' ,' F m 3 c   ', ...
+                ' F d 3 m   ' ,' F d 3 c   ' ,' I m 3 m   ' ,' I a 3 d   ', ... % trigonal groups rhombohedral setting
+                ' R 3   |146' ,' R -3  |148' ,' R 3 2 |155' ,' R 3 m |160', ...
+                ' R 3 c |161' ,' R -3 m|166' ,' R -3 c|167'};
+            sg_name = sg_name_database(sg_code);
+        end
+        
+        
         % unit cells
 
         function [uc,pc,ic]   = get_cells(fposcar)
@@ -660,7 +978,7 @@ classdef am_lib
             import am_lib.*
 
             % basic check
-            if mod(det(B),1)~=0; error('determinant of B must be an integer'); end; 
+            if mod(det(B),1)~=0; error('determinant of B must be an integer'); end 
 
             % generate primitive lattice vectors
             n=round(sum(abs(B),1)); [Y{3:-1:1}]=ndgrid(1:n(1),1:n(2),1:n(3)); nLs=prod(n); L=reshape(cat(3+1,Y{:})-1,[],3).'; 
@@ -2148,8 +2466,7 @@ classdef am_lib
                 [~,~,S] = get_symmetries(pc); nSs = size(S,3); 
 
                 % save space symmetry combined with permutation of atomic positions as Q
-                M = perms([2:-1:1]).'; nMs = size(M,2); nQs = nSs*nMs;
-                Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); 
+                M = perms([2:-1:1]).'; Q{1} = repmat(S,1,1,size(M,2)); Q{2} = repelem(M,1,nSs); 
 
                 % get multiplication table, list of inverse elements, and identity
                 [MT,E,I]= get_multiplication_table(Q); nQs = size(MT,1);
@@ -2491,8 +2808,7 @@ classdef am_lib
         end
 
         function [ic,i2p,p2i] = get_irreducible_cell(pc)
-            % idenitifes irreducible atoms and the space symmetries s_ck
-            % necessary to regenerate the primitive cell from them.
+            % idenitifes irreducible atoms
             
             import am_lib.*
 
@@ -3988,6 +4304,9 @@ classdef am_lib
             assert(any(~abs(diag(U'*D*U)-E)<am_lib.eps), 'E is mismatched.');
         end
         
+        
+        % fitting functions
+        
         function [x,r] = lsqnonlin_(cost_,x0,isfixed,varargin)
             % X = lsqnonlin(FUN,X0,LB,UB,OPTIONS)
             % z=[1:500]/250; y=z.^2.3+5.5;
@@ -4098,7 +4417,7 @@ classdef am_lib
             
             narginchk(2,3) ;
 
-            if fix(N) ~= N || N < 0 || numel(N) ~= 1 ;
+            if fix(N) ~= N || N < 0 || numel(N) ~= 1 
                 error('permn:negativeN','Second argument should be a positive integer') ;
             end
             nV = numel(V) ;
@@ -4649,6 +4968,7 @@ classdef am_lib
             
             % mex library
             flib = 'am_mex_lib'; fid=fopen([flib,'.f90'],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); 
+            
 % START OF FORTRAN CODE 
 %{
 module am_mex_lib
