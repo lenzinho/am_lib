@@ -635,7 +635,7 @@ classdef am_lib
             elseif and(nsyms==24, ni ==1) ; pg_code=29;
             elseif and(nsyms==24, nc4==6) ; pg_code=30;
             elseif and(nsyms==24, ns4==6) ; pg_code=31;
-            else                            pg_code=0;
+            else;                           pg_code=0;
             end
         end
         
@@ -1330,21 +1330,21 @@ classdef am_lib
             import am_lib.*
             
             % define kpoint path
-            if     strfind( lower(brav), 'fcc-short' )
+            if     contains( lower(brav), 'fcc-short' )
                 G=[0;0;0];  X1=[0;1;1]/2; X2=[2;1;1]/2; 
                 L=[1;1;1]/2; K=[6;3;3]/8;
                 % short path
                 ql={'G','X','K','G','L'}; 
                 qs=[G,X2,K,G]; 
                 qe=[X1,K,G,L];
-            elseif strfind( lower(brav), 'fcc' )
+            elseif contains( lower(brav), 'fcc' )
                 G=[0;0;0];  X1=[0;1;1]/2; W=[1;3;2]/4;
                 U=[2;5;5]/8; L=[1;1;1]/2; K=[3;6;3]/8;
                 % long path
                 ql={'G','X','W','K','G','L','U','W','L','K'}; 
                 qs=[G,X1,W,K,G,L,U,W,L]; 
                 qe=[X1,W,K,G,L,U,W,L,K];
-            elseif strfind( lower(brav), 'hex' )
+            elseif contains( lower(brav), 'hex' )
                 % for a pc.bas ordered like so:
                 %     3.0531   -1.5266         0
                 %          0    2.6441         0
@@ -1676,28 +1676,28 @@ classdef am_lib
 
             % get irreducible shells
             fprintf(' ... identifying pairs ');
-            if strfind(flags,'-identify'); tic;
+            if contains(flags,'-identify'); tic;
                 [bvk,pp] = get_pairs(pc,uc,cutoff2);
                 fprintf('(%.f secs)\n',toc);
             else; fprintf('(skipped)\n'); end
             
             % force constant model
             fprintf(' ... determining harmonic force constant interdependancies and dynamical matrix ');
-            if strfind(flags,'-model'); tic;
+            if contains(flags,'-model'); tic;
                 bvk = get_bvk_model(bvk,pp,uc);
                 fprintf('(%.f secs)\n',toc);
             else; fprintf('(skipped)\n'); end
             
             % get force constants
             fprintf(' ... solving for harmonic force constants ');
-            if strfind(flags,'-fit'); tic;
+            if contains(flags,'-fit'); tic;
                 bvk = get_bvk_force_constants(uc,md,bvk,pp);
                 fprintf('(%.f secs)\n',toc);
             else; fprintf('(skipped)\n'); end
 
             % enforce asr
             fprintf(' ... enforcing acoustic sum rules '); 
-            if strfind(flags,'-enforce'); tic;
+            if contains(flags,'-enforce'); tic;
                 bvk = set_bvk_acoustic_sum_rules(bvk,pp);
                 fprintf('(%.f secs)\n',toc);
             else; fprintf('(skipped)\n'); end
@@ -2078,21 +2078,21 @@ classdef am_lib
 
             % get irreducible shells
             fprintf(' ... identifying triplets '); 
-            if strfind(flags,'-identify'); tic;
+            if contains(flags,'-identify'); tic;
                 [bvt,pt] = get_triplets(pc,uc,cutoff3);
                 fprintf('(%.f secs)\n',toc);
             else; fprintf('(skipped)\n'); end
             
             % get force constant model
             fprintf(' ... determining anharmonic force constant interdependancies ');
-            if strfind(flags,'-model'); tic;
+            if contains(flags,'-model'); tic;
                 bvt = get_bvt_model(bvt,pt);
                 fprintf('(%.f secs)\n',toc);
             else; fprintf('(skipped)\n'); end
             
             % get force constants
             fprintf(' ... solving for anharmonic (3rd-order) force constants '); 
-            if strfind(flags,'-fit'); tic;
+            if contains(flags,'-fit'); tic;
                 [bvt,bvk] = get_bvt_force_constants(uc,md,bvk,pp,bvt,pt);
                 fprintf('(%.f secs)\n',toc);
             else; fprintf('(skipped)\n'); end
@@ -2495,7 +2495,7 @@ classdef am_lib
 
             % save refined matrix elements and conform to bvk
             for i = [1:tb.nshells]; d(i)=size(tb.W{i},2); end; Evsk=cumsum(d); Svsk=Evsk-d+1;
-            for i = [1:tb.nshells]; tb.vsk{i} = x(Svsk(i):Evsk(i)); end;
+            for i = [1:tb.nshells]; tb.vsk{i} = x(Svsk(i):Evsk(i)); end
 
         end
 
@@ -2896,9 +2896,6 @@ classdef am_lib
             % idenitifes irreducible atoms
             
             import am_lib.*
-
-            % define function to simultaneously apply operation (helps to not forget about one)
-            bundle_ = @(ex_,PM,Sinds) deal(PM(:,ex_),Sinds(ex_));
             
             % get seitz matrices
             [~,~,S] = get_symmetries(pc);
@@ -3202,7 +3199,6 @@ classdef am_lib
             nsteps = size(u,3);
             nFCs = sum(cellfun(@(x)size(x,2),bvk.W));
             U = zeros(3*sum(nsteps*pp.ncenters),nFCs);
-            F = zeros(3*sum(nsteps*pp.ncenters),1);
             I = zeros(3*sum(nsteps*pp.ncenters),1);
             X = reshape(1:numel(u),size(u));
 
@@ -4310,7 +4306,7 @@ classdef am_lib
         
         function [a] = trace_(A)
             [m]=size(A,3);[n]=size(A,4);
-            A = zeros(m,n);
+            a = zeros(m,n);
             for i = 1:m; for j = 1:n
                 a(i,j) = trace(A(:,:,i,j));
             end; end
