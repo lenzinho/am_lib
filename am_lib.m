@@ -36,7 +36,7 @@ classdef am_lib
         usemex    = false;
         FC        = 'ifort'; 
         FFLAGS    = '-O3 -parallel -fpp -fPIC -lmx -lmex -lmat -nofor_main -bundle -implicitnone -assume realloc_lhs';
-        MPATH     = '/Applications/MATLAB_R2016b.app';
+        MPATH     = '/Applications/MATLAB_R2017a.app';
         LIBS      = ['-L',am_lib.MPATH,'/bin/maci64 -I',am_lib.MPATH,'/extern/include'];
         EXT       = '.mexmaci64';
         DEBUG     = '-debug'
@@ -1428,7 +1428,6 @@ classdef am_lib
         
     end    
     
-
     % mex functions
     
     methods (Static)
@@ -1438,18 +1437,19 @@ classdef am_lib
             %
             % to compile the library manually
             %
-            %       fort -O3 -parallel -fpp -c am_mex_lib.f90
+            %       ifort -O3 -parallel -fpp -L/Applications/MATLAB_R2017a.app/bin/maci64 -I/Applications/MATLAB_R2017a.app/extern/include -c am_mex_lib.f90
             %
             % to compile individual interfaces manually
             %
-            %       ifort -O3 -parallel -fpp -fPIC -L/Applications/MATLAB_R2016b.app/bin/maci64
-            %       -I/Applications/MATLAB_R2016b.app/extern/include -lmx -lmex -lmat -nofor_main 
+            %       ifort -O3 -parallel -fpp -fPIC -L/Applications/MATLAB_R2017a.app/bin/maci64
+            %       -I/Applications/MATLAB_R2017a.app/extern/include -lmx -lmex -lmat -nofor_main 
             %       -bundle ./uc2ws_mex.f90 -o uc2ws_mex.mexmaci64    
             %
             
             import am_lib.*
             
             % mex library
+            i=0;
             flib = 'am_mex_lib'; fid=fopen([flib,'.f90'],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); 
 %{
 module am_mex_lib
@@ -2957,7 +2957,6 @@ end module
 %}
             
             % mex interfaces
-            i=0;
             i=i+1; f{i} = 'uc2ws_mex'; fid=fopen([f{i},'.f90'],'w'); fprintf(fid,'%s',verbatim_()); fclose(fid); 
 %{
 #include "fintrf.h"
@@ -3199,7 +3198,7 @@ end subroutine mexFunction
                 if system([am_lib.FC,' ',am_lib.FFLAGS,' ',am_lib.DEBUG,' ',am_lib.LIBS,' ',flib,'.o ',f{i},'.f90 -o ',f{i},am_lib.EXT])
                     warning(' ... %s (failed)\n',f{i})
                 else
-                    fprintf(' ... %s (succeeded)\n',f{i});
+                    fprintf(' ... %s (succeeded)\n',f{i}); delete([f{i},'.f90']);
                 end
             end
         
