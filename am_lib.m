@@ -603,39 +603,39 @@ classdef am_lib
             ns2 = sum(ps_id==7);  % 's_2'
             ns4 = sum(ps_id==9);  % 's_4'
             % identify point group by comparing number and types of symmetries
-            if         nsyms==1           ; pg_code=1;
-            elseif     nsyms==48          ; pg_code=32;
-            elseif     nsyms==16          ; pg_code=20;
-            elseif     nsyms==3           ; pg_code=9;
-            elseif and(nsyms==2 , ni ==1) ; pg_code=2;
-            elseif and(nsyms==2 , nc2==1) ; pg_code=3;
-            elseif and(nsyms==2 , ns2==1) ; pg_code=4;
-            elseif and(nsyms==4 , ni ==1) ; pg_code=5;
-            elseif and(nsyms==4 , nc2==3) ; pg_code=6;
-            elseif and(nsyms==4 , ns2==2) ; pg_code=7;
-            elseif and(nsyms==4 , nc4==1) ; pg_code=14;
-            elseif and(nsyms==4 , ns4==2) ; pg_code=15;
-            elseif and(nsyms==6 , ni ==1) ; pg_code=10;
-            elseif and(nsyms==6 , nc2==3) ; pg_code=11;
-            elseif and(nsyms==6 , ns2==3) ; pg_code=12;
-            elseif and(nsyms==6 , nc2==1) ; pg_code=21;
-            elseif and(nsyms==6 , ns2==1) ; pg_code=22;
-            elseif and(nsyms==8 , ns2==3) ; pg_code=8;
-            elseif and(nsyms==8 , ns2==1) ; pg_code=16;
-            elseif and(nsyms==8 , ns2==0) ; pg_code=17;
-            elseif and(nsyms==8 , ns2==4) ; pg_code=18;
-            elseif and(nsyms==8 , ns2==2) ; pg_code=19;
-            elseif and(nsyms==12, ns2==3) ; pg_code=13;
-            elseif and(nsyms==12, ns2==1) ; pg_code=23;
-            elseif and(nsyms==12, nc2==7) ; pg_code=24;
-            elseif and(nsyms==12, ns2==6) ; pg_code=25;
-            elseif and(nsyms==12, ns2==4) ; pg_code=26;
-            elseif and(nsyms==12, nc3==8) ; pg_code=28;
-            elseif and(nsyms==24, nc6==2) ; pg_code=27;
-            elseif and(nsyms==24, ni ==1) ; pg_code=29;
-            elseif and(nsyms==24, nc4==6) ; pg_code=30;
-            elseif and(nsyms==24, ns4==6) ; pg_code=31;
-            else;                           pg_code=0;
+            if         nsyms==1         ; pg_code=1 ;
+            elseif     nsyms==48        ; pg_code=32;
+            elseif     nsyms==16        ; pg_code=20;
+            elseif     nsyms==3         ; pg_code=9 ;
+            elseif and(nsyms==2 , ni==1); pg_code=2 ;
+            elseif and(nsyms==2 ,nc2==1); pg_code=3 ;
+            elseif and(nsyms==2 ,ns2==1); pg_code=4 ;
+            elseif and(nsyms==4 , ni==1); pg_code=5 ;
+            elseif and(nsyms==4 ,nc2==3); pg_code=6 ;
+            elseif and(nsyms==4 ,ns2==2); pg_code=7 ;
+            elseif and(nsyms==4 ,nc4==2); pg_code=14; % nc4 == 2 is correct, rather than nc4 == 1.
+            elseif and(nsyms==4 ,ns4==2); pg_code=15;
+            elseif and(nsyms==6 , ni==1); pg_code=10;
+            elseif and(nsyms==6 ,nc2==3); pg_code=11;
+            elseif and(nsyms==6 ,ns2==3); pg_code=12;
+            elseif and(nsyms==6 ,nc2==1); pg_code=21;
+            elseif and(nsyms==6 ,ns2==1); pg_code=22;
+            elseif and(nsyms==8 ,ns2==3); pg_code=8 ;
+            elseif and(nsyms==8 ,ns2==1); pg_code=16;
+            elseif and(nsyms==8 ,ns2==0); pg_code=17;
+            elseif and(nsyms==8 ,ns2==4); pg_code=18;
+            elseif and(nsyms==8 ,ns2==2); pg_code=19;
+            elseif and(nsyms==12,ns2==3); pg_code=13;
+            elseif and(nsyms==12,ns2==1); pg_code=23;
+            elseif and(nsyms==12,nc2==7); pg_code=24;
+            elseif and(nsyms==12,ns2==6); pg_code=25;
+            elseif and(nsyms==12,ns2==4); pg_code=26;
+            elseif and(nsyms==12,nc3==8); pg_code=28;
+            elseif and(nsyms==24,nc6==2); pg_code=27;
+            elseif and(nsyms==24, ni==1); pg_code=29;
+            elseif and(nsyms==24,nc4==6); pg_code=30;
+            elseif and(nsyms==24,ns4==6); pg_code=31;
+            else;                         pg_code=0 ;
             end
         end
         
@@ -671,7 +671,7 @@ classdef am_lib
                7    7    7    7    7    7    7    7    7    7    8    8 , ...
                8    8    8    8    8    8    8    8    8    8    8    8 , ...
                8    8    8    8    8    8    8    8    8    8    8    8 , ...
-               8    8    0    0    0    0    0    0   15   15   16   16 , ...
+               8    8   14   14   14   14   14   14   15   15   16   16 , ...
               16   16   16   16   17   17   17   17   17   17   17   17 , ...
               17   17   18   18   18   18   18   18   18   18   18   18 , ...
               18   18   19   19   19   19   19   19   19   19   19   19 , ...
@@ -684,7 +684,7 @@ classdef am_lib
               27   27   28   28   28   28   28   29   29   29   29   29 , ...
               29   29   30   30   30   30   30   30   30   30   31   31 , ...
               31   31   31   31   32   32   32   32   32   32   32   32 , ...
-              32   32    9   10   11   12   12   13   13 ]; 
+              32   32    9   10   11   12   12   13   13 ];
             nsyms_database = [ ... 
                1    2    2    2    4    2    2    4    4    4    4    8 , ...
                4    4    8    4    4    4    4    8    8   16    8    8 , ...
