@@ -76,7 +76,6 @@ classdef am_lib
             end
         end
         
-
         % numerical precision
 
         function [C] = mod_(A)
@@ -87,7 +86,11 @@ classdef am_lib
             C = round(A,-log10(am_lib.tiny));
         end
 
-
+        function [C] = rndstr_(n)
+            set = char(['a':'z','0':'9','_','!','@','#','$','%','^']); nsets = numel(set);
+            C = set(ceil(nsets*rand(1,n)));
+        end
+        
         % vectorization
         
         function [A] = aug_(A,n)
@@ -958,6 +961,30 @@ classdef am_lib
         
         % general plotting
         
+        function [th] = assign_color_(V)
+            % assigns a number between [0,1] based on how close vectors V
+            % in are to identity vectors in that same basis. It essentially
+            % reduces the dimensionality of the data
+
+            % set number of points
+            n = size(V,1);
+
+            % define points around circle on complex plane
+            p = exp(2*pi*1i*[1:n]/n);
+
+            % get complex points
+            c = (p*abs(V)).';
+
+            % get linear mapping between [0,1]
+            th = mod( (atan2d(imag(c),real(c))/180+1)/2 + 3/8, 1);
+        end
+        
+        function [h] = plotc_(x,y,c)
+            x = x(:).'; y=y(:).'; c=c(:).'; z=zeros(size(x));
+            % col = x;  % This is the color, vary with x in this case.
+            h = surface([x;x],[y;y],[z;z],[c;c],'facecol','no','edgecol','interp','linew',1);
+        end
+        
         function [h] = plot3_(A,varargin)
            h = plot3(A(1,:),A(2,:),A(3,:),varargin{:});
         end
@@ -1003,6 +1030,7 @@ classdef am_lib
             daspect([1 1 1])
         end       
 
+        
         
         % correlation and polynomial fitting
         
@@ -1260,12 +1288,10 @@ classdef am_lib
         end
         
     end    
-    
-    % color map
-    
+            
+    % aesthetic
+
     methods (Static)
-        
-        % aesthetic
 
         function [cmap] =  get_colormap(palette,n)
             % color palettes
