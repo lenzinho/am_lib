@@ -484,6 +484,52 @@ classdef am_lib
             c_id(fwd) = cumsum([0;diff(c_id(fwd))~=0])+1; 
         end
         
+        function [X] = strmatch_(A,B)
+            X = zeros(size(A)); 
+            for k = 1:numel(B)
+                X(strncmp(A,B{k},numel(B{k}))) = k;
+            end
+        end
+        
+        function [X] = strmatchi_(A,B)
+            % case insensitive match
+            X = zeros(size(A)); 
+            for k = 1:numel(B)
+                X(strncmpi(A,B{k},numel(B{k}))) = k;
+            end
+        end
+        
+        
+        % file parsing
+        
+        function t   = extract_token_(str,token,numeric)
+            import am_lib.*
+            pos = find(strncmp(str,token,numel(token)),1);
+            if ~isempty(pos)
+                t = strtrim(regexprep(str{pos(1)},[token '|'''],''));
+                if ~isempty(t)
+                    if nargin>2 && numeric
+                        t = sscanf(t,'%f');
+                    end
+                end
+            else
+                t = '';
+            end
+        end
+
+        function str = load_file_(filename,maxline)
+            % reads a file rowise into a cellstr
+            if nargin == 1, maxline = inf; end
+            fid = fopen(filename,'r'); str = {};
+            while length(str) < maxline
+                tline = fgetl(fid);
+                if ~ischar(tline) || length(tline) > 1000, break; end
+                str{end+1} = tline;
+            end
+            fclose(fid);
+        end
+        
+        
         % special mathematical functions 
         
         function [C] = lorentz_(A)
@@ -1030,7 +1076,6 @@ classdef am_lib
             daspect([1 1 1])
         end       
 
-        
         
         % correlation and polynomial fitting
         
