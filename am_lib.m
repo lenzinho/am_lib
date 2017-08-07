@@ -76,6 +76,7 @@ classdef am_lib
             end
         end
         
+        
         % numerical precision
 
         function [C] = mod_(A)
@@ -90,6 +91,7 @@ classdef am_lib
             set = char(['a':'z','0':'9','_','!','@','#','$','%','^']); nsets = numel(set);
             C = set(ceil(nsets*rand(1,n)));
         end
+        
         
         % vectorization
         
@@ -402,6 +404,7 @@ classdef am_lib
             end
         end
 
+        
         % matching
         
         function [C] = maxabs_(A)
@@ -532,25 +535,30 @@ classdef am_lib
         
         % special mathematical functions 
         
-        function [C] = lorentz_(A)
+        function [C] = lorentz_(x)
             % define gaussian function 
-            C = 1./(pi*(A.^2+1)); 
+            C = 1./(pi*(x.^2+1)); 
             
         end
 
-        function [C] = gauss_(A)
-            C = exp(-abs(A).^2)./sqrt(pi);
+        function [C] = gauss_(x)
+            C = exp(-abs(x).^2)./sqrt(pi);
         end
 
-        function [C] = delta_(A)
+        function [C] = delta_(x)
             % define tiny, kronecker delta, and heavside
-            C = logical(abs(A)<am_lib.tiny); 
+            C = logical(abs(x)<am_lib.tiny); 
         end
 
-        function [C] = heaviside_(A)
-            C = logical(A>0);
+        function [C] = heaviside_(x)
+            C = logical(x>0);
         end
-
+                
+        function [C] = pvoigt_(x,f)
+            import am_lib.*
+            C = (1-f) .* gauss_(x./sqrt(2*log(2))) + f .* lorentz_(x);
+        end
+        
         
         % geometric functions
         
@@ -859,6 +867,40 @@ classdef am_lib
 
             % Estimate only the non-fixed ones
             [xl,r] = lsqnonlin(@localcost_,xl,varargin{:});
+
+            % Re-create array combining fixed and estimated coefficients
+            x([f,l]) = [xf,xl];
+
+            function y = localcost_(x)
+               b([f,l]) = [xf,x]; y = cost_(b);
+            end
+        end
+
+        function [x,r] = ga_(cost_,x0,isfixed,varargin)
+
+            % fixed and loose indicies
+            f = find( isfixed); xf = x0(f);
+            l = find(~isfixed); xl = x0(l);
+
+            % Estimate only the non-fixed ones
+            [xl,r] = ga(@localcost_,sum(isfixed==0),varargin{:});
+
+            % Re-create array combining fixed and estimated coefficients
+            x([f,l]) = [xf,xl];
+
+            function y = localcost_(x)
+               b([f,l]) = [xf,x]; y = cost_(b);
+            end
+        end
+        
+        function [x,r] = sa_(cost_,x0,isfixed,varargin)
+
+            % fixed and loose indicies
+            f = find( isfixed); xf = x0(f);
+            l = find(~isfixed); xl = x0(l);
+
+            % Estimate only the non-fixed ones
+            [xl,r] = simulannealbnd(@localcost_,xl,varargin{:});
 
             % Re-create array combining fixed and estimated coefficients
             x([f,l]) = [xf,xl];
@@ -1197,6 +1239,13 @@ classdef am_lib
             str = [sprintf('%s\n',lines{2:k-2}),lines{k-1}];
         end
         
+
+        % smoothing
+        
+        function [w] = gauss_win_(L,a)
+            N = L-1; n = (0:N)'-N/2; w = exp(-(1/2)*(a*n/(N/2)).^2);
+        end
+        
         
         % interpolation
 
@@ -1332,6 +1381,21 @@ classdef am_lib
             n = sscanf(a,'%i');
         end
         
+        function hostName = get_host_()
+            if ispc
+                hostName = getenv('COMPUTERNAME');
+            else
+                hostName = getenv('HOSTNAME');
+            end
+        end
+        
+        function userName = get_user_()
+            if ispc
+                userName = getenv('username');
+            else
+                userName = getenv('USER');
+            end
+        end
     end    
             
     % aesthetic
