@@ -75,7 +75,7 @@ classdef am_lib
                 t(i) = toc/nruns(i);
             end
         end
-        
+
         
         % numerical precision
 
@@ -91,7 +91,7 @@ classdef am_lib
             set = char(['a':'z','0':'9','_','!','@','#','$','%','^']); nsets = numel(set);
             C = set(ceil(nsets*rand(1,n)));
         end
-        
+
         
         % vectorization
         
@@ -535,28 +535,42 @@ classdef am_lib
         
         % special mathematical functions 
         
-        function [C] = lorentz_(x)
+        function [y] = lorentz_(x)
             % define gaussian function 
-            C = 1./(pi*(x.^2+1)); 
-            
+            y = 1./(pi*(x.^2+1)); 
         end
 
-        function [C] = gauss_(x)
-            C = exp(-abs(x).^2)./sqrt(pi);
+        function [y] = gauss_(x)
+            y = exp(-abs(x).^2)./sqrt(pi);
         end
 
-        function [C] = delta_(x)
+        function [y] = delta_(x)
             % define tiny, kronecker delta, and heavside
-            C = logical(abs(x)<am_lib.tiny); 
+            y = logical(abs(x)<am_lib.tiny); 
         end
 
-        function [C] = heaviside_(x)
-            C = logical(x>0);
+        function [y] = heaviside_(x)
+            y = logical(x>0);
         end
                 
-        function [C] = pvoigt_(x,f)
+        function [y] = pvoigt_(x,f)
+            % amplitude normalized
             import am_lib.*
-            C = (1-f) .* gauss_(x./sqrt(2*log(2))) + f .* lorentz_(x);
+            y = (1-f) .* gauss_(x./sqrt(2*log(2))) .* sqrt(pi) + f .* lorentz_(x) .* pi;
+        end
+        
+        function [y] = sinc_(x)
+            i=find(x==0); x(i)= 1; y = sin(pi*x)./(pi*x); y(i) = 1;
+        end
+        
+        function [w] = tukeyw_(n,r)
+            if nargin == 1; r = 0.5; end
+            t = linspace(0,1,n)'; per = r/2; tl = floor(per*(n-1))+1; th = n-tl+1;
+            w = [ ((1+cos(pi/per*(t(1:tl) - per)))/2);  ones(th-tl-1,1); ((1+cos(pi/per*(t(th:end) - 1 + per)))/2)];
+        end
+        
+        function [w] = gaussw_(n,r)
+            N = n-1; n = (0:N)'-N/2; w = exp(-(1/2)*(r*n/(N/2)).^2);
         end
         
         
@@ -589,7 +603,67 @@ classdef am_lib
             % define conversion of proper rotations to axis & angle representation
             A = acos((trace(R)-1)/2); 
         end
+        
+        function R = rot_align_(A,B)
+            %
+            % Rotation matrix R which aligns unit vector A to unit vector B: B = rotmat(A,B) * A
+            %
+            % based on Rodrigues' Rotation Formula
+            % "A Mathematical Introduction to Robotic Manipulation", Richard M. Murray, Zexiang Li, S. Shankar Sastry, pp. 26-28
+            %
+            % % quick matlab implementation:
+            % A = rand(3,1); A=A./norm(A);
+            % B = rand(3,1); B=B./norm(A);
+            % v = cross(A,B);
+            % s = norm(v);
+            % c = dot(A,B);
+            % vx(1:3,1) = [0.0,v(3),-v(2)];
+            % vx(1:3,2) = [-v(3),0.0,v(1)];
+            % vx(1:3,3) = [v(2),-v(1),0.0];
+            % R = eye_1(3) + vx + (vx*vx)*(1.0-c)/(s.^2)
+            % R*A-B
+            %
+            A=A./norm(A); B=B./norm(B);
+            v = cross(A,B); s = norm(v); c = dot(A,B);
+            vx(1:3,1) = [0.0,v(3),-v(2)];
+            vx(1:3,2) = [-v(3),0.0,v(1)];
+            vx(1:3,3) = [v(2),-v(1),0.0];
+            %
+            R = eye(3) + vx + vx*vx*(1.0 - c)/(s.^2);
+            %
+        end
 
+        function v_rot = rot_vec_(v,k,theta)
+            [m,n] = size(v);theta=theta/180*pi;
+            if (m ~= 3 && n ~= 3)
+                error('input vector is/are not three dimensional'), end
+            if (size(v) ~= size(k)) 
+                error('rotation vector v and axis k have different dimensions'),end
+
+            k = k/sqrt(k(1)^2 + k(2)^2 + k(3)^2); % normalize rotation axis
+            No = numel(v)/3; % number of vectors in array
+            v_rot = v; % initialize rotated vector array
+            if ( n == 3 )
+                crosskv = v(1,:); % initialize cross product k and v with right dim.
+                for i = 1:No
+                    crosskv(1) = k(2)*v(i,3) - k(3)*v(i,2);
+                    crosskv(2) = k(3)*v(i,1) - k(1)*v(i,3); 
+                    crosskv(3) = k(1)*v(i,2) - k(2)*v(i,1);
+                    v_rot(i,:) = cos(theta)*v(i,:) + (crosskv)*sin(theta)...
+                                    + k*(dot(k,v(i,:)))*(1 - cos(theta));
+                end
+            else % if m == 3 && n ~= 3
+                crosskv = v(:,1); % initialize cross product k and v with right dim.
+                for i = 1:No
+                    crosskv(1) = k(2)*v(3,i) - k(3)*v(2,i);
+                    crosskv(2) = k(3)*v(1,i) - k(1)*v(3,i); 
+                    crosskv(3) = k(1)*v(2,i) - k(2)*v(1,i);
+                    v_rot(:,i) = cos(theta)*v(:,i) + (crosskv)*sin(theta)...
+                                    + k*(dot(k,v(:,i)))*(1 - cos(theta));
+                end
+            end
+        end
+        
         function [Wtes] = get_wigner(j,R)
 
             import am_lib.get_wigner_engine
@@ -637,6 +711,28 @@ classdef am_lib
                 Wsph = V*diag(exp(diag(D)))/V * d^j;
                 Wtes = T' * Wsph * T ;
             end
+        end
+        
+        function [x,y,z] = sph2cartd_(phi,chi,r)
+            z = r .* sind(chi);
+            rcoselev = r .* cosd(chi);
+            x = rcoselev .* cosd(phi);
+            y = rcoselev .* sind(phi);
+        end
+        
+        function [x,y] = pol2cartd_(th,r)
+            x = r.*cosd(th);
+            y = r.*sind(th);
+        end
+        
+        function [th,r] = cart2pold_(x,y)
+            th = atan2d(y,x);
+            r = hypot(x,y);
+        end
+        
+        function [phi,chi,r] = cart2sphd_(x,y,z)
+            hypotxy = hypot(x,y); r = hypot(hypotxy,z);
+            chi = atan2d(z,hypotxy); phi = atan2d(y,x);
         end
         
         
@@ -909,6 +1005,101 @@ classdef am_lib
                b([f,l]) = [xf,x]; y = cost_(b);
             end
         end
+
+        function [c,v] = fit_peak_(x,y,profile)
+            import am_lib.*
+            
+            if nargin < 3; profile='pvoigt'; end
+            
+            switch profile
+                case 'sinc+pvoigt'
+                    % define rescaling
+                    fscale_= @(c) [log(c(1)),c(2:3),log(c(4)),c(5),log(c(6)),c(7),log(c(8))];
+                    rscale_= @(c) [exp(c(1)),c(2:3),exp(c(4)),c(5),exp(c(6)),c(7),exp(c(8))];
+                    % define gaussian, sinc, peak, and objective functions
+                    label = {'A1','C1','S1','A2','C2','W2','F2','B'};
+                    func_ = @(c) c(1).*  sinc_((x-c(2))./c(3)).^2 + ...
+                                 c(4).*pvoigt_((x-c(5))./c(6),c(7)) + ...
+                                 c(8);
+                    cost_ = @(c) sum(abs(log(func_(rscale_(c))) - log(y(:)) ));
+                    % lower and upper bounds; starting condition
+                    isfixed = [0 0 0 0 0 0 0 0];
+                    lb = [0.8*min(y) min(x) 0.02 0.8*min(y) min(x) 1E-4 0 0.8*min(y)]; lb = fscale_(lb); 
+                    ub = [1.2*max(y) max(x) 1.00 1.2*max(y) max(x) 1E-2 1 1.2*max(y)]; ub = fscale_(ub);
+                    x0 = mean([lb;ub]);
+                case 'sinc'
+                    % define rescaling
+                    fscale_= @(c) [log(c(1)),c(2:3),log(c(4))];
+                    rscale_= @(c) [exp(c(1)),c(2:3),exp(c(4))];
+                    % define gaussian, sinc, peak, and objective functions
+                    label = {'Amp','Center','Width','Background'};
+                    func_ = @(c) c(1).*  sinc_((x-c(2))./c(3)).^2 + ...
+                                 c(4);
+                    cost_ = @(c) sum(abs(log(func_(rscale_(c))) - log(y(:)) ));
+                    % lower and upper bounds; starting condition
+                    isfixed = [0 0 0 0]; % 0.02 to 2 0.2580
+                    lb = [0.8*min(y) min(x) 0.02 0.8*min(y)]; lb = fscale_(lb); 
+                    ub = [1.2*max(y) max(x) 1.50 1.2*max(y)]; ub = fscale_(ub);
+                    x0 = mean([lb;ub]);
+                case 'pvoigt'
+                    % define rescaling
+                    fscale_= @(c) [log(c(1)),c(2:4),log(c(5))];
+                    rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
+                    % define gaussian, sinc, peak, and objective functions
+                    label = {'Amp','Center','Width','PVoigt','Background'};
+                    func_ = @(c) c(1).*pvoigt_((x-c(2))./c(3),c(4)) + ...
+                                 c(5);
+                    cost_ = @(c) sum(abs(log(func_(rscale_(c))) - log(y(:)) ));
+                    % lower and upper bounds; starting condition
+                    isfixed = [0 0 0 0 0];
+                    lb = [0.8*min(y) min(x) 0.001 0 0.8*min(y)]; lb = fscale_(lb); 
+                    ub = [1.2*max(y) max(x) 0.300 1 1.2*max(y)]; ub = fscale_(ub);
+                    x0 = mean([lb;ub]);
+            end
+            
+            % optimization options
+            opts_hybrid_ = optimoptions(...
+                @fmincon,'Display','none',...
+                         'MaxFunctionEvaluations',1E2,...
+                         'MaxIterations',1E4,...
+                         'StepTolerance',1E-18,...
+                         'FunctionTolerance',1E-18,...
+                         'Algorithm','active-set');
+            opts_ = optimoptions(@ga,'PopulationSize',1000, ...
+                                     'InitialPopulationMatrix',x0(~isfixed), ...
+                                     'MutationFcn',{@mutationadaptfeasible}, ...
+                                     'Generations',5, ...
+                                     'FunctionTolerance',1E-5, ...
+                                     'Display','off',...
+                                     'HybridFcn',{@fmincon,opts_hybrid_});
+            % plot GA iterations?
+            if false; opts_.PlotFcns = {@plot_func_}; end
+
+            % perform optimization
+            [c,~] = ga_(cost_,x0,isfixed,[],[],[],[],lb(~isfixed),ub(~isfixed),[],opts_); c = rscale_(c); v = func_(c);
+            
+            function state = plot_func_(~,state,flag,~)
+                switch flag
+                    % Plot initialization
+                    case 'init'
+                        clf; figure(1); set(gcf,'color','w');
+                    case {'iter','done'}
+                        % find best population
+                        [~,j]=min(state.Score);
+                        % reconstruct full vector
+                        f = find( isfixed); xf = x0(f);
+                        l = find(~isfixed); xl = state.Population(j,:);
+                        c([f,l]) = [xf,xl];
+                        % plot it
+                        semilogy(x,func_(rscale_(c)),x,y); axis tight;                        
+                        % plot bound info
+                        axes('position',[0.4 0.6 0.45 0.25]);
+                        a = 1:sum(~isfixed); b = (c(~isfixed)-lb(~isfixed))./(ub(~isfixed)-lb(~isfixed)); plot(a,b,'.-','markersize',20); 
+                        h=text(a,b+0.05,strread(sprintf('%0.3g\n',c(~isfixed)),'%s'),'HorizontalAlignment','left'); set(h,'rotation',90);
+                        ylim([0 1]); set(gca,'YTick',[0 1],'YTickLabel',{'LB','UB'}); set(gca,'XTickLabel',label(~isfixed)); 
+                end
+            end
+        end
         
         
         % combinatorial 
@@ -1045,7 +1236,7 @@ classdef am_lib
                 end
             end
         end
-        
+
         
         % general plotting
         
@@ -1161,89 +1352,35 @@ classdef am_lib
             
             y = peval_(x(:),pfit_(x0(:),y0(:),n),n);
         end
+
         
-        function [str] = verbatim_()
-            %VERBATIM  Get the text that appears in the next comment block.
-            %  Returns the text of the first comment block following the call.  The
-            %  block comment delimiters, %{ and %}, must appear on lines by themselves
-            %  (optionally preceded by white space).
-            %
-            %  If you want a final end-of-line character then leave a blank line before
-            %  the %}.
-            %
-            %  If both comment delimiters are preceded by the same white space (same
-            %  combination of spaces and tabs) then that white space will be deleted
-            %  (if possible) from the beginning of each line of the commented text.
-            %  This is so the whole block can be indented.
-            %
-            %  Example,
-            %
-            %      str = verbatim;
-            %          %{
-            %          This is the text
-            %          that will be returned by verbatim.
-            %          %}
-            %
-            %  VERBATIM can only be used in an m-file.
-
-            % Get the function call stack.
-            [dbs,thisWorkspace] = dbstack('-completenames');
-            assert(length(dbs) > 1,'VERBATIM must be called from an M-file.')
-            dbs = dbs(thisWorkspace + 1);
-            lines = repmat({''},1,100);
-
-            % Open the file.
-            fid = fopen(dbs.file);
-
-            try
-                % Skip lines up to the current line in the calling function.
-                textscan(fid,'%*s',0,'HeaderLines',dbs.line,'Delimiter','');
-
-                % Read lines until one begins with '%{'.
-                line = '';
-                while ~isequal(line,-1) && isempty(regexp(line,'^\s*%{','once'))
-                    line = fgetl(fid);
-                end
-
-                % Read and save lines until one begins with '%}'.  Leave first cell
-                % empty.
-                k = 1;
-                while true
-                    k = k + 1;
-                    lines{k} = fgetl(fid);
-                    if isequal(lines{k},-1) || ...
-                            ~isempty(regexp(lines{k},'^\s*%}','once'))
-                        break
-                    end
-                end
-
-                % Close the file.
-                fclose(fid);
-
-            catch err
-                % Close the file and rethrow the error.
-                fclose(fid);
-                rethrow(err)
-            end
-
-            % If white space preceeding '%{' and '%}' is the same then delete it from
-            % the beginning of each line of the commented text so you can have indented
-            % code.
-            white_space1 = regexp(line,'^\s*','match','once');
-            white_space2 = regexp(lines{k},'^\s*','match','once');
-            if strcmp(white_space1,white_space2)
-                lines = regexprep(lines,['^',white_space1],'');
-            end
-
-            % Construct the output string.
-            str = [sprintf('%s\n',lines{2:k-2}),lines{k-1}];
+        % fft related
+        
+        function [r,gr] = fft_(k,gk)
+            % interpolate gk on equidistant points
+            kp= linspace(min(k),max(k),numel(k));
+            g = interp1(k,gk,kp); k=kp; clear ke;
+            % apply fft
+            N = numel(k);
+            r = fftshift(([0:(N-1)]'-floor(N/2))/(k(end)-k(1))); 
+            gr= fft(g); gr = gr(1:floor(N/2)); r = r(1:floor(N/2));
         end
         
-
-        % smoothing
-        
-        function [w] = gauss_win_(L,a)
-            N = L-1; n = (0:N)'-N/2; w = exp(-(1/2)*(a*n/(N/2)).^2);
+        function          plot_power_spectrum_(t,y)
+            import am_lib.*
+            % count number of scans
+            nys=size(y,2);
+            % apply fft
+            for i = 1:nys; [f(:,i),yf(:,i)] = fft_(t(:,i).',y(:,i).'); end
+            % plot results
+            figure(1); set(gcf,'color','w'); clf
+            a=arrayfun(@(i){t(:,i),y(:,i)},[1:nys],'UniformOutput',false);a=[a{:}];
+            axes('position',[0.1 0.1+0.5 0.85 0.35]); plot(a{:}); axis tight;
+            xlabel('t'); ylabel('g(t)');
+            a=arrayfun(@(i){1./f(:,i),abs(yf(:,i)).^2},[1:nys],'UniformOutput',false);a=[a{:}];
+            axes('position',[0.1 0.1 0.85 0.35]); loglog(a{:}); axis tight;
+            xlabel('1/f'); ylabel('abs( F[g(t)](f) )^2');
+            legend(arrayfun(@(i){num2str(i)},[1:nys]),'location','southeast');
         end
         
         
@@ -1364,11 +1501,110 @@ classdef am_lib
             
         end
 
+        function y    = linspacen_(d1, d2, n)
+            n  = double(n); d1 = squeeze(d1); d2 = squeeze(d2);
+            NDim = ndims(d1);
+            if NDim==2 && any(size(d1)==1)
+                NDim = NDim-1;
+                if all(size(d1)==1)
+                    NDim = 0;
+                end
+            end
+            pp      = (0:n-2)./(floor(n)-1);
+            Sum1    = tensor_product(d1, ones(1,n-1));
+            Sum2    = tensor_product((d2-d1), pp);
+            y = cat(NDim+1, Sum1  + Sum2, shiftdim(d2, size(d1, 1)==1 ));
+
+            function Z = tensor_product(X,Y)
+                sX=size(X);sY=size(Y); ndim1=ndims(X);ndim2=ndims(Y); indperm=[ndim2+1:ndim1+ndim2,1:ndim2];
+                Z=squeeze(repmat(X,[ones(1,ndims(X)),sY]).*permute(repmat(Y,[ones(1,ndims(Y)),sX]),indperm));
+            end
+        end
+        
     end
 
     % unix functions and scripts
     
     methods (Static)
+        
+
+        function [str] = verbatim_()
+            %VERBATIM  Get the text that appears in the next comment block.
+            %  Returns the text of the first comment block following the call.  The
+            %  block comment delimiters, %{ and %}, must appear on lines by themselves
+            %  (optionally preceded by white space).
+            %
+            %  If you want a final end-of-line character then leave a blank line before
+            %  the %}.
+            %
+            %  If both comment delimiters are preceded by the same white space (same
+            %  combination of spaces and tabs) then that white space will be deleted
+            %  (if possible) from the beginning of each line of the commented text.
+            %  This is so the whole block can be indented.
+            %
+            %  Example,
+            %
+            %      str = verbatim;
+            %          %{
+            %          This is the text
+            %          that will be returned by verbatim.
+            %          %}
+            %
+            %  VERBATIM can only be used in an m-file.
+
+            % Get the function call stack.
+            [dbs,thisWorkspace] = dbstack('-completenames');
+            assert(length(dbs) > 1,'VERBATIM must be called from an M-file.')
+            dbs = dbs(thisWorkspace + 1);
+            lines = repmat({''},1,100);
+
+            % Open the file.
+            fid = fopen(dbs.file);
+
+            try
+                % Skip lines up to the current line in the calling function.
+                textscan(fid,'%*s',0,'HeaderLines',dbs.line,'Delimiter','');
+
+                % Read lines until one begins with '%{'.
+                line = '';
+                while ~isequal(line,-1) && isempty(regexp(line,'^\s*%{','once'))
+                    line = fgetl(fid);
+                end
+
+                % Read and save lines until one begins with '%}'.  Leave first cell
+                % empty.
+                k = 1;
+                while true
+                    k = k + 1;
+                    lines{k} = fgetl(fid);
+                    if isequal(lines{k},-1) || ...
+                            ~isempty(regexp(lines{k},'^\s*%}','once'))
+                        break
+                    end
+                end
+
+                % Close the file.
+                fclose(fid);
+
+            catch err
+                % Close the file and rethrow the error.
+                fclose(fid);
+                rethrow(err)
+            end
+
+            % If white space preceeding '%{' and '%}' is the same then delete it from
+            % the beginning of each line of the commented text so you can have indented
+            % code.
+            white_space1 = regexp(line,'^\s*','match','once');
+            white_space2 = regexp(lines{k},'^\s*','match','once');
+            if strcmp(white_space1,white_space2)
+                lines = regexprep(lines,['^',white_space1],'');
+            end
+
+            % Construct the output string.
+            str = [sprintf('%s\n',lines{2:k-2}),lines{k-1}];
+        end
+        
         
         % matlab-integrated
         
@@ -1396,13 +1632,52 @@ classdef am_lib
                 userName = getenv('USER');
             end
         end
-    end    
+        
+    end
             
     % aesthetic
 
     methods (Static)
 
-        function [cmap] =  get_colormap(palette,n)
+        function [cmap] = color_(N)
+            brighten_ = @(x,alpha) x*alpha + (1-alpha);
+            dim_ = @(x,beta) x*beta;
+            % predefine some colormaps
+            set1 = brighten_([[ 55, 126, 184]*.85;[228, 26, 28];[ 77, 175, 74];[ 255, 127, 0];[ 152, 78, 163]],0.8);
+            set2 = brighten_([[228, 26, 28];[ 55, 126, 184]; [ 77, 175, 74];[ 255, 127, 0];[ 255, 237, 111]*.85;[ 166, 86, 40];[ 247, 129, 191];[ 153, 153, 153];[ 152, 78, 163]],0.9);
+            set3 = dim_([[141, 211, 199];[ 255, 237, 111];[ 190, 186, 218];[ 251, 128, 114];[ 128, 177, 211];[ 253, 180, 98];[ 179, 222, 105];[ 188, 128, 189];[ 217, 217, 217];[ 204, 235, 197];[ 252, 205, 229];[ 255, 255, 179]],0.93);
+            % interpolating function
+            map_ = @(n,cmap) interp1([0:(size(cmap,1)-1)]./(size(cmap,1)-1),cmap,linspace(0,1,n));
+            % switch based on N
+            switch N
+                case 1
+                    cmap = {[55, 126, 184]/255};
+                case {2, 3, 4, 5 }
+                    cmap = set1(1:N,:);
+                case {6 , 7, 8, 9}
+                    cmap = set2(1:N,:);
+                case {10, 11, 12}
+                    cmap = set3(1:N,:);
+                otherwise 
+                    % spectral
+                    cmap = [ ...
+                     0.81414841553744144, 0.21968473703143937, 0.30480585554066825;
+                     0.93302576331531295, 0.39131103777417953, 0.27197233193060932;
+                     0.98177624099394856, 0.60738179087638855, 0.34579008992980509;
+                     0.99469434864380779, 0.80922723167082844, 0.48696657138712268;
+                     0.99823144954793597, 0.94517493598601399, 0.65705499929540301;
+                     0.95578623869839840, 0.98231449547935934, 0.68004615517223588;
+                     0.82029989537070780, 0.92756632496328917, 0.61268745099796973;
+                     0.59100347582031698, 0.83552480795804196, 0.64429067864137535;
+                     0.36001538412243711, 0.71618609919267540, 0.66551328406614418;
+                     0.21299500558890549, 0.51141871132102668, 0.73079586379668293];
+                    % interpolate and return
+                    cmap = map_(n,cmap);
+            end
+            cmap = cmap./255;
+        end
+        
+        function [cmap] =  get_colormap(palette,n)                
             % color palettes
             switch palette
             case 'spectral' % sns.color_palette("Spectral", 10))
