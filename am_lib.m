@@ -79,12 +79,14 @@ classdef am_lib
         
         % numerical precision
 
-        function [C] = mod_(A)
-            C = mod(A+am_lib.tiny,1)-am_lib.tiny;
+        function [C] = mod_(A,tol)
+            if nargin < 2; tol = am_lib.tiny; end
+            C = mod(A+tol,1)-tol;
         end
 
-        function [C] = rnd_(A)
-            C = round(A,-log10(am_lib.tiny));
+        function [C] = rnd_(A,tol)
+            if nargin < 2; tol = am_lib.tiny; end
+            C = round(A,-log10(tol));
         end
 
         function [C] = rndstr_(n)
@@ -187,12 +189,12 @@ classdef am_lib
             % 
             % i = 1: add first dimension
             %       A [ m,a,b,1,d,...]
-            %     * B [ p,a,b,c,1,...]
+            %     + B [ p,a,b,c,1,...]
             %   ` = C [(m,p),a,b,c,d,...]
             %
             % i = 2: add second dimension
             %       A [m,n]
-            %     * B [m,p]
+            %     + B [m,p]
             %     = C [m,(n,p)]
             %
             
@@ -434,14 +436,17 @@ classdef am_lib
             [~,iA]=sort(A); [~,iB]=sort(B); iB(iB)=[1:numel(iB)]; I = accessc_(iA,iB);
         end
         
-        function [c] = member_(A,B)
+        function [c] = member_(A,B,tol)
             % get indicies of column vectors A(:,i,j) in matrix B(:,:)
             % 0 means not A(:,i) is not in B(:,:)
-
+            if nargin<3 || isempty(tol)
+                tol = am_lib.tiny;
+            end
+            
             [~,m,n] = size(A); c = zeros(m,n);
             for i = 1:m
             for j = 1:n
-                c(i,j) = member_engine_(A(:,i,j),B,am_lib.tiny);
+                c(i,j) = member_engine_(A(:,i,j),B,tol);
             end
             end
 
@@ -459,10 +464,14 @@ classdef am_lib
             end
         end
         
-        function [C,inds] = uniquecol_(A)
+        function [C,IA,IC] = uniquecol_(A,tol)
             % get unique values with numeric precision
             import am_lib.rnd_
-            [~,inds] = unique(rnd_(A).','rows','stable'); C=A(:,inds);
+            if nargin < 2
+                [~,IA,IC] = unique(rnd_(A).'    ,'rows','stable'); C=A(:,IA);
+            else
+                [~,IA,IC] = unique(rnd_(A,tol).','rows','stable'); C=A(:,IA);
+            end
         end
         
         function [C] = uniquemask_(A)
@@ -520,19 +529,15 @@ classdef am_lib
             end
         end
 
-        function str = load_file_(filename,nlines)
+        function [str,nlines] = load_file_(fname)
+            import am_lib.count_lines_
+            % get number of lines
+            nlines = count_lines_(fname); str = cell(nlines,1);
             % reads a file rowise into a cellstr
-            if nargin > 1
-                str = cell(nlines,1); 
-            else
-                str={}; nlines = inf;
+            fid = fopen(fname,'r'); 
+            for j = 1:nlines
+                str{j} = strtrim(fgetl(fid));
             end
-            fid = fopen(filename,'r'); 
-                while length(str) < nlines
-                    tline = fgetl(fid);
-                    if ~ischar(tline) || length(tline) > 1000, break; end
-                    str{end+1} = tline;
-                end
             fclose(fid);
         end
         
@@ -574,11 +579,21 @@ classdef am_lib
         end
         
         function [w] = gaussw_(n,r)
+            % [w] = gaussw_(n,r)
             N = n-1; n = (0:N)'-N/2; w = exp(-(1/2)*(r*n/(N/2)).^2);
         end
         
         
         % geometric functions
+        
+        function R = rotzd_(t)
+            ct = cosd(t); st = sind(t);
+            R = [
+                ct  -st  0
+                st   ct  0
+                0    0   1
+                ];
+        end
         
         function [A] = R_axis_(R)
             % define basic parameters and functions
@@ -1056,8 +1071,8 @@ classdef am_lib
                     cost_ = @(c) sum(abs(log(func_(rscale_(c))) - log(y(:)) ));
                     % lower and upper bounds; starting condition
                     isfixed = [0 0 0 0 0];
-                    lb = [0.8*min(y) min(x) 0.001 0 0.8*min(y)]; lb = fscale_(lb); 
-                    ub = [1.2*max(y) max(x) 0.300 1 1.2*max(y)]; ub = fscale_(ub);
+                    lb = [0.5*min(y) min(x) 0.001 0 0.5*min(y)]; lb = fscale_(lb); 
+                    ub = [1.5*max(y) max(x) 0.800 1 1.5*max(y)]; ub = fscale_(ub);
                     x0 = mean([lb;ub]);
             end
             
@@ -1108,7 +1123,7 @@ classdef am_lib
         
         % combinatorial 
         
-        function [x] = nchoosek_(n,k)
+        function [x]    = nchoosek_(n,k)
             % much faster than matlab's nchoosek
             kk=min(k,n-k);
             if kk<2
@@ -1148,7 +1163,7 @@ classdef am_lib
             x=x.';
         end
         
-        function [x] = nchoosrk_(n,k)
+        function [x]    = nchoosrk_(n,k)
             % with duplications allowed
             
             import am_lib.nchoosek_
@@ -1156,6 +1171,101 @@ classdef am_lib
             x=nchoosek_(n+k-1,k).';
             x=x-repmat(0:k-1,size(x,1),1);
             x=x.';
+        end
+        
+        function PN     = perm_norep_(N,K)
+            % Subfunction: permutations without replacement.
+            % Uses the algorithm in combs_no_rep as a basis, then permutes each row.
+            % pn = @(N,K) prod(1:N)/(prod(1:(N-K)));  Number of rows.
+
+            if N==K
+                PN = perms_loop(N);  % Call helper function.
+                return
+            elseif K==1
+                PN = (1:N);  % Easy case.
+                return
+            end
+
+            if K>N  % Since there is no replacement, this cannot happen.
+                error(['When no repetitions are allowed, '...
+                       'K must be less than or equal to N'])
+            end
+
+            M = double(N);  % Single will give us trouble on indexing.
+            WV = 1:K;  % Working vector.
+            lim = K;   % Sets the limit for working index.
+            inc = 1;   % Controls which element of WV is being worked on.
+            BC = prod(M-K+1:M);  % Pre-allocation of return arg.
+            BC1 = BC / ( prod(1:K)); % Number of comb blocks.
+            PN = zeros(round(BC),K,class(N));
+            L = prod(1:K) ;  % To get the size of the blocks.
+            cnt = 1+L;
+            P = perms_loop(K);  % Only need to use this once.
+            PN(1:(1+L-1),:) = WV(P);  % The first row.
+
+            for ii = 2:(BC1 - 1)
+                if logical((inc+lim)-N)  % The logical is nec. for class single(?)
+                    stp = inc;  % This is where the for loop below stops.
+                    flg = 0;  % Used for resetting inc.
+                else
+                    stp = 1;
+                    flg = 1;
+                end
+
+                for jj = 1:stp
+                    WV(K  + jj - inc) = lim + jj;  % Faster than a vector assignment!
+                end
+
+                PN(cnt:(cnt+L-1),:) = WV(P);  % Assign block.
+                cnt = cnt + L;  % Increment base index.    
+                inc = inc*flg + 1;  % Increment the counter.
+                lim = WV(K - inc + 1 );  % lim for next run.
+            end
+
+            V = (N-K+1):N;  % Final vector.
+            PN(cnt:(cnt+L-1),:) = V(P);  % Fill final block.
+            % The sorting below is NOT necessary.  If you prefer this nice
+            % order, the next two lines can be un-commented.
+            % [id,id] = sort(PN(:,1));  %#ok  This is not necessary!
+            % PN = PN(id,:);  % Return values.
+            
+            % rotate for consistency with other functions
+            PN = PN.';
+
+            function P = perms_loop(N)
+                % Helper function to perms_no_rep.  This is basically the same as the
+                % MATLAB function perms.  It has been un-recursed for a runtime of around  
+                % half the recursive version found in perms.m  For example:
+                %
+                %      tic,Tp = perms(1:9);toc
+                %      %Elapsed time is 0.222111 seconds.  Allow Ctrl+T+C+R on block
+                %      tic,Tc = combinator(9,9,'p');toc  
+                %      %Elapsed time is 0.143219 seconds.
+                %      isequal(Tc,Tp)  % Yes
+
+                Q = double(N); % Single will give us trouble on indexing.
+                P = 1;  % Initializer.
+                G = cumprod(1:(Q-1));  % Holds the sizes of P.
+                CN = class(N);
+
+                for n = 2:Q
+                    q = P;
+                    m = G(n-1);
+                    P = zeros(n*m,n,CN);
+                    P(1:m, 1) = n;
+                    P(1:m, 2:n) = q;
+                    a = m + 1;
+
+                    for kk = n-1:-1:1
+                        t = q;
+                        t(t == kk) = n;
+                        b = a + m - 1;
+                        P(a:b, 1) = kk;
+                        P(a:b, 2:n) = t;
+                        a = b + 1;
+                    end 
+                end
+            end
         end
         
         function [M, I] = permn_(V, N, K)
@@ -1241,6 +1351,135 @@ classdef am_lib
             end
         end
 
+        function [A,c]  = perm_heap_(A,n,c)
+            % [A,c] = heap_perm_(A,n,c)
+            % generates on permutation at a time. check it with:
+            % n=4; A = zeros(factorial(n),n);
+            % % initialize
+            % [A(1,:),c] = heap_perm_([1:n],n);
+            % % generate permutations
+            % for i = 2:factorial(n)
+            %     [A(i,:),c] = heap_perm_(A(i-1,:),n,c);
+            % end
+            % sortrows(perms([1:n]))-sortrows(A)
+
+            if nargin<3
+                % c is used to continue generating permutations
+                c = ones(1,n);
+            end
+            i=1;
+            while i <= n
+                if  c(i) < i
+                    if mod(i,2)==1
+                        A([1,i])=A([i,1]);
+                    else
+                        A([i,c(i)])=A([c(i),i]);
+                    end
+                    if nargout > 1
+                        % everytime a new permutation is generated, reset i to 1
+                        c(i) = c(i) + 1; i = 1;
+                    end
+                    % return A and c for continuation
+                    return
+                else
+                    c(i) = 1;
+                    i = i + 1;
+                end
+            end
+        end
+        
+        function [a]    = perm_narayana_(a)
+            % [a]   = narayana_perm_(a)
+            % given a permutation, generates the next permutation in
+            % lexicographical order. start generations with a = [1:n]
+            % for example:      
+            %     clear;clc
+            %     n = 5;            
+            %     i=0;   a=zeros(factorial(n),n);
+            %     i=i+1; a(i,1:n)=1:n; tic
+            %     t = narayana_perm_(a(1,:));
+            %     while ~isempty(t)
+            %         i=i+1; a(i,:) = t;
+            %         t = narayana_perm_(a(i,:));
+            %     end
+            %
+
+            % get number of elements
+            n = numel(a);
+            % one element
+            if n==1; return; end
+            % find largest k such that a(k) < a(k+1)
+            k=n-1;
+            while a(k)>=a(k+1)
+                k=k-1;
+                if k==0
+                    % last permutation
+                    a = []; return;
+                end
+            end
+            % find largest l > k such that a(k) < a(l)
+            l = n;
+            while a(l)<a(k)
+                l=l-1;
+            end
+            % swap k and l positions
+            a([k,l])=a([l,k]);
+            % reverse k+1 to n positions
+            a([(k+1):n])=a([n:-1:(k+1)]);
+        end
+        
+        function [x]    = ind2bas_(index,base)
+            % [dhms] = ind2bas_(seconds,[7,24,60,60])
+            % use this to convert from seconds to weeks,days,hours minutes,seconds 
+            n = numel(base)+1; x = zeros(1,n-1); b = cumprod([base,1],'reverse');
+            for i = 2:n
+                x(i-1)  = floor(index./b(i));
+                index = index - x(i-1).*b(i);
+            end
+        end
+
+        function [a]    = group_perm_(a,label,j)
+            % [a] = group_perm_(a,label)
+            % call like this: n=9; a = 1:n; label = [1,1,1,2,2,2,2,2,3];
+            
+            import am_lib.*
+            
+            %  are in monotonically increasing order?
+            if any(diff(label)<0) % yes
+                dosort = true; [~,fwd] = sort(label); rev(fwd)=[1:n]; a=a(fwd); 
+            else % no
+                dosort = false;
+            end
+
+                % sorted
+                ulabels = unique(label);
+                % nlabels = numel(ulabels);
+                mdigits = factorial(sum(label(:)==ulabels,1)); 
+                % ncounts = prod(mdigits);
+
+                S = find([1,diff(label)]);
+                E = S + sum(ulabels==label.',1) - 1;
+
+                % initialize
+                % fprintf('%3i',a); fprintf('\n');
+                % for j = 2:ncounts
+                    % update
+                    k = find(ind2bas_(j-1,mdigits)-ind2bas_(j-2,mdigits)>0);
+                    % permute
+                    t = narayana_perm_(a(S(k):E(k)));
+                    % restart
+                    if isempty(t); t = S(k):E(k); end
+                    % update
+                    a(S(k):E(k)) = t;
+                    % print
+                    % fprintf('%3i',a); fprintf('\n');
+                % end
+                
+            if dosort
+                a = a(rev);
+            end
+        end
+        
         
         % general plotting
         
@@ -1314,8 +1553,9 @@ classdef am_lib
         end       
 
         function [cmap] = color_(n,palette)
-            %
-            if nargin < 2; palette=[]; end
+            % color_(n,palette)
+            
+            if nargin < 2; palette='spectral'; end
             %   
             brighten_ = @(x,alpha) x*alpha + (1-alpha);
             dim_ = @(x,beta) x*beta;
@@ -1500,12 +1740,13 @@ classdef am_lib
         
         function [C] = pfit_(x,y,n)
             % least squares fit polynomial of degree n to data
-            C = (x(:).^[0:n])\y;
+            C = (x(:).^[0:n])\y(:);
         end
         
-        function [y] = peval_(x,C,n)
+        function [y] = peval_(x,C)
+            n = numel(C)-1;
             % evaluate least squares fit polynomial of degree n to data
-            y = (x(:).^[0:n])*C;
+            y = (x(:).^[0:n])*C(:);
         end
         
         function [y] = pinterp_(x,x0,y0,n)
@@ -1684,6 +1925,21 @@ classdef am_lib
             end
         end
         
+        function n = gcd_(n)
+            % operates on vector n = [n1,n2,n3 ...]
+            x=1; p=n;
+            while(size(n,2))>=2
+                p= n(:,size(n,2)-1:size(n,2));
+                n=n(1,1:size(n,2)-2);
+                x=1;
+                while(x~=0)
+                    x= max(p)-min(p);
+                    p = [x,min(p)];
+                end    
+                n = [n,max(p)];
+                p = [];
+            end
+        end
     end
 
     % unix functions and scripts
@@ -1792,6 +2048,79 @@ classdef am_lib
                 userName = getenv('username');
             else
                 userName = getenv('USER');
+            end
+        end
+        
+        function rel_path = relativepath( tgt_path, act_path )
+
+                if nargin<2; act_path = pwd; end
+            
+                % Predefine return string:
+                rel_path = '';
+
+                % Make sure strings end by a filesep character:
+                if  isempty(act_path)   ||   ~isequal(act_path(end),filesep)
+                   act_path = [act_path filesep];
+                end
+                if  isempty(tgt_path)   ||   ~isequal(tgt_path(end),filesep)
+                   tgt_path = [tgt_path filesep];
+                end
+
+                % Convert to all lowercase:
+                [act_path] = fileparts( lower(act_path) );
+                [tgt_path] = fileparts( lower(tgt_path) );
+
+                % Create a cell-array containing the directory levels:
+                act_path_cell = pathparts(act_path);
+                tgt_path_cell = pathparts(tgt_path);
+
+                % If volumes are different, return absolute path:
+                if  isempty(act_path_cell)   ||   isempty(tgt_path_cell)
+                   return  % rel_path = ''
+                else
+                   if  ~isequal( act_path_cell{1} , tgt_path_cell{1} )
+                      rel_path = tgt_path;
+                      return
+                   end
+                end
+
+                % Remove level by level, as long as both are equal:
+                while  ~isempty(act_path_cell)   &&   ~isempty(tgt_path_cell)
+                   if  isequal( act_path_cell{1}, tgt_path_cell{1} )
+                      act_path_cell(1) = [];
+                      tgt_path_cell(1) = [];
+                   else
+                      break
+                   end
+                end
+
+                % As much levels down ('../') as levels are remaining in "act_path":
+                for  i = 1 : length(act_path_cell)
+                   rel_path = ['..' filesep rel_path];
+                end
+
+                % Relative directory levels to target directory:
+                for  i = 1 : length(tgt_path_cell)
+                   rel_path = [rel_path tgt_path_cell{i} filesep];
+                end
+
+                % Start with '.' or '..' :
+                if  isempty(rel_path)
+                   rel_path = ['.' filesep];
+                elseif  ~isequal(rel_path(1),'.')
+                   rel_path = ['.' filesep rel_path];
+                end
+                
+                % clean up
+                rel_path = strrep(rel_path,'//','/');
+
+            function  path_cell = pathparts(path_str)
+                path_str = [filesep path_str filesep];
+                path_cell = {};
+                sep_pos = findstr( path_str, filesep );
+                for j = 1 : length(sep_pos)-1
+                   path_cell{j} = path_str( sep_pos(j)+1 : sep_pos(j+1)-1 );
+                end
             end
         end
         
