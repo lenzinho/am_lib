@@ -76,7 +76,7 @@ classdef am_lib
             end
         end
 
-        
+
         % numerical precision
 
         function [C] = mod_(A,tol)
@@ -98,7 +98,42 @@ classdef am_lib
             C = set(ceil(nsets*rand(1,n)));
         end
 
+        function [L] = eq_(a,b,tol)
+            if nargin < 3; tol = am_lib.tiny; end
+            L = abs(a-b)<tol;
+        end
         
+        function [L] = lt_(a,b,tol)
+            if nargin < 3; tol = am_lib.tiny; end
+            L = a<b-tol;
+        end
+        
+        function [L] = gt_(a,b,tol)
+            if nargin < 3; tol = am_lib.tiny; end
+            L = a>b+tol;
+        end
+        
+        function [x] = wdv_(x,tol)
+            % get well-defined value for integers, sqrt(integer), cube-root(integer)
+            
+            import am_lib.*
+
+            if nargin<2; tol = am_lib.eps; end
+
+            if isreal(x)            
+                for i = 1:numel(x)
+                for j = 1:3
+                    if eq_(mod_(x.^j),0,tol)
+                        x(i) = sign(x(i)) .* round(abs(x(i).^j)).^(1/j); break;
+                    end
+                end
+                end
+            else
+                x = wdv_(real(x)) + wdv_(imag(x))*1i;
+            end
+        end
+        
+
         % vectorization
         
         function [A] = aug_(A,n)
@@ -132,7 +167,7 @@ classdef am_lib
                 C = reshape(C,n);
             end
         end
-        
+
         function [C] = matmulp_(A,B,applysqueeze)
             % high dimensional matrix multiplication: 
             %
@@ -410,7 +445,13 @@ classdef am_lib
             end
         end
 
-        
+        function B   = changem_(A,newval,oldval)
+            B = A;
+            [valid,id] = max(bsxfun(@eq,A(:),oldval(:).'),[],2); %//'
+            B(valid) = newval(id(valid));
+        end
+
+
         % matching
         
         function [C] = maxabs_(A)
@@ -421,16 +462,24 @@ classdef am_lib
             C = [min(A(:)),max(A(:))];
         end
         
-        function [C] = sortc_(A)
+        function [C] = sortc_(A, tol)
             % column vector-based rank, sort, unique with numeric precision
             import am_lib.rnd_
-            [C] = sortrows(rnd_(A).').'; 
+            
+            % set default numerical tolernece
+            if nargin<2 || isempty(tol); tol = am_lib.tiny; end
+            
+            [C] = sortrows(rnd_(A,tol).').'; 
         end
 
-        function [C] = rankc_(A)
+        function [C] = rankc_(A, tol)
             % column vector-based rank, sort, unique with numeric precision
             import am_lib.rnd_
-            C = sortrowsc(rnd_(A).',[1:size(A,1)]).'; 
+             
+            % set default numerical tolernece
+            if nargin<2 || isempty(tol); tol = am_lib.tiny; end
+            
+            C = sortrowsc(rnd_(A,tol).',[1:size(A,1)]).'; 
         end                 
 
         function [I] = match_(A,B)
@@ -468,24 +517,27 @@ classdef am_lib
             end
         end
         
-        function [C,IA,IC] = uniquecol_(A,tol)
+        function [C,IA,IC] = uniquec_(A,tol)
             % get unique values with numeric precision
             import am_lib.rnd_
-            if nargin < 2
-                [~,IA,IC] = unique(rnd_(A).'    ,'rows','stable'); C=A(:,IA);
+            if nargin<2 || isempty(tol)
+                [~,IA,IC] = unique(rnd_(A).'    , 'rows', 'stable'); C=A(:,IA);
             else
-                [~,IA,IC] = unique(rnd_(A,tol).','rows','stable'); C=A(:,IA);
+                [~,IA,IC] = unique(rnd_(A,tol).', 'rows', 'stable'); C=A(:,IA);
             end
         end
         
-        function [C] = uniquemask_(A)
+        function [C] = uniquemask_(A,tol)
             % returns a matrix with column vectors marking the first
             % occurance of a value in each column
             import am_lib.rnd_
+           
+            % set default numerical tolernece
+            if nargin<2 || isempty(tol); tol = am_lib.tiny; end
             
             C = false(size(A));
             for i = 1:size(A,2)
-                [~,b]=unique(rnd_(A(:,i))); C(b,i) = true;
+                [~,b]=unique(rnd_(A(:,i),tol)); C(b,i) = true;
             end
         end
 
@@ -515,7 +567,34 @@ classdef am_lib
             end
         end
         
+        function [C] = get_connectivity(PM)
+
+            import am_lib.*
+
+            % binary
+            [natoms,nRs] = size(PM);
+
+            % exclude all rows containing all zeros
+            PM = PM(~all(PM==0,2),:);
+
+            % construct sparse vectors
+            m = size(PM,1); t = zeros(1,m); for i = [1:m]; t(i) = PM(i,find(PM(i,:),1)); end
+            v = [ repmat(t(:),nRs,1), PM(:) ];
+
+            % exlcude zeros, make symmetric, ensure diagonals, and remove repeat
+            v = v(~any(v==0,2),:); v=[v;[v(:,2),v(:,1)]]; v=[v;[v(:,1),v(:,1)]]; v = unique(v,'rows');
+
+            % construct a sparse binary representation
+            C = sparse(v(:,1),v(:,2),ones(size(v,1),1),natoms,natoms); % A = double((A'*A)~=0);
+
+            % merge and reduce binary rep
+            C = merge_(C); C(abs(C)<am_dft.tiny)=0; C(abs(C)>am_dft.tiny)=1; C=full(C(any(C~=0,2),:));
+
+            % convert to logical
+            C = logical(C);
+        end
         
+
         % file parsing
         
         function t   = extract_token_(str,token,numeric)
@@ -590,44 +669,73 @@ classdef am_lib
         
         % geometric functions
         
-        function R = rotzd_(t)
-            ct = cosd(t); st = sind(t);
-            R = [
-                ct  -st  0
-                st   ct  0
-                0    0   1
-                ];
+        function R      = rotzd_(t)
+            c = cosd(t); s = sind(t);
+            R = [c -s 0;
+                 s  c 0;
+                 0  0 1];
         end
         
-        function [A] = R_axis_(R)
-            % define basic parameters and functions
-            tiny = 1E-8; normalize_ = @(v) v/norm(v); 
+        function R      = rotyd_(t)
+            c = cosd(t); s = sind(t);
+            R = [ c 0 s; 
+                  0 1 0; 
+                 -s 0 c];
+        end
+        
+        function R      = rotxd_(t)
+            c = cosd(t); s = sind(t);
+            R = [1 0  0; 
+                 0 c -s;
+                 0 s  c];
+        end
+        
+        function [A]    = R_axis_(R)
+            % [A] = R_axis_(R);
+            
+            import am_lib.*
+            
+            nRs = size(R,3);
+            
+            if nRs == 1
+                % convert (im)proper rotation to proper rotation
+                R = R*det(R);
 
-            % check for identity
-            if abs(trace(R)-3)< tiny; A=[0;0;1]; return; end
+                % define basic parameters and functions
+                tol = 1E-8; normalize_ = @(v) v/norm(v); 
 
-            % get rotation axis
-            A = null(R-eye(3));
+                % check for identity
+                if abs(trace(R)-3)< tol; A=[0;0;1]; return; end
 
-            % get random point on plane perpendicular to the rotation axis
-            v1 = rand(3,1); v1 = normalize_(v1 - dot(v1,A)*A);
+                % get rotation axis
+                A = null(R-eye(3));
 
-            % rotate point on the perpendicular plane
-            v2 = R*v1;
+                % get random point on plane perpendicular to the rotation axis
+                v1 = rand(3,1); v1 = normalize_(v1 - dot(v1,A)*A);
 
-            % get cross product (add tiny cross component to deal with 180 deg rotation)
-            c = normalize_(cross(v1,v2+cross(v1,A)*tiny));
+                % rotate point on the perpendicular plane
+                v2 = R*v1;
 
-            % adjust sign
-            A = sign(dot(c,A))*A;
+                % get cross product (add tiny cross component to deal with 180 deg rotation)
+                c = normalize_(cross(v1,v2+cross(v1,A)*tol));
+
+                % adjust sign
+                A = sign(dot(c,A))*A;
+            else
+                
+                A = zeros(3,nRs);
+                for i = 1:nRs
+                    A(:,i) = R_axis_(R(:,:,i));
+                end
+            end
         end
 
-        function [A] = R_angle_(R)
+        function [A]    = R_angle_(R)
             % define conversion of proper rotations to axis & angle representation
             A = acos((trace(R)-1)/2); 
         end
         
-        function R = rot_align_(A,B)
+        function R      = rot_align_(A,B)
             %
             % Rotation matrix R which aligns unit vector A to unit vector B: B = rotmat(A,B) * A
             %
@@ -656,7 +764,7 @@ classdef am_lib
             %
         end
 
-        function v_rot = rot_vec_(v,k,theta)
+        function v_rot  = rot_vec_(v,k,theta)
             [m,n] = size(v);theta=theta/180*pi;
             if (m ~= 3 && n ~= 3)
                 error('input vector is/are not three dimensional'), end
@@ -687,9 +795,20 @@ classdef am_lib
             end
         end
         
-        function [Wtes] = get_wigner(j,R)
+        function [Wtes] = get_wigner(j,R,flag)
 
             import am_lib.get_wigner_engine
+            
+            % defaults
+            if nargin < 3
+                if mod(j*2,1)==1 
+                    % j = half-integer
+                    flag='tesseral';
+                else
+                    % j = integer
+                    flag='spherical';
+                end
+            end
 
             % define tiny, kronecker delta, and heavside
             d_ = @(x,y) logical(x==y); t_ = @(x,y) logical(x>y);
@@ -700,11 +819,23 @@ classdef am_lib
             % define angular momentum operators (Jp raising, Jm lowering, ...)
             Jm = d_(m,mp+1).*sqrt((j+m).*(j-m+1)); Jp = d_(m,mp-1).*sqrt((j-m).*(j+m+1));
             Jx = (Jp+Jm)/2; Jy = (Jp-Jm)/2i; Jz = d_(m,mp).*m; J = cat(3,Jx,Jy,Jz);
+            % Jx = (Jp+Jm)/2; Jy = (Jp-Jm)/2i; Jz = d_(m,mp).*m; J = cat(3,Jz,Jx,Jy);
 
-            % define basis change: spherical to tesseral harmonics (real basis)
-            T = d_(0,m) .* d_(mp,m) + ...
-                t_(m,0) .* - sqrt(-1/2) .* ( (-1).^m.*d_(m,-mp) - d_(m, mp) ) + ...
-                t_(0,m) .* - sqrt( 1/2) .* ( (-1).^m.*d_(m, mp) + d_(m,-mp) );
+            if     contains(flag,'tesseral')
+                % define basis change: spherical (complex) to tesseral harmonics (real basis)
+                % C. Görller-Walrand and K. Binnemans, in (Elsevier, 1996), pp. 145, eqs. 14-16.
+                T = d_(0,m) .* d_(mp,m) + ...
+                    t_(m,0) .* sqrt(-1/2) .* ( d_(m,-mp) - (-1).^m.*d_(m, mp) ) + ... % sine   terms
+                    t_(0,m) .* sqrt( 1/2) .* ( d_(m, mp) + (-1).^m.*d_(m,-mp) );      % cosine terms
+
+                % if j is a half-integer, tesseral harmonics make no sense, force spherical
+                if mod(j*2,1)==1
+                    T=1; warning('Tesseral harmonics only make sense for j = integer. Switching to spherical harmonics.'); 
+                end
+            elseif contains(flag,'spherical')
+                % keep it in spherical harmonics, complex basis
+                T = 1;
+            end
 
             % batch convert to wigner
             nRs = size(R,3); Wtes = zeros(2*j+1,2*j+1,nRs);
@@ -720,30 +851,30 @@ classdef am_lib
             % get proper rotation
             d = det(R); dR = R*d;
 
-            % get rotation axis and angle
+            % get rotation axis and angle (the circle shift is required to recover SO(3) rotations)
             an = R_angle_(dR); ax = circshift(R_axis_(dR),1);
 
             % define spin-vector dot products [Eq. 1.37 Blundell]
             dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
 
             if size(R,1)>9 % faster for symbolic and square matrices with dimensions > 9
-                Wsph = expm( -sqrt(-1)*dotV_(J,ax)*an ) * d^j;
+                Wsph = expm( -sqrt(-1) * dotV_(J,ax) * an) * d.^j;
                 Wtes = T' * Wsph * T;
-            else % faster for numerical square matrices with dimensions < 9
+            else           % faster for numerical square matrices with dimensions < 9
                 [V,D] = eig( -sqrt(-1) * dotV_(J,ax) * an); 
-                Wsph = V*diag(exp(diag(D)))/V * d^j;
+                Wsph = V*diag(exp(diag(D)))/V * d.^j;
                 Wtes = T' * Wsph * T ;
             end
         end
         
-        function [x,y,z] = sph2cartd_(phi,chi,r)
+        function [x,y,z]= sph2cartd_(phi,chi,r)
             z = r .* sind(chi);
             rcoselev = r .* cosd(chi);
             x = rcoselev .* cosd(phi);
             y = rcoselev .* sind(phi);
         end
         
-        function [x,y] = pol2cartd_(th,r)
+        function [x,y]  = pol2cartd_(th,r)
             x = r.*cosd(th);
             y = r.*sind(th);
         end
@@ -758,8 +889,51 @@ classdef am_lib
             chi = atan2d(z,hypotxy); phi = atan2d(y,x);
         end
         
+        function [C]    = round_(C,tol)
+            % this should be essentially the opposite of x./norm(x) for an integer array x
+            
+            import am_lib.*
+            
+            if nargin<2; tol=am_lib.tiny; end
+            
+            s = size(C);
+            
+            switch ndims_(C)
+                case 1
+                    % try to convert to all real values if any is imaginary
+                    if any(~eq_(imag(C),0)); C = C./1i; end
+
+                    % if imaginary part is small
+                    if all( eq_(imag(C),0,tol) )
+                        % convert to real
+                        C = real(C); 
+                        % round values by diving by smallest noninteger
+                        for i = 1:100
+                            if ~any(~eq_(mod_(C(:),tol),0,tol)); break; end 
+                            small=min(C(~eq_(C(:),0,tol))); C=C./small*sign(small); 
+                        end
+                        C = round(C);
+                    end
+                    
+                case 2
+                    for i = 1:s(2)
+                        X=C(:,i); C(:,i)=reshape(round_(X(:)),s(1),1);
+                    end
+                    
+                case 3
+                    for i = 1:s(3)
+                        X=C(:,:,i); C(:,:,i)=reshape(round_(X(:)),s(1),s(2));
+                    end
+            end
+        end
+        
         
         % matrix related
+        
+        function x   = ndims_(A)
+            % number of dimensions after squeezing
+            x = max(sum(size(A)~=1),1);
+        end
         
         function [A] = merge_(A)
 
@@ -1758,7 +1932,7 @@ classdef am_lib
             
             import am_lib.*
             
-            y = peval_(x(:),pfit_(x0(:),y0(:),n),n);
+            y = peval_(x(:),pfit_(x0(:),y0(:),n));
         end
 
         
@@ -1774,7 +1948,7 @@ classdef am_lib
             gr= fft(g); gr = gr(1:floor(N/2)); r = r(1:floor(N/2));
         end
         
-        function          plot_power_spectrum_(t,y)
+        function          plot_power_spectrum_(t,y,leg)
             import am_lib.*
             % count number of scans
             nys=size(y,2);
@@ -1788,7 +1962,11 @@ classdef am_lib
             a=arrayfun(@(i){1./f(:,i),abs(yf(:,i)).^2},[1:nys],'UniformOutput',false);a=[a{:}];
             axes('position',[0.1 0.1 0.85 0.35]); loglog(a{:}); axis tight;
             xlabel('1/f'); ylabel('abs( F[g(t)](f) )^2');
+            if nargin<3
             legend(arrayfun(@(i){num2str(i)},[1:nys]),'location','southeast');
+            else
+            legend(leg,'location','southeast');
+            end
         end
         
         
