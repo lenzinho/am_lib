@@ -120,13 +120,30 @@ classdef am_lib
 
             if nargin<2; tol = am_lib.eps; end
 
-            if isreal(x)            
+            if isreal(x)
+                
                 for i = 1:numel(x)
-                for j = 1:3
-                    if eq_(mod_(x.^j),0,tol)
-                        x(i) = sign(x(i)) .* round(abs(x(i).^j)).^(1/j); break;
-                    end
+                    go=true;
+                    % reduce to integer, sqrt, cube-root
+                    for j = 1:3; if go
+                        if eq_(mod_(x.^j),0,tol)
+                            x(i) = sign(x(i)) .* round(abs(x(i).^j)).^(1/j); 
+                            go=false; break;
+                        end
+                    end; end
+                    % well defined values for cosd(30) = sqrt(3)/2, cosd(60) = 1/2
+                    for wdv = [1/2,sqrt(3)/2]; if go
+                        if eq_(abs(x(i)),wdv,tol)
+                            x(i) = wdv * sign(x(i)); 
+                            go=false; break; 
+                        end
+                    end;end
                 end
+                
+                for i = 1:numel(x); 
+                    for wdv = [1/2,sqrt(3)/2]
+                    if eq_(abs(x(i)),wdv,tol); x(i) = wdv * sign(x(i)); go=false; break; end
+                    end
                 end
             else
                 x = wdv_(real(x)) + wdv_(imag(x))*1i;
@@ -617,10 +634,10 @@ classdef am_lib
             % get number of lines
             nlines = count_lines_(fname); str = cell(nlines,1);
             % reads a file rowise into a cellstr
-            fid = fopen(fname,'r'); 
-            for j = 1:nlines
-                str{j} = strtrim(fgetl(fid));
-            end
+            fid = fopen(fname,'r'); if fid==-1; error('Failed to open %s. Check that file exists.\n',fname); end
+                for j = 1:nlines
+                    str{j} = strtrim(fgetl(fid));
+                end
             fclose(fid);
         end
         
@@ -699,7 +716,7 @@ classdef am_lib
             
             if nRs == 1
                 % convert (im)proper rotation to proper rotation
-                R = R*det(R);
+                R = R*sign(det(R));
 
                 % define basic parameters and functions
                 tol = 1E-8; normalize_ = @(v) v/norm(v); 
@@ -797,8 +814,6 @@ classdef am_lib
         
         function [Wtes] = get_wigner(j,R,flag)
 
-            import am_lib.get_wigner_engine
-            
             % defaults
             if nargin < 3
                 if mod(j*2,1)==1 
@@ -840,30 +855,30 @@ classdef am_lib
             % batch convert to wigner
             nRs = size(R,3); Wtes = zeros(2*j+1,2*j+1,nRs);
             for i = [1:nRs]; Wtes(:,:,i) = get_wigner_engine(J,T,j,R(:,:,i)); end
-        end
-        
-        function [Wtes] = get_wigner_engine(J,T,j,R)
-            % define wigner function for spherical (complex) and tesseral (real) harmonics
-            % Note: for l = 1, Wtes_(R) = R
+            
+            
+            % engine
+            function [Wtes] = get_wigner_engine(J,T,j,R)
+                % define wigner function for spherical (complex) and tesseral (real) harmonics
+                % Note: for l = 1, Wtes_(R) = R
 
-            import am_lib.*
+                % get proper rotation
+                d = sign(det(R)); dR = R*d;
 
-            % get proper rotation
-            d = det(R); dR = R*d;
+                % get rotation axis and angle (the circle shift is required to recover SO(3) rotations)
+                an = am_lib.R_angle_(dR); ax = circshift(am_lib.R_axis_(dR),1);
 
-            % get rotation axis and angle (the circle shift is required to recover SO(3) rotations)
-            an = R_angle_(dR); ax = circshift(R_axis_(dR),1);
+                % define spin-vector dot products [Eq. 1.37 Blundell]
+                dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
 
-            % define spin-vector dot products [Eq. 1.37 Blundell]
-            dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
-
-            if size(R,1)>9 % faster for symbolic and square matrices with dimensions > 9
-                Wsph = expm( -sqrt(-1) * dotV_(J,ax) * an) * d.^j;
-                Wtes = T' * Wsph * T;
-            else           % faster for numerical square matrices with dimensions < 9
-                [V,D] = eig( -sqrt(-1) * dotV_(J,ax) * an); 
-                Wsph = V*diag(exp(diag(D)))/V * d.^j;
-                Wtes = T' * Wsph * T ;
+                if size(R,1)>9 % faster for symbolic and square matrices with dimensions > 9
+                    Wsph = expm( -sqrt(-1) * dotV_(J,ax) * an) * d.^j;
+                    Wtes = T' * Wsph * T;
+                else           % faster for numerical square matrices with dimensions < 9
+                    [V,D] = eig( -sqrt(-1) * dotV_(J,ax) * an); 
+                    Wsph = V*diag(exp(diag(D)))/V * d.^j;
+                    Wtes = T' * Wsph * T ;
+                end
             end
         end
         
