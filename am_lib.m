@@ -813,15 +813,18 @@ classdef am_lib
         end
         
         function [Wtes] = get_wigner(j,R,flag)
-
+            import am_lib.*
             % defaults
             if nargin < 3
-                if mod(j*2,1)==1 
+                % this will probably cause problems later... if within one hamiltnoian, both
+                % tesseral and spherical are used. should stick to spherical some how. but
+                % presently, complex values do not work for getting tight binding matrix elements.
+                if eq_(mod(j*2,2),1)
                     % j = half-integer
-                    flag='tesseral';
+                    flag='spherical';
                 else
                     % j = integer
-                    flag='spherical';
+                    flag='tesseral';
                 end
             end
 
