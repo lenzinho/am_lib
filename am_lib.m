@@ -584,7 +584,7 @@ classdef am_lib
             end
         end
 
-        function [C,i2p,p2i] = get_connectivity(PM)
+        function [A,i2p,p2i] = get_connectivity(PM)
 
             import am_lib.*
 
@@ -592,20 +592,49 @@ classdef am_lib
             PM=PM(~all(PM==0,2),:);
             
             % build connectivity matrix
-            for i = 1:size(PM,1)
-                X=unique(PM(i,:)); 
-                for j = 1:numel(X)
-                    C(X(j),X) = 1; 
+            for i1 = 1:size(PM,1)
+                X=unique(PM(i1,:)); 
+                for i2 = 1:numel(X)
+                    A(X(i2),X) = 1; 
                 end
             end
             
-            % merge and reduce binary rep
-            C = merge_(C); C(abs(C)<am_dft.tiny)=0; C(abs(C)>am_dft.tiny)=1; C=full(C(any(C~=0,2),:));
+            % merge overlapping rows
+            A = merge_(A);
 
-            % convert to logical
-            C = logical(C);
+            i2p = round(findrow_(A)).'; p2i = round(([1:size(A,1)]*A));
             
-            i2p = round(findrow_(C)).'; p2i = round(([1:size(C,1)]*C));
+            function [A] = merge_(A)
+                % convert to logical
+                A = ~am_lib.eq_(A,0);
+                
+                % loop until number of rows in A stop changing
+                m=1;m_last=0;
+                while m == m_last
+                    m_last = m; [m,n] = size(A); i = 1; j = 1; 
+                    while (i <= m) && (j <= n)
+                        % Find value and index of largest element in the remainder of column j.
+                        [p,k] = max(abs(A(i:m,j))); k = k+i-1;
+                        if (p == 0)
+                           j = j + 1;
+                        else
+                            % Swap i-th and k-th rows.
+                            A([i k],j:n) = A([k i],j:n);
+                            % see which rows overlap with the i-th row
+                            ex_ = any(and(A(i,j:n), A(:,j:n)),2);
+                            % merge overlaps 
+                            A(i,j:n) = any(A(ex_,j:n),1);
+                            % zero all other rows
+                            ex_(i)=false; A(ex_,j:n)=false;
+                            i = i + 1;
+                            j = j + 1;
+                        end
+                    end
+                    
+                    % exclude rows with all zeros
+                    A=A(any(A,2),:);
+                end
+            end 
         end
         
         % file parsing
@@ -947,40 +976,6 @@ classdef am_lib
         function x   = ndims_(A)
             % number of dimensions after squeezing
             x = max(sum(size(A)~=1),1);
-        end
-        
-        function [A] = merge_(A)
-
-            [m,n] = size(A); tol=max(m,n)*eps(class(A))*norm(A,'inf');
-
-            i = 1; j = 1; go=true;
-            while go
-                go = false;
-                while (i <= m) && (j <= n)
-                    % Find value and index of largest element in the remainder of column j.
-                    [p,k] = max(abs(A(i:m,j))); k = k+i-1;
-                    if (p <= tol)
-                       % The column is negligible, zero it out.
-                       A(i:m,j) = 0; %(faster for sparse) %zeros(m-i+1,1);
-                       j = j + 1;
-                    else
-                        % Swap i-th and k-th rows.
-                        A([i k],j:n) = A([k i],j:n);
-                        % see which rows overlap with the i-th row
-                        ex_ = (A(i,:)*A~=0);
-                        % merge overlaps and zero all other rows
-                        A(ex_,:)=0; A(i,ex_)=1;
-                        i = i + 1;
-                        j = j + 1;
-                    end
-                end
-                % is one loop enough?! added go loop here to try and help.
-                % maybe this is not right.
-                AA = A*A';
-                if any(any( diag(diag(AA))-AA >tol ,2),1)
-                    go = true;
-                end
-            end
         end
         
         function [A] = frref_(A)
