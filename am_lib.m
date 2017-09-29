@@ -583,35 +583,31 @@ classdef am_lib
                 X(strncmpi(A,B{k},numel(B{k}))) = k;
             end
         end
-        
-        function [C] = get_connectivity(PM)
+
+        function [C,i2p,p2i] = get_connectivity(PM)
 
             import am_lib.*
 
-            % binary
-            [natoms,nRs] = size(PM);
-
-            % exclude all rows containing all zeros
-            PM = PM(~all(PM==0,2),:);
-
-            % construct sparse vectors
-            m = size(PM,1); t = zeros(1,m); for i = [1:m]; t(i) = PM(i,find(PM(i,:),1)); end
-            v = [ repmat(t(:),nRs,1), PM(:) ];
-
-            % exlcude zeros, make symmetric, ensure diagonals, and remove repeat
-            v = v(~any(v==0,2),:); v=[v;[v(:,2),v(:,1)]]; v=[v;[v(:,1),v(:,1)]]; v = unique(v,'rows');
-
-            % construct a sparse binary representation
-            C = sparse(v(:,1),v(:,2),ones(size(v,1),1),natoms,natoms); % A = double((A'*A)~=0);
-
+            % exclude rows with all zeros
+            PM=PM(~all(PM==0,2),:);
+            
+            % build connectivity matrix
+            for i = 1:size(PM,1)
+                X=unique(PM(i,:)); 
+                for j = 1:numel(X)
+                    C(X(j),X) = 1; 
+                end
+            end
+            
             % merge and reduce binary rep
             C = merge_(C); C(abs(C)<am_dft.tiny)=0; C(abs(C)>am_dft.tiny)=1; C=full(C(any(C~=0,2),:));
 
             % convert to logical
             C = logical(C);
+            
+            i2p = round(findrow_(C)).'; p2i = round(([1:size(C,1)]*C));
         end
         
-
         % file parsing
         
         function t   = extract_token_(str,token,numeric)
