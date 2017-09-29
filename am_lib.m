@@ -609,8 +609,8 @@ classdef am_lib
                 A = ~am_lib.eq_(A,0);
                 
                 % loop until number of rows in A stop changing
-                m=1;m_last=0;
-                while m == m_last
+                m=1; m_last=0;
+                while m ~= m_last
                     m_last = m; [m,n] = size(A); i = 1; j = 1; 
                     while (i <= m) && (j <= n)
                         % Find value and index of largest element in the remainder of column j.
