@@ -126,7 +126,7 @@ classdef am_lib
                     go=true;
                     % reduce to integer, sqrt, cube-root
                     for j = 1:3; if go
-                        if eq_(mod_(x.^j),0,tol)
+                        if eq_(mod_(x(i).^j),0,tol)
                             x(i) = sign(x(i)) .* round(abs(x(i).^j)).^(1/j); 
                             go=false; break;
                         end
@@ -140,7 +140,7 @@ classdef am_lib
                     end;end
                 end
                 
-                for i = 1:numel(x); 
+                for i = 1:numel(x)
                     for wdv = [1/2,sqrt(3)/2]
                     if eq_(abs(x(i)),wdv,tol); x(i) = wdv * sign(x(i)); go=false; break; end
                     end
@@ -844,12 +844,12 @@ classdef am_lib
                 % this will probably cause problems later... if within one hamiltnoian, both
                 % tesseral and spherical are used. should stick to spherical some how. but
                 % presently, complex values do not work for getting tight binding matrix elements.
-                if eq_(mod(j*2,2),1)
-                    % j = half-integer
-                    flag='spherical';
-                else
+                if eq_(mod_(j),0)
                     % j = integer
                     flag='tesseral';
+                else
+                    % j = half-integer
+                    flag='spherical';
                 end
             end
 
@@ -858,11 +858,10 @@ classdef am_lib
             
             % matrix indices
             [m,mp]=meshgrid([j:-1:-j]);
-
+            
             % define angular momentum operators (Jp raising, Jm lowering, ...)
             Jm = d_(m,mp+1).*sqrt((j+m).*(j-m+1)); Jp = d_(m,mp-1).*sqrt((j-m).*(j+m+1));
             Jx = (Jp+Jm)/2; Jy = (Jp-Jm)/2i; Jz = d_(m,mp).*m; J = cat(3,Jx,Jy,Jz);
-            % Jx = (Jp+Jm)/2; Jy = (Jp-Jm)/2i; Jz = d_(m,mp).*m; J = cat(3,Jz,Jx,Jy);
 
             if     contains(flag,'tesseral')
                 % define basis change: spherical (complex) to tesseral harmonics (real basis)
