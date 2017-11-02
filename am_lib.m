@@ -149,8 +149,8 @@ classdef am_lib
                 x = wdv_(real(x)) + wdv_(imag(x))*1i;
             end
         end
-        
 
+        
         % vectorization
         
         function [A] = aug_(A,n)
@@ -164,6 +164,22 @@ classdef am_lib
             % remove positions n of vector A
             ex_ = any(1:numel(A)==n(:),1);
             A = A(~ex_);
+        end
+        
+        function [L] = all_(x)
+            L = all(x(:));
+        end
+        
+        function [L] = any_(x)
+            L = any(x(:));
+        end
+
+        function [d] = det_(A)
+            n = size(A,3); 
+            d = zeros(1,n);
+            for i = 1:n
+                d(i) = det(A(:,:,i));
+            end
         end
         
         function [C] = matmul_(A,B,applysqueeze)
@@ -584,6 +600,41 @@ classdef am_lib
             end
         end
 
+        function [A] = merge_(A)
+            
+            import am_lib.*
+            
+            % convert to logical
+            A = ~eq_(A,0);
+
+            % loop until number of rows in A stop changing
+            m=1; m_last=0;
+            while m ~= m_last
+                m_last = m; [m,n] = size(A); i = 1; j = 1; 
+                while (i <= m) && (j <= n)
+                    % Find value and index of largest element in the remainder of column j.
+                    [p,k] = max(abs(A(i:m,j))); k = k+i-1;
+                    if (p == 0)
+                       j = j + 1;
+                    else
+                        % Swap i-th and k-th rows.
+                        A([i k],j:n) = A([k i],j:n);
+                        % see which rows overlap with the i-th row
+                        ex_ = any(and(A(i,j:n), A(:,j:n)),2);
+                        % merge overlaps 
+                        A(i,j:n) = any(A(ex_,j:n),1);
+                        % zero all other rows
+                        ex_(i)=false; A(ex_,j:n)=false;
+                        i = i + 1;
+                        j = j + 1;
+                    end
+                end
+
+                % exclude rows with all zeros
+                A=A(any(A,2),:);
+            end
+        end
+        
         function [A,i2p,p2i] = get_connectivity(PM)
 
             import am_lib.*
@@ -603,38 +654,6 @@ classdef am_lib
             A = merge_(A);
 
             i2p = round(findrow_(A)).'; p2i = round(([1:size(A,1)]*A));
-            
-            function [A] = merge_(A)
-                % convert to logical
-                A = ~am_lib.eq_(A,0);
-                
-                % loop until number of rows in A stop changing
-                m=1; m_last=0;
-                while m ~= m_last
-                    m_last = m; [m,n] = size(A); i = 1; j = 1; 
-                    while (i <= m) && (j <= n)
-                        % Find value and index of largest element in the remainder of column j.
-                        [p,k] = max(abs(A(i:m,j))); k = k+i-1;
-                        if (p == 0)
-                           j = j + 1;
-                        else
-                            % Swap i-th and k-th rows.
-                            A([i k],j:n) = A([k i],j:n);
-                            % see which rows overlap with the i-th row
-                            ex_ = any(and(A(i,j:n), A(:,j:n)),2);
-                            % merge overlaps 
-                            A(i,j:n) = any(A(ex_,j:n),1);
-                            % zero all other rows
-                            ex_(i)=false; A(ex_,j:n)=false;
-                            i = i + 1;
-                            j = j + 1;
-                        end
-                    end
-                    
-                    % exclude rows with all zeros
-                    A=A(any(A,2),:);
-                end
-            end 
         end
         
         % file parsing
@@ -777,7 +796,7 @@ classdef am_lib
             A = acos((trace(R)-1)/2); 
         end
         
-        function R      = rot_align_(A,B)
+        function R      = R_align_(A,B)
             %
             % Rotation matrix R which aligns unit vector A to unit vector B: B = rotmat(A,B) * A
             %
@@ -806,7 +825,7 @@ classdef am_lib
             %
         end
 
-        function v_rot  = rot_vec_(v,k,theta)
+        function v_rot  = R_vec_(v,k,theta)
             [m,n] = size(v);theta=theta/180*pi;
             if (m ~= 3 && n ~= 3)
                 error('input vector is/are not three dimensional'), end
@@ -837,24 +856,9 @@ classdef am_lib
             end
         end
         
-        function [Wtes] = get_wigner(j,R,flag)
-            import am_lib.*
-            % defaults
-            if nargin < 3
-                % this will probably cause problems later... if within one hamiltnoian, both
-                % tesseral and spherical are used. should stick to spherical some how. but
-                % presently, complex values do not work for getting tight binding matrix elements.
-                if eq_(mod_(j),0)
-                    % j = integer
-                    flag='tesseral';
-                else
-                    % j = half-integer
-                    flag='spherical';
-                end
-            end
-
-            % define tiny, kronecker delta, and heavside
-            d_ = @(x,y) logical(x==y); t_ = @(x,y) logical(x>y);
+        function J      = J_(j)
+            % define kronecker delta
+            d_ = @(x,y) logical(x==y); 
             
             % matrix indices
             [m,mp]=meshgrid([j:-1:-j]);
@@ -862,34 +866,66 @@ classdef am_lib
             % define angular momentum operators (Jp raising, Jm lowering, ...)
             Jm = d_(m,mp+1).*sqrt((j+m).*(j-m+1)); Jp = d_(m,mp-1).*sqrt((j-m).*(j+m+1));
             Jx = (Jp+Jm)/2; Jy = (Jp-Jm)/2i; Jz = d_(m,mp).*m; J = cat(3,Jx,Jy,Jz);
+        end
+        
+        function [W]    = get_wigner(j,R,flag)
+            % The group SO(3) is the set of all three dimensional, real orthogonal matrices with unit
+            % determinant. [Requiring that the determinant equal 1 and not ?1, excludes inversions.]
+            %
+            % The group SO(3) represents the set of all possible rotations of a three dimensional real
+            % vector; it is essentially the collection of all proper rotations. The orthogonal group O(3) 
+            % includes improper rotations and it is given by the direct product of SO(3) and the inversion
+            % group i.
+            %
+            %   - R. M. Martin, Electronic Structure: Basic Theory and Practical Methods, 1 edition
+            %        (Cambridge University Press, Cambridge, UK?; New York, 2008), p 573.
+            %   - Romero Nichols "Density Functional Study of Fullerene-Based Solids: Crystal Structure,
+            %        Doping, and Electron- Phonon Interaction", Ph.D. Thesis UIUC, p 96.
+            %   - C. Cohen-Tannoudji, B. Diu, and F. Laloe, Quantum Mechanics, 1 edition (Wiley-VCH, New
+            %        York; Paris, 1992), p 666.
+            %   - J. J. Sakurai, Modern Quantum Mechanics, Revised edition (Addison Wesley, Reading, Mass,
+            %        1993). p 207
+            %
 
-            if     contains(flag,'tesseral')
+            import am_lib.*
+
+            % get angular momentum operators [Jx,Jy,Jz]
+            J = J_(j);
+
+            % batch convert all rotation matrices to wigner functions
+            nRs = size(R,3); W = zeros(2*j+1,2*j+1,nRs);
+            for i = [1:nRs]; W(:,:,i) = get_wigner_engine(J,j,R(:,:,i)); end
+            
+            % convert to real harmonics
+            if     contains(flag,'tesseral') || contains(flag,'real')
+                
                 % define basis change: spherical (complex) to tesseral harmonics (real basis)
                 % C. Görller-Walrand and K. Binnemans, in (Elsevier, 1996), pp. 145, eqs. 14-16.
+                [m,mp]=meshgrid([j:-1:-j]); d_ = @(x,y) logical(x==y); t_ = @(x,y) logical(x>y);
                 T = d_(0,m) .* d_(mp,m) + ...
-                    t_(m,0) .* sqrt(-1/2) .* ( d_(m,-mp) - (-1).^m.*d_(m, mp) ) + ... % sine   terms
-                    t_(0,m) .* sqrt( 1/2) .* ( d_(m, mp) + (-1).^m.*d_(m,-mp) );      % cosine terms
-
-                % if j is a half-integer, tesseral harmonics make no sense, force spherical
-                if mod(j*2,1)==1
-                    T=1; warning('Tesseral harmonics only make sense for j = integer. Switching to spherical harmonics.'); 
+                    t_(m,0) .* sqrt(-1/2) .* ( d_(m,-mp) - (-1).^m .* d_(m, mp) ) + ... % sine   terms
+                    t_(0,m) .* sqrt( 1/2) .* ( d_(m, mp) + (-1).^m .* d_(m,-mp) );      % cosine terms                
+                
+                % do the actual conversion 
+                W = matmul_(matmul_(T',W),T);
+                
+                % make sure the teseral harmonics are real
+                if any_(~eq_(imag(W),0))
+                    if ~eq_(mod_(j),0)
+                        error('Real harmonics only make sense for j = integer.'); 
+                    else
+                        error('Real harmonics have non-negligible imaginary components. Something is wrong');
+                    end
                 end
-            elseif contains(flag,'spherical')
-                % keep it in spherical harmonics, complex basis
-                T = 1;
+                
+                W = real(W);
             end
-
-            % batch convert to wigner
-            nRs = size(R,3); Wtes = zeros(2*j+1,2*j+1,nRs);
-            for i = [1:nRs]; Wtes(:,:,i) = get_wigner_engine(J,T,j,R(:,:,i)); end
-            
             
             % engine
-            function [Wtes] = get_wigner_engine(J,T,j,R)
-                % define wigner function for spherical (complex) and tesseral (real) harmonics
+            function [W_sph] = get_wigner_engine(J,j,R)
                 % Note: for l = 1, Wtes_(R) = R
 
-                % get proper rotation
+                % remove inversion compontent to get pure rotation
                 d = sign(det(R)); dR = R*d;
 
                 % get rotation axis and angle (the circle shift is required to recover SO(3) rotations)
@@ -898,14 +934,33 @@ classdef am_lib
                 % define spin-vector dot products [Eq. 1.37 Blundell]
                 dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
 
-                if size(R,1)>9 % faster for symbolic and square matrices with dimensions > 9
-                    Wsph = expm( -sqrt(-1) * dotV_(J,ax) * an) * d.^j;
-                    Wtes = T' * Wsph * T;
-                else           % faster for numerical square matrices with dimensions < 9
-                    [V,D] = eig( -sqrt(-1) * dotV_(J,ax) * an); 
-                    Wsph = V*diag(exp(diag(D)))/V * d.^j;
-                    Wtes = T' * Wsph * T ;
+                % select an algorithm
+                switch 1
+                    case 1
+                        % faster for symbolic and square matrices with dimensions > 9
+                        W_sph = expm( -1i * dotV_(J,ax) * an);
+                    case 2
+                        % faster for numerical square matrices with dimensions < 9
+                        [V,D] = eig( -1i * dotV_(J,ax) * an); 
+                        W_sph = V*diag(exp(diag(D)))/V;
+                    case 3
+                        % just another way of doing things [ x->y , y->z , z->x ]
+                        euler = rotm2eul(R,'XYZ');
+                        [V,D]=eig(J(:,:,2));    A = diag(exp(-1i*euler(1)*diag(D)));   X = V*A*V';
+                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*euler(2)*diag(D)));   Y = V*A*V';
+                        [V,D]=eig(J(:,:,1));    A = diag(exp(-1i*euler(3)*diag(D)));   Z = V*A*V';
+                        W_sph = X*Y*Z * d.^j;
+                    case 4
+                        % yet another way ... 
+                        euler = rotm2eul(R,'ZYZ');
+                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*euler(1)*diag(D)));   X = V*A*V';
+                        [V,D]=eig(J(:,:,2));    A = diag(exp(-1i*euler(2)*diag(D)));   Y = V*A*V';
+                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*euler(3)*diag(D)));   Z = V*A*V';
+                        W_sph = X*Y*Z;
                 end
+                
+                % reinstate inversion to recover improper rotation if required
+                W_sph = (d).^(j) * W_sph;
             end
         end
         
