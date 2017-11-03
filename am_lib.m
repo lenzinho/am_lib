@@ -512,7 +512,9 @@ classdef am_lib
             % set default numerical tolernece
             if nargin<2 || isempty(tol); tol = am_lib.tiny; end
             
-            C = sortrowsc(rnd_(A,tol).',[1:size(A,1)]).'; 
+            % deals with real first and then imaginary
+            C =    sortrowsc(rnd_(real(A     ),tol).',[1:size(A,1)]).'; 
+            C = C( sortrowsc(rnd_(imag(A(:,C)),tol).',[1:size(A,1)]) ); 
         end                 
 
         function [I] = match_(A,B)
@@ -865,7 +867,7 @@ classdef am_lib
             
             % define angular momentum operators (Jp raising, Jm lowering, ...)
             Jm = d_(m,mp+1).*sqrt((j+m).*(j-m+1)); Jp = d_(m,mp-1).*sqrt((j-m).*(j+m+1));
-            Jx = (Jp+Jm)/2; Jy = (Jp-Jm)/2i; Jz = d_(m,mp).*m; J = cat(3,Jx,Jy,Jz);
+            Jx = (Jp+Jm)/2; Jy = (Jp-Jm)/2i; Jz = d_(m,mp).*m; J = cat(3,Jx,Jy,Jz); % diagonal in Jz basis
         end
         
         function [W]    = get_wigner(j,R,flag)
@@ -904,9 +906,12 @@ classdef am_lib
                 [m,mp]=meshgrid([j:-1:-j]); d_ = @(x,y) logical(x==y); t_ = @(x,y) logical(x>y);
                 T = d_(0,m) .* d_(mp,m) + ...
                     t_(m,0) .* sqrt(-1/2) .* ( d_(m,-mp) - (-1).^m .* d_(m, mp) ) + ... % sine   terms
-                    t_(0,m) .* sqrt( 1/2) .* ( d_(m, mp) + (-1).^m .* d_(m,-mp) );      % cosine terms                
+                    t_(0,m) .* sqrt( 1/2) .* ( d_(m, mp) + (-1).^m .* d_(m,-mp) );      % cosine terms
                 
-                % do the actual conversion 
+                % reorder to recover SO(3) rotations
+                O = circshift([1:(2*j+1)],floor((2*j+1)/2)); T = T(:,O);
+                
+                % do the actual conversion
                 W = matmul_(matmul_(T',W),T);
                 
                 % make sure the teseral harmonics are real
@@ -928,35 +933,62 @@ classdef am_lib
                 % remove inversion compontent to get pure rotation
                 d = sign(det(R)); dR = R*d;
 
-                % get rotation axis and angle (the circle shift is required to recover SO(3) rotations)
-                an = am_lib.R_angle_(dR); ax = circshift(am_lib.R_axis_(dR),1);
+                % get rotation axis and angle
+                an = am_lib.R_angle_(dR); ax = am_lib.R_axis_(dR);
 
                 % define spin-vector dot products [Eq. 1.37 Blundell]
                 dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
 
                 % select an algorithm
-                switch 1
+                switch 3
                     case 1
                         % faster for symbolic and square matrices with dimensions > 9
-                        W_sph = expm( -1i * dotV_(J,ax) * an);
+                        W_sph = expm(-1i * dotV_(J,ax) * an);
                     case 2
                         % faster for numerical square matrices with dimensions < 9
                         [V,D] = eig( -1i * dotV_(J,ax) * an); 
                         W_sph = V*diag(exp(diag(D)))/V;
                     case 3
-                        % just another way of doing things [ x->y , y->z , z->x ]
-                        euler = rotm2eul(R,'XYZ');
-                        [V,D]=eig(J(:,:,2));    A = diag(exp(-1i*euler(1)*diag(D)));   X = V*A*V';
-                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*euler(2)*diag(D)));   Y = V*A*V';
-                        [V,D]=eig(J(:,:,1));    A = diag(exp(-1i*euler(3)*diag(D)));   Z = V*A*V';
-                        W_sph = X*Y*Z * d.^j;
+                        % just another way of doing things
+                        eu = rotm2eul(dR,'XYZ');
+                        [V,D]=eig(J(:,:,1));    A = diag(exp(-1i*eu(1)*diag(D)));   X = V*A*V';
+                        [V,D]=eig(J(:,:,2));    A = diag(exp(-1i*eu(2)*diag(D)));   Y = V*A*V';
+                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*eu(3)*diag(D)));   Z = V*A*V';
+                        W_sph = X*Y*Z;
                     case 4
                         % yet another way ... 
-                        euler = rotm2eul(R,'ZYZ');
-                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*euler(1)*diag(D)));   X = V*A*V';
-                        [V,D]=eig(J(:,:,2));    A = diag(exp(-1i*euler(2)*diag(D)));   Y = V*A*V';
-                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*euler(3)*diag(D)));   Z = V*A*V';
+                        eu = rotm2eul(dR,'ZYZ');
+                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*eu(1)*diag(D)));   X = V*A*V';
+                        [V,D]=eig(J(:,:,2));    A = diag(exp(-1i*eu(2)*diag(D)));   Y = V*A*V';
+                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*eu(3)*diag(D)));   Z = V*A*V';
                         W_sph = X*Y*Z;
+                    case 5
+                        % yet another way ... 
+                        eu = rotm2eul(dR,'ZYZ');
+                        % precompute factorials
+                        fctrl = factorial(0:2*j).';
+                        % allocate
+                        W_sph = zeros(2*j+1);
+                        % if beta is close to zero force small d to identity matrix
+                        if abs(eu(2)) <= eps
+                            W_sph = diag(exp(-1i*(eu(1)+eu(3))*(j:-1:-j)));
+                        else
+                            for m_ = -j:j
+                            for n_ = -j:j
+                                % Varshalovich, Eq.4.3.1(5)
+                                k = (max(0,n_-m_):min(j+n_,j-m_)).';
+                                m1_t = (-1).^k;
+                                fact_t = sqrt(fctrl(j+n_+1)*fctrl(j-n_+1)*fctrl(j+m_+1)*fctrl(j-m_+1)) ...
+                                      ./ (fctrl(j+n_-k+1).*fctrl(j-m_-k+1).*fctrl(k+m_-n_+1).*fctrl(k+1));
+                                cos_beta = cos(eu(2)/2).^(2*j+n_-m_-2*k);
+                                sin_beta = sin(eu(2)/2).^(2*k+m_-n_);
+                                d_l_mn = (-1)^(m_-n_) * sum(m1_t.*fact_t.*cos_beta.*sin_beta);
+                                W_sph(-m_+j+1,-n_+j+1) = exp(-1i*eu(1)*m_)*d_l_mn*exp(-1i*eu(3)*n_);
+                            end
+                            end
+                        end
+
+
                 end
                 
                 % reinstate inversion to recover improper rotation if required
