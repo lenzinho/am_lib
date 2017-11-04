@@ -658,6 +658,7 @@ classdef am_lib
             i2p = round(findrow_(A)).'; p2i = round(([1:size(A,1)]*A));
         end
         
+        
         % file parsing
         
         function t   = extract_token_(str,token,numeric)
@@ -900,7 +901,6 @@ classdef am_lib
             
             % convert to real harmonics
             if     contains(flag,'tesseral') || contains(flag,'real')
-                
                 % define basis change: spherical (complex) to tesseral harmonics (real basis)
                 % C. Görller-Walrand and K. Binnemans, in (Elsevier, 1996), pp. 145, eqs. 14-16.
                 [m,mp]=meshgrid([j:-1:-j]); d_ = @(x,y) logical(x==y); t_ = @(x,y) logical(x>y);
@@ -939,61 +939,32 @@ classdef am_lib
                 % define spin-vector dot products [Eq. 1.37 Blundell]
                 dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
 
-                % select an algorithm
-                switch 3
-                    case 1
-                        % faster for symbolic and square matrices with dimensions > 9
-                        W_sph = expm(-1i * dotV_(J,ax) * an);
-                    case 2
-                        % faster for numerical square matrices with dimensions < 9
-                        [V,D] = eig( -1i * dotV_(J,ax) * an); 
-                        W_sph = V*diag(exp(diag(D)))/V;
-                    case 3
-                        % just another way of doing things
-                        eu = rotm2eul(dR,'XYZ');
-                        [V,D]=eig(J(:,:,1));    A = diag(exp(-1i*eu(1)*diag(D)));   X = V*A*V';
-                        [V,D]=eig(J(:,:,2));    A = diag(exp(-1i*eu(2)*diag(D)));   Y = V*A*V';
-                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*eu(3)*diag(D)));   Z = V*A*V';
-                        W_sph = X*Y*Z;
-                    case 4
-                        % yet another way ... 
-                        eu = rotm2eul(dR,'ZYZ');
-                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*eu(1)*diag(D)));   X = V*A*V';
-                        [V,D]=eig(J(:,:,2));    A = diag(exp(-1i*eu(2)*diag(D)));   Y = V*A*V';
-                        [V,D]=eig(J(:,:,3));    A = diag(exp(-1i*eu(3)*diag(D)));   Z = V*A*V';
-                        W_sph = X*Y*Z;
-                    case 5
-                        % yet another way ... 
-                        eu = rotm2eul(dR,'ZYZ');
-                        % precompute factorials
-                        fctrl = factorial(0:2*j).';
-                        % allocate
-                        W_sph = zeros(2*j+1);
-                        % if beta is close to zero force small d to identity matrix
-                        if abs(eu(2)) <= eps
-                            W_sph = diag(exp(-1i*(eu(1)+eu(3))*(j:-1:-j)));
-                        else
-                            for m_ = -j:j
-                            for n_ = -j:j
-                                % Varshalovich, Eq.4.3.1(5)
-                                k = (max(0,n_-m_):min(j+n_,j-m_)).';
-                                m1_t = (-1).^k;
-                                fact_t = sqrt(fctrl(j+n_+1)*fctrl(j-n_+1)*fctrl(j+m_+1)*fctrl(j-m_+1)) ...
-                                      ./ (fctrl(j+n_-k+1).*fctrl(j-m_-k+1).*fctrl(k+m_-n_+1).*fctrl(k+1));
-                                cos_beta = cos(eu(2)/2).^(2*j+n_-m_-2*k);
-                                sin_beta = sin(eu(2)/2).^(2*k+m_-n_);
-                                d_l_mn = (-1)^(m_-n_) * sum(m1_t.*fact_t.*cos_beta.*sin_beta);
-                                W_sph(-m_+j+1,-n_+j+1) = exp(-1i*eu(1)*m_)*d_l_mn*exp(-1i*eu(3)*n_);
-                            end
-                            end
-                        end
-
-
-                end
+                % compute spherical harmonics
+                %   explicit matrix exponent version:
+                %     [V,D] = eig( -1i * dotV_(J,ax) * an); 
+                %     W_sph = V*diag(exp(diag(D)))/V;
+                W_sph = expm(-1i * dotV_(J,ax) * an);
                 
                 % reinstate inversion to recover improper rotation if required
                 W_sph = (d).^(j) * W_sph;
             end
+        end
+        
+        function [R]    = SU2_to_SO3(W)
+            
+            import am_lib.det_
+            
+            R_ = @(x,y) [ ...
+                 real(x^2-y^2),     imag(x^2+y^2),      -2*real(x*y);
+                -imag(x^2-y^2),     real(x^2+y^2),       2*imag(x*y);
+             2*real(x*conj(y)), 2*imag(x*conj(y)), abs(x)^2-abs(y)^2];
+             n = size(W,3); R = zeros(3,3,n); 
+             % convert to proper rotation
+             d = permute(det_(W),[1,3,2]); W = d.^(1/2) .* W;
+             % convert to SO(3)
+             for i = 1:n; R(:,:,i) = R_(W(1,1,i),W(1,2,i)); end    
+             % restore inversion
+             R = d.^(1) .* R;
         end
         
         function [x,y,z]= sph2cartd_(phi,chi,r)
@@ -1151,7 +1122,6 @@ classdef am_lib
             for i = 1:m; for j = 1:n
                 a(i,j) = trace(A(:,:,i,j));
             end; end
-               
         end
         
         function [U] = orth_(U,E)
