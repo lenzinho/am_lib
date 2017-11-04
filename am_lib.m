@@ -150,8 +150,30 @@ classdef am_lib
             end
         end
 
+        function [L] = isdiag_(A)
+            import am_lib.*
+            L = all_(eq_(diag(diag(A)),A));
+        end
+        
+        function [N] = null_(A,tol)
+            % [N] = null_(A,tol)
+            % get null space 
+            import am_lib.*
+            
+            if nargin < 2; tol = am_lib.eps; end
+            
+            [V,D]=eig(A,'vector'); N = V(:,eq_(D,0,tol));
+        end
         
         % vectorization
+        
+        function [c] = if_(L,a,b)
+            if L
+                c = a;
+            else
+                c = b;
+            end
+        end
         
         function [A] = aug_(A,n)
             % squeeze in 1's in vector A at positions n
@@ -761,6 +783,12 @@ classdef am_lib
             
             nRs = size(R,3);
             
+            % convert U(2) double group to O(3) representation
+            if size(R,1)==2
+                R = SU2_to_SO3(R); R = wdv_(R);
+            end
+            
+            % get rotation axis
             if nRs == 1
                 % convert (im)proper rotation to proper rotation
                 R = R*sign(det(R));
@@ -772,7 +800,7 @@ classdef am_lib
                 if abs(trace(R)-3)< tol; A=[0;0;1]; return; end
 
                 % get rotation axis
-                A = null(R-eye(3));
+                A = null_(R-eye(3));
 
                 % get random point on plane perpendicular to the rotation axis
                 v1 = rand(3,1); v1 = normalize_(v1 - dot(v1,A)*A);
@@ -935,7 +963,7 @@ classdef am_lib
 
                 % get rotation axis and angle
                 an = am_lib.R_angle_(dR); ax = am_lib.R_axis_(dR);
-
+                
                 % define spin-vector dot products [Eq. 1.37 Blundell]
                 dotV_ = @(S,V) S(:,:,1)*V(1) + S(:,:,2)*V(2) + S(:,:,3)*V(3);
 
