@@ -32,6 +32,10 @@ classdef am_lib
         units_THz = 98.22906;   % sqrt( [eV/Ang^2] * [1/amu] ) --> 98.22906 [THz=1/ps]
         units_GHz = 98229.06;   % sqrt( [eV/Ang^2] * [1/amu] ) --> 98229.06 [GHz=1/fs]
         
+        % constants
+        r_0       = 2.81794032E-6; % [nm]       classical electron radius
+        N_A       = 6.022141E23;   % [mol]      Avogadro's number
+        
         % mex compiler parameters
         usemex    = false;
         FC        = 'ifort'; 
@@ -42,7 +46,112 @@ classdef am_lib
         DEBUG     = '-debug'
     end
     
+    % unit conversion
+    
+    methods (Static)
+        
+        function [varargout] = kxkz2angle(kx,kz,hv,flag)
+            % [alpha_i,alpha_f] = kxkz2angle(kx,kz,hv,'in/exit')
+            % [   w   ,  th2  ] = kxkz2angle(kx,kz,hv,'w2th')
+            %
+            % test 
+            % kx = rand(1)*10;
+            % kz = rand(1)*10;
+            % [w,th2] = kxkz2angle(kx,kz,hv,'w2th')
+            % [kxp,kzp]     = angle2kxkz(w,th2,hv)
+            % kx-kxp 
+            % kz-kzp
+            
+            import am_mbe.*
+            
+            lambda = get_photon_energy(hv);
+            
+            th2_ = @(kx,kz,lambda) 2.*atan2d(...
+                 real(sqrt(    (kx.^2 + kz.^2).*lambda.^2 )),...
+                 real(sqrt(4 - (kx.^2 + kz.^2).*lambda.^2 )));
+            w_   = @(kx,kz,lambda)  atan2d(...
+                 real( +(kz.*kx.^2.*lambda + kz.^3.*lambda + kx.*sqrt(kx.^2+kz.^2).*sqrt(4-kx.^2.*lambda.^2-kz.^2.*lambda.^2))./(kx.^2+kz.^2) ), ...
+                 real( -(kx.*kz.^2.*lambda + kx.^3.*lambda - kz.*sqrt(kx.^2+kz.^2).*sqrt(4-kx.^2.*lambda.^2-kz.^2.*lambda.^2))./(kx.^2+kz.^2) ));
+             
+            switch flag
+                case 'in/exit'
+                    % recover th2 and w values to determine which points are accessible
+                    alpha_i =   w_(kx,kz,lambda); 
+                    alpha_f = th2_(kx,kz,lambda)-alpha_i;
+                    varargout{1} = alpha_i;
+                    varargout{2} = alpha_f;
+                case 'w2th'
+                    varargout{1} =   w_(kx,kz,lambda);
+                    varargout{2} = th2_(kx,kz,lambda);
+                case 'test'
+                    kx = rand(1)*10; kz = rand(1)*10; hv = 1;
+                    [w,th2] = kxkz2angle(kx,kz,hv,'w2th');
+                    [kxp,kzp] = angle2kxkz(w,th2,hv);
+                    fprintf('%f \t %f\n',kx-kxp, kz-kzp)
+            end
+        end
+        
+        function [kx,kz]     = angle2kxkz(w,th2,hv)
+            % [kx,kz] = angle2kxkz(w,th2,hv)
+            
+            import am_mbe.*
+            
+            lambda = get_photon_energy(hv);
+            
+            % convert to reciprocal coordinates
+            kx_ = @(w,th2,lambda)  2/(lambda).*sind(th2/2).*sind(th2/2-w);
+            kz_ = @(w,th2,lambda)  2/(lambda).*sind(th2/2).*cosd(th2/2-w);
+            kx  = kx_(w,th2,lambda); kz = kz_(w,th2,lambda);
+        end
 
+        function [kz]        = get_kz(th,hv)
+            
+            import am_mbe.*
+            
+            kz = sind(th)/get_photon_wavelength(hv);
+            
+        end
+
+        function [th]        = get_th(kz,hv)
+            
+            import am_mbe.*
+            
+            th = asind(get_photon_wavelength(hv)*kz/2);
+            
+        end
+          
+        function [hv]        = get_photon_energy(lambda)
+            %
+            % E = get_photon_energy(lambda)
+            % 
+            % E      [eV]           photon energy
+            % lambda [nm]           photon wavelength
+            %
+            % Conversion factor = 
+            %       Plank's constant * speed of light / nm / eV
+            %
+            
+            hv = 1239.842 ./ lambda;
+            
+        end
+        
+        function [lambda]    = get_photon_wavelength(hv)
+            %
+            % E = get_photon_energy(lambda)
+            % 
+            % E      [eV]           photon energy
+            % lambda [nm]          photon wavelength
+            %
+            % Conversion factor = 
+            %       Plank's constant * speed of light / nm / eV
+            %
+            
+            lambda = 1239.842 ./ hv;
+            
+        end
+        
+    end
+    
     % general-purpopse functions
     
     methods (Static)
@@ -121,7 +230,6 @@ classdef am_lib
             if nargin<2; tol = am_lib.eps; end
 
             if isreal(x)
-                
                 for i = 1:numel(x)
                     go=true;
                     % reduce to integer, sqrt, cube-root
@@ -133,6 +241,13 @@ classdef am_lib
                     end; end
                     % well defined values for cosd(30) = sqrt(3)/2, cosd(60) = 1/2
                     for wdv = [1/2,sqrt(3)/2]; if go
+                        if eq_(abs(x(i)),wdv,tol)
+                            x(i) = wdv * sign(x(i)); 
+                            go=false; break; 
+                        end
+                    end;end
+                    % well defined values for 1/3, 2/3, 1/4, 3/4, 1/6, 5/6, 1/8, 3/8, 5/8, 7/8
+                    for wdv = [1/3, 2/3, 1/4, 3/4, 1/6, 5/6, 1/8, 3/8, 5/8, 7/8]; if go
                         if eq_(abs(x(i)),wdv,tol)
                             x(i) = wdv * sign(x(i)); 
                             go=false; break; 
@@ -164,6 +279,26 @@ classdef am_lib
             
             [V,D]=eig(A,'vector'); N = V(:,eq_(D,0,tol));
         end
+        
+        
+        % symbolic
+        
+        function M = subs_(M,var,val)
+            % converts list of symbolic variables to double
+            %     var = sort(symvar([ip.v_fc{:}]));
+            %     val = [ip.fc{:}];
+            if iscell(M)
+                for j = 1:numel(M)
+                    M{j} = am_lib.subs_(M{j},var,val);
+                end
+            else
+                for i = 1:numel(val)
+                    M = subs(M,var(i),val(i));
+                end
+                M = double(M);
+            end
+        end
+        
         
         % vectorization
         
@@ -303,6 +438,11 @@ classdef am_lib
             end
         end
 
+        function [C] = ssum_(A)
+           % sums over the third dimension of a symmetry tensor because sum(A,3) does not currently exist in matlab
+           [l,m,n] = size(A); C = sym(zeros(l,m)); for i = 1:n; C = C + A(:,:,i); end
+        end
+        
         function [D] = outerc_(A,B,C)
             % outer product of each column of A against each column of B (and C)
             %
@@ -506,6 +646,29 @@ classdef am_lib
             B(valid) = newval(id(valid));
         end
 
+        function T   = transpose_(d,p)
+            % T = transpose_(d,p)
+            %       p = permutation 
+            %       d = dimensions
+            % For 3-dimensional transpose super operator:
+            %       transpose_([3,3],[2,1])
+            %
+            % test with:
+            %     clear;clc;
+            %     p = [1,3,4,2];
+            %     d = [4,5,6,2];
+            %     T = get_transpose_superop_(p,d);
+            %     X = rand(d);
+            %     Y = T * X(:);
+            %     reshape(Y,d(p)) - permute(X,p)
+
+            % get total dimensions
+            pd = prod(d); 
+            % create indicies
+            A = reshape([1:pd],d); B = A; B = permute(B,p);
+            % create permutation super operator
+            T = sparse( A(:), B(:), ones(1,pd), pd, pd );
+        end
 
         % matching
         
@@ -824,7 +987,21 @@ classdef am_lib
 
         function [A]    = R_angle_(R)
             % define conversion of proper rotations to axis & angle representation
-            A = acos((trace(R)-1)/2); 
+            import am_lib.*
+            
+            % convert U(2) double group to O(3) representation
+            if size(R,1)==2
+                R = SU2_to_SO3(R); R = wdv_(R);
+            end
+            
+            n = size(R,3);
+            if n==1
+                A = acos((trace(R)-1)/2); 
+            else
+                for i = 1:n
+                    A(i) = am_lib.R_angle_(R(:,:,i));
+                end
+            end
         end
         
         function R      = R_align_(A,B)
@@ -901,7 +1078,12 @@ classdef am_lib
         
         function [W]    = get_wigner(j,R,flag)
             % The group SO(3) is the set of all three dimensional, real orthogonal matrices with unit
-            % determinant. [Requiring that the determinant equal 1 and not ?1, excludes inversions.]
+            % determinant. [Requiring that the determinant equal 1 and not -1 excludes inversion.]
+            % The group O is obtained from the direct product of SO(3) and the the group Ci = {E,I}. 
+            % Inversions matrix representatives in j are formed using the parity operator, (-1)^j, see:
+            %
+            %    - P. Jacobs, Group Theory with Applications in Chemical Physics
+            %       (Cambridge University Press, 2005), p 208, eq 11.8.2. 
             %
             % The group SO(3) represents the set of all possible rotations of a three dimensional real
             % vector; it is essentially the collection of all proper rotations. The orthogonal group O(3) 
@@ -917,7 +1099,13 @@ classdef am_lib
             %   - J. J. Sakurai, Modern Quantum Mechanics, Revised edition (Addison Wesley, Reading, Mass,
             %        1993). p 207
             %
-
+            % SU(2) is in the Cartan gauge, namely the inversion operator is I =  -1i*eye(2). In the Pauli gauge,
+            % the inversion operator is I = -eye(2). Excellent discussion about gauges in:   
+            % 
+            %   - O. Chalaev, arXiv cond-mat.mtrl-sci, (2012).
+            %
+           
+                
             import am_lib.*
 
             % get angular momentum operators [Jx,Jy,Jz]
@@ -1391,7 +1579,7 @@ classdef am_lib
             end
         end
         
-        
+
         % combinatorial 
         
         function [x]    = nchoosek_(n,k)
@@ -1983,6 +2171,11 @@ classdef am_lib
             end
         end
         
+        function [h] = hist2_(x,y)
+            [v,e] = hist3([x(:) y(:)],[1,1]*200); [e{:}]=meshgrid(e{1:2});
+            h = contourf(e{1},e{2},log(v.'),100,'edgecolor','none');
+        end
+
         
         % correlation and polynomial fitting
         
@@ -1992,15 +2185,16 @@ classdef am_lib
             import am_lib.*
             
             % plot correlation for dft vs bvk forces on atoms
-            plot(x(:),y(:),'.','color',[1 1 1]*0.70); daspect([1 1 1]); box on;
+            hist2_(x,y); hold on; daspect([1 1 1]); box on;
             title(sprintf('R^2 = %f',pcorr_(x(:),y(:)).^2)); 
             
             % linear regression
-            % mv = [-1 1]*max(abs(axis));
             mv = minmax_([x(:);y(:)]);
+            line( 0, 0, 'marker','.','markersize',20,'color','k');
             line( mv, mv, 'linewidth',1.5); 
             line( mv, pinterp_(mv,x(:),y(:),1) ,'linestyle','--','linewidth',1.5,'color','r'); 
             axis([mv,mv]);
+            grid on;
         end
         
         function [R] = pcorr_(A,B)
@@ -2041,6 +2235,78 @@ classdef am_lib
             gr= fft(g); gr = gr(1:floor(N/2)); r = r(1:floor(N/2));
         end
         
+        function [C]    = curl_(f)
+            % f = [(x,y,z),x,y,z) -> [(dx,dy,dz),x,y,z)
+            % curl of vector field
+            
+            n = size(f); if n(1)~=3; error('curl_ requires (x,y,z) in first dimension'); end; n = n(2:4);
+
+            % generate Fourier mesh
+            fftmesh = @(N) fftshift([0:(N-1)]'-floor(N/2)); 
+            [r(1,:,:,:),r(2,:,:,:),r(3,:,:,:)]=meshgrid(fftmesh(n(1)),fftmesh(n(2)),fftmesh(n(3)));
+
+            % compute curl
+            C = zeros([3,n]);
+            for i = 1:3; C(i,:,:,:) =  fftn(f(i,:,:,:)); end
+            C = cross( 1i*2*pi*r, C, 1);
+            for i = 1:3; C(i,:,:,:) = ifftn(C(i,:,:,:)); end
+        end
+
+        function [G]    = grad_(f)
+            % f = [(x,y,z),x,y,z] -- > [(x,y,z),(dx,dy,dz),x,y,z]
+            % f = [x,y,z]         -- > [      1,(dx,dy,dz),x,y,z]
+            % gradient of vector or scalar field
+            
+            n = size(f); 
+            
+            switch numel(n)
+                case 4 % vector field
+                    if n(1)~=3; error('curl_ requires (x,y,z) in first dimension'); end; n = n(2:4);
+
+                    % generate Fourier mesh
+                    fftmesh = @(N) fftshift([0:(N-1)]'-floor(N/2)); 
+                    [r(1,:,:,:),r(2,:,:,:),r(3,:,:,:)]=meshgrid(fftmesh(n(1)),fftmesh(n(2)),fftmesh(n(3)));
+
+                    % compute gradient d/dx + d/dy + d/dz
+                    G = zeros([3,3,n]);
+                    for i = 1:3
+                       fi =  fftn(f(i,:,:,:));
+                    for j = 1:3
+                        G(i,j,:,:,:) = ifftn( dot( 1i*2*pi*r(j,:,:,:), fi, 1) );
+                    end
+                    end
+                case 3 % scalar field
+                    % generate Fourier mesh
+                    fftmesh = @(N) fftshift([0:(N-1)]'-floor(N/2)); 
+                    [r(1,:,:,:),r(2,:,:,:),r(3,:,:,:)]=meshgrid(fftmesh(n(1)),fftmesh(n(2)),fftmesh(n(3)));
+
+                    % compute gradient d/dx, d/dy, d/dz
+                    G = zeros([1,3,n]); fi(1,:,:,:) = fftn(f);
+                    for j = 1:3
+                        G(1,j,:,:,:) = ifftn( dot( 1i*2*pi*r(j,:,:,:), fi(1,:,:,:), 1) );
+                    end
+                otherwise
+                    error('invalid input size');
+            end
+        end
+        
+        function [D]    = div_(f)
+            % f = [(x,y,z),x,y,z) -- > d/dx+d/dy+d/dz [x,y,z]
+            % divergence of vector field (trace over tensor of vector field gradient)
+            
+            n = size(f); if n(1)~=3; error('div_ requires (x,y,z) in first dimension'); end; n = n(2:4);
+
+            % generate Fourier mesh
+            fftmesh = @(N) fftshift([0:(N-1)]'-floor(N/2)); 
+            [r(1,:,:,:),r(2,:,:,:),r(3,:,:,:)]=meshgrid(fftmesh(n(1)),fftmesh(n(2)),fftmesh(n(3)));
+
+            % compute gradient d/dx + d/dy + d/dz
+            D = zeros(n);
+            for i = 1:3
+                D = D + ifftn(dot( 1i*2*pi*r(i,:,:,:), fftn(f(i,:,:,:)), 1));
+            end
+        end
+        
         function          plot_power_spectrum_(t,y,leg)
             import am_lib.*
             % count number of scans
@@ -2061,8 +2327,8 @@ classdef am_lib
             legend(leg,'location','southeast');
             end
         end
-        
-        
+
+
         % interpolation
 
         function [fq] = fftinterp_(f,q,n,algo)
@@ -2215,6 +2481,9 @@ classdef am_lib
                 p = [];
             end
         end
+        
+        
+        
     end
 
     % unix functions and scripts
