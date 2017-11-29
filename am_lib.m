@@ -106,7 +106,7 @@ classdef am_lib
 
         function [kz]        = get_kz(th,hv)
             
-            import am_mbe.*
+            import am_lib.*
             
             kz = sind(th)/get_photon_wavelength(hv);
             
@@ -114,7 +114,7 @@ classdef am_lib
 
         function [th]        = get_th(kz,hv)
             
-            import am_mbe.*
+            import am_lib.*
             
             th = asind(get_photon_wavelength(hv)*kz/2);
             
