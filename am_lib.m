@@ -116,7 +116,7 @@ classdef am_lib
             
             import am_lib.*
             
-            th = asind(get_photon_wavelength(hv)*kz/2);
+            th = asind(get_photon_wavelength(hv)*kz);
             
         end
           
@@ -1507,17 +1507,16 @@ classdef am_lib
                     x0 = mean([lb;ub]);
                 case 'sinc'
                     % define rescaling
-                    fscale_= @(c) [log(c(1)),c(2:3),log(c(4))];
-                    rscale_= @(c) [exp(c(1)),c(2:3),exp(c(4))];
+                    fscale_= @(c) [log(c(1)),c(2),log(c(3:4))];
+                    rscale_= @(c) [exp(c(1)),c(2),exp(c(3:4))];
                     % define gaussian, sinc, peak, and objective functions
                     label = {'Amp','Center','Width','Background'};
-                    func_ = @(c) c(1).*  sinc_((x-c(2))./c(3)).^2 + ...
-                                 c(4);
+                    func_ = @(c) c(1).*  sinc_((x-c(2))./c(3)).^2 + c(4);
                     cost_ = @(c) sum(abs(log(func_(rscale_(c))) - log(y(:)) ));
                     % lower and upper bounds; starting condition
                     isfixed = [0 0 0 0]; % 0.02 to 2 0.2580
-                    lb = [0.8*min(y) min(x) 0.02 0.8*min(y)]; lb = fscale_(lb); 
-                    ub = [1.2*max(y) max(x) 1.50 1.2*max(y)]; ub = fscale_(ub);
+                    lb = [ 0.08*min(y) min(x) 1E-7 0.001*min(y)]; lb = fscale_(lb); 
+                    ub = [  2.2*max(y) max(x) 1E+3 2*max(y)]; ub = fscale_(ub);
                     x0 = mean([lb;ub]);
                 case 'pvoigt'
                     % define rescaling
@@ -2446,19 +2445,20 @@ classdef am_lib
             
         end
 
-        function y    = linspacen_(d1, d2, n)
-            n  = double(n); d1 = squeeze(d1); d2 = squeeze(d2);
-            NDim = ndims(d1);
-            if NDim==2 && any(size(d1)==1)
+        function y    = linspacen_(v1, v2, n)
+            % linearly interpolate vectors
+            n  = double(n); v1 = squeeze(v1); v2 = squeeze(v2);
+            NDim = ndims(v1);
+            if NDim==2 && any(size(v1)==1)
                 NDim = NDim-1;
-                if all(size(d1)==1)
+                if all(size(v1)==1)
                     NDim = 0;
                 end
             end
             pp      = (0:n-2)./(floor(n)-1);
-            Sum1    = tensor_product(d1, ones(1,n-1));
-            Sum2    = tensor_product((d2-d1), pp);
-            y = cat(NDim+1, Sum1  + Sum2, shiftdim(d2, size(d1, 1)==1 ));
+            Sum1    = tensor_product(v1, ones(1,n-1));
+            Sum2    = tensor_product((v2-v1), pp);
+            y = cat(NDim+1, Sum1  + Sum2, shiftdim(v2, size(v1, 1)==1 ));
 
             function Z = tensor_product(X,Y)
                 sX=size(X);sY=size(Y); ndim1=ndims(X);ndim2=ndims(Y); indperm=[ndim2+1:ndim1+ndim2,1:ndim2];
