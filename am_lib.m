@@ -339,6 +339,16 @@ classdef am_lib
             end
         end
         
+        function [C] = mtimes_(varargin)
+            switch nargin
+                case 1
+                    C = varargin{1};
+                otherwise
+                    C = varargin{1};                    
+                    for i = 2:nargin; C = C * varargin{i}; end
+            end
+        end
+        
         function [C] = matmul_(A,B,applysqueeze)
             % matrix multiple the first two dimensions and entry-wise the rest
             %
@@ -1450,20 +1460,53 @@ classdef am_lib
             end
         end
 
-        function [x,r] = ga_(cost_,x0,isfixed,varargin)
+        function [x,r] = ga_(cost_,x0,isfixed,islinked,varargin)
 
-            % fixed and loose indicies
-            f = find( isfixed); xf = x0(f);
-            l = find(~isfixed); xl = x0(l);
+            nvars = numel(x0);
+            if isempty(isfixed);  isfixed  = zeros(1,nvars); end
+            if isempty(islinked); islinked = zeros(1,nvars); end
+            
+            % check input dimensions
+            if numel(x0)~=numel(isfixed); error('x0 and isfixed size mismatch'); end
+            if numel(x0)~=numel(islinked); error('x0 and islinked size mismatch'); end
+            if (nargin-4)>5; if numel(x0)~=numel(varargin{5}); error('x0 and lb size mismatch'); end; end
+            if (nargin-4)>6; if numel(x0)~=numel(varargin{6}); error('x0 and ub size mismatch'); end; end
+            
+            % unlinked variables linked to 0
+            islinked(islinked==0) = max([0,islinked(islinked~=0)])+[1:sum(islinked==0)];
+            
+            % find which variables are linked
+            [~,i2u,u2i]=unique(islinked,'stable');
+            
+            % if one linked variable is fixed, make all fixed
+            for i = 1:max(u2i); if any(isfixed(u2i==i)); isfixed(u2i==i)=1; end; end
+            
+%             % 1) use only 1 variable per linked variables
+            x0 = x0(i2u); isfixed = isfixed(i2u); 
+            if (nargin-4)>4; varargin{5} = varargin{5}(i2u); end % lb
+            if (nargin-4)>5; varargin{6} = varargin{6}(i2u); end % ub
+            if (nargin-4)>7; varargin{8}.InitialPopulationMatrix = varargin{8}.InitialPopulationMatrix(i2u); end % x0
+            
+            % 2) use only floating variables
+            if (nargin-4)>4; varargin{5} = varargin{5}(~isfixed); end % lb
+            if (nargin-4)>5; varargin{6} = varargin{6}(~isfixed); end % ub
+            if (nargin-4)>7; varargin{8}.InitialPopulationMatrix = varargin{8}.InitialPopulationMatrix(~isfixed); end % x0
+            
+                % fixed and loose indicies
+                f = find( isfixed); xf = x0(f);
+                l = find(~isfixed); xl = x0(l);
 
-            % Estimate only the non-fixed ones
-            [xl,r] = ga(@localcost_,sum(isfixed==0),varargin{:});
+                % Estimate only the non-fixed ones
+                [xl,r] = ga(@localcost_,sum(isfixed(:)==0),varargin{:});
 
-            % Re-create array combining fixed and estimated coefficients
-            x([f,l]) = [xf,xl];
+                % Re-create array combining fixed and estimated coefficients
+                x([f,l]) = [xf,xl];
+
+            % restore all varaibles (removing links)
+            x = x(u2i);
 
             function y = localcost_(x)
-               b([f,l]) = [xf,x]; y = cost_(b);
+                b([f,l]) = [xf,x]; b = b(u2i); y = cost_(b);
             end
         end
         
