@@ -906,12 +906,18 @@ classdef am_lib
                 
         function [y] = pvoigt_(x,f)
             % amplitude normalized
-            import am_lib.*
-            y = (1-f) .* gauss_(x./sqrt(2*log(2))) .* sqrt(pi) + f .* lorentz_(x) .* pi;
+            y = (1-f) .* am_lib.gauss_(x./sqrt(2*log(2))) .* sqrt(pi) + f .* am_lib.lorentz_(x) .* pi;
         end
         
         function [y] = sinc_(x)
-            i=find(x==0); x(i)= 1; y = sin(pi*x)./(pi*x); y(i) = 1;
+            i=find(x==0); x(i)= 1; y = sin(x)./x; y(i) = 1;
+        end
+        
+        function [y] = expsum_(x,N)
+            %  \sum_{n=0}^{N-1} exp( i n x )
+            %      = (1 - exp(i*Nx))/(1-exp(i*x)) ...
+            %      = sin(1/2*N*x)/sin(1/2*x) * exp(i*x*(N-1)/2)
+            y = (1 - exp(1i*N*x))./(1-exp(1i*x));
         end
         
         function [w] = tukeyw_(n,r)
@@ -1554,12 +1560,12 @@ classdef am_lib
                     rscale_= @(c) [exp(c(1)),c(2),exp(c(3:4))];
                     % define gaussian, sinc, peak, and objective functions
                     label = {'Amp','Center','Width','Background'};
-                    func_ = @(c) c(1).*  sinc_((x-c(2))./c(3)).^2 + c(4);
+                    func_ = @(c) c(1).*  sinc_((x-c(2)).*c(3)).^2 + c(4);
                     cost_ = @(c) sum(abs(log(func_(rscale_(c))) - log(y(:)) ));
                     % lower and upper bounds; starting condition
                     isfixed = [0 0 0 0]; % 0.02 to 2 0.2580
-                    lb = [ 0.08*min(y) min(x) 1E-7 0.001*min(y)]; lb = fscale_(lb); 
-                    ub = [  2.2*max(y) max(x) 1E+3 2*max(y)]; ub = fscale_(ub);
+                    lb = [ 0.08*min(y) min(x)  500  0.001*min(y)]; lb = fscale_(lb); 
+                    ub = [  2.2*max(y) max(x) 5000    200*max(y)]; ub = fscale_(ub);
                     x0 = mean([lb;ub]);
                 case 'pvoigt'
                     % define rescaling
@@ -1567,7 +1573,7 @@ classdef am_lib
                     rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
                     % define gaussian, sinc, peak, and objective functions
                     label = {'Amp','Center','Width','PVoigt','Background'};
-                    func_ = @(c) c(1).*pvoigt_((x-c(2))./c(3),c(4)) + ...
+                    func_ = @(c) c(1).*pvoigt_((x-c(2)).*c(3),c(4)) + ...
                                  c(5);
                     cost_ = @(c) sum(abs(log(func_(rscale_(c))) - log(y(:)) ));
                     % lower and upper bounds; starting condition
@@ -1585,18 +1591,19 @@ classdef am_lib
                          'StepTolerance',1E-18,...
                          'FunctionTolerance',1E-18,...
                          'Algorithm','active-set');
-            opts_ = optimoptions(@ga,'PopulationSize',1000, ...
-                                     'InitialPopulationMatrix',x0(~isfixed), ...
-                                     'MutationFcn',{@mutationadaptfeasible}, ...
-                                     'Generations',5, ...
+            opts_ = optimoptions(@ga,'PopulationSize',500, ...
+                                     'EliteCount',2, ...
+                                     'InitialPopulationMatrix',x0, ...
+                                     'Generations',100, ...
                                      'FunctionTolerance',1E-5, ...
                                      'Display','off',...
+                                     'PlotFcns',@plot_func_, ...
                                      'HybridFcn',{@fmincon,opts_hybrid_});
             % plot GA iterations?
             if false; opts_.PlotFcns = {@plot_func_}; end
 
             % perform optimization
-            [c,~] = ga_(cost_,x0,isfixed,[],[],[],[],lb(~isfixed),ub(~isfixed),[],opts_); c = rscale_(c); v = func_(c);
+            [c,~] = ga_(cost_,x0,isfixed,[],[],[],[],[],lb,ub,[],opts_); c = rscale_(c); v = func_(c);
             
             function state = plot_func_(~,state,flag,~)
                 switch flag
@@ -2267,14 +2274,23 @@ classdef am_lib
         
         % fft related
         
-        function [r,gr] = fft_(k,gk)
+        function [r,gr] = fft_(k,gk,flag)
+            
+            if nargin < 3; flag='half'; end
+            
             % interpolate gk on equidistant points
             kp= linspace(min(k),max(k),numel(k));
             g = interp1(k,gk,kp); k=kp; clear ke;
             % apply fft
             N = numel(k);
-            r = fftshift(([0:(N-1)]'-floor(N/2))/(k(end)-k(1))); 
-            gr= fft(g); gr = gr(1:floor(N/2)); r = r(1:floor(N/2));
+            r = fftshift(([0:(N-1)]'-floor(N/2))/(k(end)-k(1))); gr = fft(g); 
+            switch flag
+                case 'half'
+                    gr = gr(1:floor(N/2)); r = r(1:floor(N/2));
+                case 'whole'
+                    % do nothing
+                otherwise; error('fft_: Unknown flag.');
+            end
         end
         
         function [C]    = curl_(f)
@@ -2710,6 +2726,7 @@ classdef am_lib
                 end
             end
         end
+        
         
     end
 end
