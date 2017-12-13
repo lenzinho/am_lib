@@ -62,7 +62,7 @@ classdef am_lib
             % kx-kxp 
             % kz-kzp
             
-            import am_mbe.*
+            import am_lib.*
             
             lambda = get_photon_energy(hv);
             
@@ -910,14 +910,18 @@ classdef am_lib
         end
         
         function [y] = sinc_(x)
-            i=find(x==0); x(i)= 1; y = sin(x)./x; y(i) = 1;
+            y = sin(x)./x; y(x==0) = 1;
         end
         
         function [y] = expsum_(x,N)
             %  \sum_{n=0}^{N-1} exp( i n x )
             %      = (1 - exp(i*Nx))/(1-exp(i*x)) ...
             %      = sin(1/2*N*x)/sin(1/2*x) * exp(i*x*(N-1)/2)
-            y = (1 - exp(1i*N*x))./(1-exp(1i*x));
+            if N > 1E8
+                y = 1./(1-exp(1i*x));
+            else
+                y = (1 - exp(1i*N*x))./(1-exp(1i*x)); y(x==0)=1;
+            end
         end
         
         function [w] = tukeyw_(n,r)
