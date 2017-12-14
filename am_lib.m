@@ -280,6 +280,9 @@ classdef am_lib
             [V,D]=eig(A,'vector'); N = V(:,eq_(D,0,tol));
         end
         
+        function [C,IA,IC] = uniquetol_(X,tol,varargin)
+            [C,IA,IC] = unique(am_lib.rnd_(X,tol),varargin{:});
+        end
         
         % symbolic
         
