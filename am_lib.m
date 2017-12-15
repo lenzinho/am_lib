@@ -94,7 +94,7 @@ classdef am_lib
         function [kx,kz]     = angle2kxkz(w,th2,hv)
             % [kx,kz] = angle2kxkz(w,th2,hv)
             
-            import am_mbe.*
+            import am_lib.*
             
             lambda = get_photon_energy(hv);
             
