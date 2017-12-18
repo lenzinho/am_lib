@@ -683,6 +683,13 @@ classdef am_lib
             T = sparse( A(:), B(:), ones(1,pd), pd, pd );
         end
 
+        function [yq] =  average_matrix_1d(data,x,xq)
+            [~,i]=min(abs(permute(x,[3,1,2])-xq(:))); i = permute(i,[2,3,1]);
+            yq = accumarray(i(:),data(:),[],@sum).';
+            nvalues = sum(i(:)==[1:max(i(:))],1);
+            yq = yq./nvalues;
+        end
+        
         % matching
         
         function [C] = maxabs_(A)
@@ -909,7 +916,7 @@ classdef am_lib
                 
         function [y] = pvoigt_(x,f)
             % amplitude normalized
-            y = (1-f) .* am_lib.gauss_(x./sqrt(2*log(2))) .* sqrt(pi) + f .* am_lib.lorentz_(x) .* pi;
+            y = sqrt(pi) .* (1-f) .* am_lib.gauss_(x./sqrt(2*log(2))) + f .* am_lib.lorentz_(x) .* pi;
         end
         
         function [y] = sinc_(x)
@@ -1494,7 +1501,7 @@ classdef am_lib
             % if one linked variable is fixed, make all fixed
             for i = 1:max(u2i); if any(isfixed(u2i==i)); isfixed(u2i==i)=1; end; end
             
-%             % 1) use only 1 variable per linked variables
+            % 1) use only 1 variable per linked variables
             x0 = x0(i2u); isfixed = isfixed(i2u); 
             if (nargin-4)>4; varargin{5} = varargin{5}(i2u); end % lb
             if (nargin-4)>5; varargin{6} = varargin{6}(i2u); end % ub
@@ -1539,102 +1546,34 @@ classdef am_lib
                b([f,l]) = [xf,x]; y = cost_(b);
             end
         end
-
-        function [c,v] = fit_peak_(x,y,profile)
+        
+        function [c,f,l] = fit_peak_(x,y,profile)
             import am_lib.*
-            
-            if nargin < 3; profile='pvoigt'; end
-            
             switch profile
-                case 'sinc+pvoigt'
-                    % define rescaling
-                    fscale_= @(c) [log(c(1)),c(2:3),log(c(4)),c(5),log(c(6)),c(7),log(c(8))];
-                    rscale_= @(c) [exp(c(1)),c(2:3),exp(c(4)),c(5),exp(c(6)),c(7),exp(c(8))];
-                    % define gaussian, sinc, peak, and objective functions
-                    label = {'A1','C1','S1','A2','C2','W2','F2','B'};
-                    func_ = @(c) c(1).*  sinc_((x-c(2))./c(3)).^2 + ...
-                                 c(4).*pvoigt_((x-c(5))./c(6),c(7)) + ...
-                                 c(8);
-                    cost_ = @(c) sum(abs(log(func_(rscale_(c))) - log(y(:)) ));
-                    % lower and upper bounds; starting condition
-                    isfixed = [0 0 0 0 0 0 0 0];
-                    lb = [0.8*min(y) min(x) 0.02 0.8*min(y) min(x) 1E-4 0 0.8*min(y)]; lb = fscale_(lb); 
-                    ub = [1.2*max(y) max(x) 1.00 1.2*max(y) max(x) 1E-2 1 1.2*max(y)]; ub = fscale_(ub);
-                    x0 = mean([lb;ub]);
-                case 'sinc'
-                    % define rescaling
-                    fscale_= @(c) [log(c(1)),c(2),log(c(3:4))];
-                    rscale_= @(c) [exp(c(1)),c(2),exp(c(3:4))];
-                    % define gaussian, sinc, peak, and objective functions
-                    label = {'Amp','Center','Width','Background'};
-                    func_ = @(c) c(1).*  sinc_((x-c(2)).*c(3)).^2 + c(4);
-                    cost_ = @(c) sum(abs(log(func_(rscale_(c))) - log(y(:)) ));
-                    % lower and upper bounds; starting condition
-                    isfixed = [0 0 0 0]; % 0.02 to 2 0.2580
-                    lb = [ 0.08*min(y) min(x)  500  0.001*min(y)]; lb = fscale_(lb); 
-                    ub = [  2.2*max(y) max(x) 5000    200*max(y)]; ub = fscale_(ub);
-                    x0 = mean([lb;ub]);
                 case 'pvoigt'
+                    % define function
+                    func_ = @(c,x) c(1).*pvoigt_((x-c(2)).*c(3),c(4)) + c(5);
+                    FWHM_ = @(c) 2/c(3);
+                    % name parameter
+                    label = {'Amp','Center','Width','Lorentzian Fraction','Background'};
+                    % estimate parameters
+                    [~,j] = max(conv(y,ones(1,20)/20,'same'));
+                    x0    = [ max(y), x(j), 1E2, 0.5, 0]; 
                     % define rescaling
                     fscale_= @(c) [log(c(1)),c(2:4),log(c(5))];
                     rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
-                    % define gaussian, sinc, peak, and objective functions
-                    label = {'Amp','Center','Width','PVoigt','Background'};
-                    func_ = @(c) c(1).*pvoigt_((x-c(2)).*c(3),c(4)) + ...
-                                 c(5);
-                    cost_ = @(c) sum(abs(log(func_(rscale_(c))) - log(y(:)) ));
-                    % lower and upper bounds; starting condition
-                    isfixed = [0 0 0 0 0];
-                    lb = [0.5*min(y) min(x) 0.001 0 0.5*min(y)]; lb = fscale_(lb); 
-                    ub = [1.5*max(y) max(x) 0.800 1 1.5*max(y)]; ub = fscale_(ub);
-                    x0 = mean([lb;ub]);
             end
-            
-            % optimization options
-            opts_hybrid_ = optimoptions(...
-                @fmincon,'Display','none',...
-                         'MaxFunctionEvaluations',1E2,...
-                         'MaxIterations',1E4,...
-                         'StepTolerance',1E-18,...
-                         'FunctionTolerance',1E-18,...
-                         'Algorithm','active-set');
-            opts_ = optimoptions(@ga,'PopulationSize',500, ...
-                                     'EliteCount',2, ...
-                                     'InitialPopulationMatrix',x0, ...
-                                     'Generations',100, ...
-                                     'FunctionTolerance',1E-5, ...
-                                     'Display','off',...
-                                     'PlotFcns',@plot_func_, ...
-                                     'HybridFcn',{@fmincon,opts_hybrid_});
-            % plot GA iterations?
-            if false; opts_.PlotFcns = {@plot_func_}; end
 
-            % perform optimization
-            [c,~] = ga_(cost_,x0,isfixed,[],[],[],[],[],lb,ub,[],opts_); c = rscale_(c); v = func_(c);
-            
-            function state = plot_func_(~,state,flag,~)
-                switch flag
-                    % Plot initialization
-                    case 'init'
-                        clf; figure(1); set(gcf,'color','w');
-                    case {'iter','done'}
-                        % find best population
-                        [~,j]=min(state.Score);
-                        % reconstruct full vector
-                        f = find( isfixed); xf = x0(f);
-                        l = find(~isfixed); xl = state.Population(j,:);
-                        c([f,l]) = [xf,xl];
-                        % plot it
-                        semilogy(x,func_(rscale_(c)),x,y); axis tight;                        
-                        % plot bound info
-                        axes('position',[0.4 0.6 0.45 0.25]);
-                        a = 1:sum(~isfixed); b = (c(~isfixed)-lb(~isfixed))./(ub(~isfixed)-lb(~isfixed)); plot(a,b,'.-','markersize',20); 
-                        h=text(a,b+0.05,strread(sprintf('%0.3g\n',c(~isfixed)),'%s'),'HorizontalAlignment','left'); set(h,'rotation',90);
-                        ylim([0 1]); set(gca,'YTick',[0 1],'YTickLabel',{'LB','UB'}); set(gca,'XTickLabel',label(~isfixed)); 
-                end
-            end
+            % define cost function
+            cost_ = @(c) abs(log(func_(rscale_(c),x)) - log(y(:))).*y(:);
+
+            % optimization options
+            opts_ = optimoptions(@lsqnonlin,'Display','none','MaxIterations',1E10,'StepTolerance',1E-18,'FunctionTolerance',1E-18);
+
+            c = lsqnonlin(cost_,fscale_(x0),[0 0 0 0 0],[Inf Inf Inf 1 Inf],opts_); c = rscale_(c); f = func_; l = label;
+            figure(1); set(gcf,'color','w'); plot(x,func_(c,x),'-k',x,y,'.-','linewidth',1); title(sprintf('FWHM = %g',FWHM_(c)));
+
         end
-        
 
         % combinatorial 
         
