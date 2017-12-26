@@ -150,6 +150,16 @@ classdef am_lib
             
         end
         
+        function [x]         = rebase_(index,base)
+            % [dhms] = rebase_(seconds,[7,24,60,60])
+            % use this to convert from seconds to weeks,days,hours minutes,seconds 
+            n = numel(base)+1; x = zeros(1,n-1); b = cumprod([base,1],'reverse');
+            for i = 2:n
+                x(i-1)  = floor(index./b(i));
+                index = index - x(i-1).*b(i);
+            end
+        end
+        
     end
     
     % general-purpopse functions
@@ -187,7 +197,7 @@ classdef am_lib
 
 
         % numerical precision
-
+        
         function [C] = mod_(A,tol)
 
             % set default numerical tolernece
@@ -200,11 +210,6 @@ classdef am_lib
         function [C] = rnd_(A,tol)
             if nargin < 2; tol = am_lib.tiny; end
             C = round(A,-log10(tol));
-        end
-
-        function [C] = rndstr_(n)
-            set = char(['a':'z','0':'9','_','!','@','#','$','%','^']); nsets = numel(set);
-            C = set(ceil(nsets*rand(1,n)));
         end
 
         function [L] = eq_(a,b,tol)
@@ -228,7 +233,6 @@ classdef am_lib
             import am_lib.*
 
             if nargin<2; tol = am_lib.eps; end
-
             if isreal(x)
                 for i = 1:numel(x)
                     go=true;
@@ -254,35 +258,25 @@ classdef am_lib
                         end
                     end;end
                 end
-                
-                for i = 1:numel(x)
-                    for wdv = [1/2,sqrt(3)/2]
-                    if eq_(abs(x(i)),wdv,tol); x(i) = wdv * sign(x(i)); go=false; break; end
-                    end
-                end
             else
                 x = wdv_(real(x)) + wdv_(imag(x))*1i;
             end
         end
 
         function [L] = isdiag_(A)
-            import am_lib.*
-            L = all_(eq_(diag(diag(A)),A));
+            L = am_lib.all_(am_lib.eq_(diag(diag(A)),A));
         end
         
         function [N] = null_(A,tol)
-            % [N] = null_(A,tol)
-            % get null space 
-            import am_lib.*
-            
             if nargin < 2; tol = am_lib.eps; end
-            
-            [V,D]=eig(A,'vector'); N = V(:,eq_(D,0,tol));
+            [V,D]=eig(A,'vector'); N = V(:,am_lib.eq_(D,0,tol));
         end
         
         function [C,IA,IC] = uniquetol_(X,tol,varargin)
-            [C,IA,IC] = unique(am_lib.rnd_(X,tol),varargin{:});
+            if nargin < 2; tol = am_lib.eps; end
+            [~,IA,IC] = unique(am_lib.rnd_(X,tol),varargin{:}); C = X(:,IA);
         end
+        
         
         % symbolic
         
@@ -316,8 +310,7 @@ classdef am_lib
         function [A] = aug_(A,n)
             % squeeze in 1's in vector A at positions n
             ex_ = any([1:(numel(n)+numel(A))]==n(:),1);
-            A(~ex_) = A; 
-            A( ex_) = 1;
+            A(~ex_) = A; A( ex_) = 1;
         end
         
         function [A] = ext_(A,n)
@@ -683,12 +676,13 @@ classdef am_lib
             T = sparse( A(:), B(:), ones(1,pd), pd, pd );
         end
 
-        function [yq] =  average_matrix_1d(data,x,xq)
+        function [yq] = average_matrix_1d(data,x,xq)
             [~,i]=min(abs(permute(x,[3,1,2])-xq(:))); i = permute(i,[2,3,1]);
             yq = accumarray(i(:),data(:),[],@sum).';
             nvalues = sum(i(:)==[1:max(i(:))],1);
             yq = yq./nvalues;
         end
+        
         
         % matching
         
@@ -945,6 +939,30 @@ classdef am_lib
             N = n-1; n = (0:N)'-N/2; w = exp(-(1/2)*(r*n/(N/2)).^2);
         end
         
+        
+        % functions that should of existed
+        
+        function n = gcd_(n)
+            % operates on vector n = [n1,n2,n3 ...]
+            x=1; p=n;
+            while(size(n,2))>=2
+                p= n(:,size(n,2)-1:size(n,2));
+                n=n(1,1:size(n,2)-2);
+                x=1;
+                while(x~=0)
+                    x= max(p)-min(p);
+                    p = [x,min(p)];
+                end    
+                n = [n,max(p)];
+                p = [];
+            end
+        end
+        
+        function [C] = rndstr_(n)
+            set = char(['a':'z','0':'9','_','!','@','#','$','%','^']); nsets = numel(set);
+            C = set(ceil(nsets*rand(1,n)));
+        end
+
         
         % geometric functions
         
@@ -1226,51 +1244,12 @@ classdef am_lib
         end
         
         function [th,r] = cart2pold_(x,y)
-            th = atan2d(y,x);
-            r = hypot(x,y);
+            th = atan2d(y,x); r = hypot(x,y);
         end
         
         function [phi,chi,r] = cart2sphd_(x,y,z)
             hypotxy = hypot(x,y); r = hypot(hypotxy,z);
             chi = atan2d(z,hypotxy); phi = atan2d(y,x);
-        end
-        
-        function [C]    = round_(C,tol)
-            % this should be essentially the opposite of x./norm(x) for an integer array x
-            
-            import am_lib.*
-            
-            if nargin<2; tol=am_lib.tiny; end
-            
-            s = size(C);
-            
-            switch ndims_(C)
-                case 1
-                    % try to convert to all real values if any is imaginary
-                    if any(~eq_(imag(C),0)); C = C./1i; end
-
-                    % if imaginary part is small
-                    if all( eq_(imag(C),0,tol) )
-                        % convert to real
-                        C = real(C); 
-                        % round values by diving by smallest noninteger
-                        for i = 1:100
-                            if ~any(~eq_(mod_(C(:),tol),0,tol)); break; end 
-                            small=min(C(~eq_(C(:),0,tol))); C=C./small*sign(small); 
-                        end
-                        C = round(C);
-                    end
-                    
-                case 2
-                    for i = 1:s(2)
-                        X=C(:,i); C(:,i)=reshape(round_(X(:)),s(1),1);
-                    end
-                    
-                case 3
-                    for i = 1:s(3)
-                        X=C(:,:,i); C(:,:,i)=reshape(round_(X(:)),s(1),s(2));
-                    end
-            end
         end
         
         
@@ -1575,6 +1554,7 @@ classdef am_lib
 
         end
 
+        
         % combinatorial 
         
         function [x]    = nchoosek_(n,k)
@@ -1881,16 +1861,6 @@ classdef am_lib
             % reverse k+1 to n positions
             a([(k+1):n])=a([n:-1:(k+1)]);
         end
-        
-        function [x]    = ind2bas_(index,base)
-            % [dhms] = ind2bas_(seconds,[7,24,60,60])
-            % use this to convert from seconds to weeks,days,hours minutes,seconds 
-            n = numel(base)+1; x = zeros(1,n-1); b = cumprod([base,1],'reverse');
-            for i = 2:n
-                x(i-1)  = floor(index./b(i));
-                index = index - x(i-1).*b(i);
-            end
-        end
 
         function [a]    = group_perm_(a,label,j)
             % [a] = group_perm_(a,label)
@@ -1918,7 +1888,7 @@ classdef am_lib
                 % fprintf('%3i',a); fprintf('\n');
                 % for j = 2:ncounts
                     % update
-                    k = find(ind2bas_(j-1,mdigits)-ind2bas_(j-2,mdigits)>0);
+                    k = find(rebase_(j-1,mdigits)-rebase_(j-2,mdigits)>0);
                     % permute
                     t = narayana_perm_(a(S(k):E(k)));
                     % restart
@@ -2333,7 +2303,48 @@ classdef am_lib
         end
 
 
-        % interpolation
+        % spectral methods
+        
+        function c    = finite_difference_coefficients(x,n,algo)
+            % x = collocation points
+            % n = order of differentiation
+            % for example, 
+            %   x = [-2,0,1,2];
+            %   n = 3;
+            %
+            nxs = numel(x);
+            if nxs <= n; error('n is not bigger than the number of elements in x'); end
+            if nargin<3;algo=2; end
+            switch algo
+                case 1
+                    % explicit methodology
+                    % Obtained by taylor expanding at each stencil point and setting the sum of coefficients equal to 
+                    % all derivatives equal to zero, except to the those derivative for which the sum equals factorial(n).
+                    A = [x.^([1:nxs].'-1)]; B = zeros(nxs,1); B(n+1) = factorial(n); c = ( A \ B ).';
+                case 2
+                    % This algorithm is numerically more stable, based on the recursion formula in:
+                    % B. Fornberg, "Calculation of weights in finite difference formulas", SIAM Review 40 (1998), pp. 685-691.
+                    c1 = 1; c4 = x(1); C = zeros(nxs-1,n+1); C(1,1) = 1;
+                    for i=1:nxs-1
+                        i1 = i+1; mn = min(i,n); c2 = 1; c5 = c4; c4 = x(i1);
+                        for j=0:i-1
+                            j1 = j+1; c3 = x(i1) - x(j1); c2 = c2*c3;
+                            if j==i-1
+                                for s=mn:-1:1
+                                    s1 = s+1; C(i1,s1) = c1*(s*C(i1-1,s1-1) - c5*C(i1-1,s1))/c2;
+                                end
+                                C(i1,1) = -c1*c5*C(i1-1,1)/c2;
+                            end
+                            for s=mn:-1:1
+                                s1 = s+1; C(j1,s1) = (c4*C(j1,s1) - s*C(j1,s1-1))/c3;
+                            end
+                            C(j1,1) = c4*C(j1,1)/c3;
+                        end
+                        c1 = c2;
+                    end
+                    c = C(:,end).';
+            end
+        end
 
         function [fq] = fftinterp_(f,q,n,algo)
             % fourier interpolate f(k) at points q; f must be periodic over [0,1)
@@ -2449,7 +2460,10 @@ classdef am_lib
             end
             
         end
-
+        
+        
+        % linear interpolation
+        
         function y    = linspacen_(v1, v2, n)
             % linearly interpolate vectors
             n  = double(n); v1 = squeeze(v1); v2 = squeeze(v2);
@@ -2471,22 +2485,7 @@ classdef am_lib
             end
         end
         
-        function n = gcd_(n)
-            % operates on vector n = [n1,n2,n3 ...]
-            x=1; p=n;
-            while(size(n,2))>=2
-                p= n(:,size(n,2)-1:size(n,2));
-                n=n(1,1:size(n,2)-2);
-                x=1;
-                while(x~=0)
-                    x= max(p)-min(p);
-                    p = [x,min(p)];
-                end    
-                n = [n,max(p)];
-                p = [];
-            end
-        end
-        
+
         
         
     end
