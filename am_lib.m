@@ -299,6 +299,35 @@ classdef am_lib
         
         % vectorization
         
+        function X = outer_(A,B,op) % Define outer operations (generalizes outer product to any operation).
+            X = op(repmat(A,1,length(B)), repmat(B,length(A),1)); 
+        end
+
+        function [C] = osum_(A,B,i)
+            % define outer sum of two vector arrays
+            % 
+            % i = 1: add first dimension
+            %       A [ m,a,b,1,d,...]
+            %     + B [ p,a,b,c,1,...]
+            %   ` = C [(m,p),a,b,c,d,...]
+            %
+            % i = 2: add second dimension
+            %       A [m,n]
+            %     + B [m,p]
+            %     = C [m,(n,p)]
+            %
+            
+            n=size(A); m=size(B);
+            
+            if     i == 2
+                C = reshape(A,n(1),n(2),1) + reshape(B,m(1),1,m(2));
+                C = reshape(C,n(1),n(2)*m(2));
+            elseif i == 1
+                C = reshape(A,[1,n(1),n(2:end)]) + reshape(B,[m(1),1,m(2:end)]);
+                C = reshape(C,[n(1)*m(1),max([n(2:end);m(2:end)])]);
+            end
+        end
+        
         function [c] = if_(L,a,b)
             if L
                 c = a;
@@ -419,31 +448,6 @@ classdef am_lib
             end            
         end
         
-        function [C] = osum_(A,B,i)
-            % define outer sum of two vector arrays
-            % 
-            % i = 1: add first dimension
-            %       A [ m,a,b,1,d,...]
-            %     + B [ p,a,b,c,1,...]
-            %   ` = C [(m,p),a,b,c,d,...]
-            %
-            % i = 2: add second dimension
-            %       A [m,n]
-            %     + B [m,p]
-            %     = C [m,(n,p)]
-            %
-            
-            n=size(A); m=size(B);
-            
-            if     i == 2
-                C = reshape(A,n(1),n(2),1) + reshape(B,m(1),1,m(2));
-                C = reshape(C,n(1),n(2)*m(2));
-            elseif i == 1
-                C = reshape(A,[1,n(1),n(2:end)]) + reshape(B,[m(1),1,m(2:end)]);
-                C = reshape(C,[n(1)*m(1),max([n(2:end);m(2:end)])]);
-            end
-        end
-
         function [C] = ssum_(A)
            % sums over the third dimension of a symmetry tensor because sum(A,3) does not currently exist in matlab
            [l,m,n] = size(A); C = sym(zeros(l,m)); for i = 1:n; C = C + A(:,:,i); end
@@ -890,53 +894,296 @@ classdef am_lib
         
         % special mathematical functions 
         
-        function [y] = lorentz_(x)
-            % define gaussian function 
-            y = 1./(pi*(x.^2+1)); 
-        end
-
-        function [y] = gauss_(x)
-            y = exp(-abs(x).^2)./sqrt(pi);
-        end
-
-        function [y] = delta_(x)
-            % define tiny, kronecker delta, and heavside
-            y = logical(abs(x)<am_lib.tiny); 
-        end
-
-        function [y] = heaviside_(x)
-            y = logical(x>0);
-        end
-                
-        function [y] = pvoigt_(x,f)
-            % amplitude normalized
-            y = sqrt(pi) .* (1-f) .* am_lib.gauss_(x./sqrt(2*log(2))) + f .* am_lib.lorentz_(x) .* pi;
-        end
-        
-        function [y] = sinc_(x)
+        function [y] = sinc_(x) % sinc function
             y = sin(x)./x; y(x==0) = 1;
         end
         
-        function [y] = expsum_(x,N)
-            %  \sum_{n=0}^{N-1} exp( i n x )
-            %      = (1 - exp(i*Nx))/(1-exp(i*x)) ...
-            %      = sin(1/2*N*x)/sin(1/2*x) * exp(i*x*(N-1)/2)
-            if N > 1E8
-                y = 1./(1-exp(1i*x));
-            else
+        function [y] = expsum_(x,N) % sum_{n=0}^{N} exp(i n x)
+            if N < 1E8 % finite
                 y = (1 - exp(1i*N*x))./(1-exp(1i*x)); y(x==0)=1;
+            else
+                y = 1./(1-exp(1i*x));
             end
         end
         
-        function [w] = tukeyw_(n,r)
+        function [y] = heaviside_(x) % heaviside function
+            y = logical(x>0);
+        end
+                
+        function [y] = lorentz_(x) % lorentz peak function
+            y = 1./(pi*(x.^2+1)); 
+        end
+
+        function [y] = gauss_(x) % gaussian normal distribution peak function
+            y = exp(-abs(x).^2)./sqrt(pi);
+        end
+
+        function [y] = delta_(x) % kronecker delta
+            y = logical(abs(x)<am_lib.tiny); 
+        end
+
+        function [y] = pvoigt_(x,f) % pseudovoigt peak function
+            y = sqrt(pi) .* (1-f) .* am_lib.gauss_(x./sqrt(2*log(2))) + f .* am_lib.lorentz_(x) .* pi;
+        end
+        
+        function [w] = tukeyw_(n,r) % tukey window
             if nargin == 1; r = 0.5; end
             t = linspace(0,1,n)'; per = r/2; tl = floor(per*(n-1))+1; th = n-tl+1;
             w = [ ((1+cos(pi/per*(t(1:tl) - per)))/2);  ones(th-tl-1,1); ((1+cos(pi/per*(t(th:end) - 1 + per)))/2)];
         end
         
-        function [w] = gaussw_(n,r)
-            % [w] = gaussw_(n,r)
+        function [w] = gaussw_(n,r) % gaussian window
             N = n-1; n = (0:N)'-N/2; w = exp(-(1/2)*(r*n/(N/2)).^2);
+        end
+        
+        
+        function [x] = canonicalr_(n) % roots of canonical all-one polynomial
+           x(:,1) = zeros(n,1);
+        end
+        
+        function [x,D,w] = clenshawcurtisr_(n) % Clenshaw-Curtis collocation [-1,+1]
+            if     n==1; w=2; x=0;
+            elseif n==2; w=[1;1]; x=[-1;1];
+            else
+                N=n-1; c=zeros(n,2);
+                c(1:2:n,1)=(2./[1 1-(2:2:N).^2 ])'; c(2,2)=1;
+                f=real(ifft([c(1:n,:);c(N:-1:2,:)]));
+                w=2*([f(1,1); 2*f(2:N,1); f(n,1)])/2;
+                x=N*f(n:-1:1,2);
+            end
+            D = am_lib.get_differentiation_matrix(x);
+        end
+        
+        function [x,D,w] = chebyshevTr_(n,flag) % roots of Chebyshev T (1st kind) (-1,+1)
+            if nargin<2; flag=''; end
+            f_ = @(n) -cos(pi*(2*[1:n]-1)/(2*n)).';
+            if contains(flag,'edge')
+                n=n-2; x(:,1)=[-1;f_(n);1]; 
+            else
+                x(:,1)=f_(n); 
+            end
+            if nargout < 2; return; end
+            D = am_lib.get_differentiation_matrix(x); D = cat(3,D,D^2);
+            if nargout < 3; return; end
+            w(:,1) = am_lib.get_integration_weights(x);
+        end
+        
+        function [x,D,w] = chebyshevUr_(n,flag) % roots of Chebyshev U (2nd kind) [-1,+1] 
+            if nargin<2; flag=''; end
+            f_ = @(n) -cos(pi*[1:n]/(n+1)).';
+            if contains(flag,'edge')
+                n=n-2; x(:,1)=[-1;f_(n);1]; 
+            else
+                x(:,1)=f_(n); 
+            end
+            if nargout < 2; return; end
+            D = am_lib.get_differentiation_matrix(x); D = cat(3,D,D^2);
+            if nargout < 3; return; end
+            w(:,1) = am_lib.get_integration_weights(x);
+        end
+        
+        function [x,D,w] = legendrer_(n) % roots of Legendre [-1,+1] 
+            % Integrates functions between [-1,+1] without integration weight function:
+            %   _
+            %  /   + 1              __ n
+            %  |       f(x) dx  =  \      F  w
+            % _/   - 1             /__ i   i  i
+            %
+            % asciiTeX "\int_{-1}^{+1} f(x) dx = \sum_i^n  F_i w_i"
+
+            % A. N. Lowan, N. Davids, and A. Levenson, Bulletin of the American Mathematical Society 48, 739 (1942).
+            A = (1:n-1)./sqrt(4*(1:n-1).^2-1); J = diag(A,-1)+diag(A,1); [V,x] = eig(J,'vector'); [x,fwd]=sort(x(:));
+            if nargout < 2; return; end
+            D = am_lib.get_differentiation_matrix(x); D = cat(3,D,D^2);
+            if nargout < 3; return; end
+            w(:,1) = 2*V(1,fwd)'.^2;
+        end
+        
+        function [x,D,w] = laguerrer_(n,flag) % roots of Laguerre [0,+Inf]
+            % Integrates functions between [0,+Inf] weighed by exp(-x):
+            %   _
+            %  /  oo   - x              __
+            %  |     e     f(x) dx  =  \      F  . w
+            % _/  0                    /__ i   i    i
+            % 
+            % asciiTeX "\int_0^\infty e^{-x} f(x) dx = \sum_i  F_i . w_i"
+            
+            if nargin<2; flag=''; end
+            J_ = @(n) diag(1:2:2*n-1)-diag(1:n-1,1)-diag(1:n-1,-1);
+            if contains(flag,'edge')
+                n=n-1; [V,D]=eig(J_(n),'vector'); [x,fwd]=sort(D(:)); x=[0;x];
+            else
+                       [V,D]=eig(J_(n),'vector'); [x,fwd]=sort(D(:));
+            end
+            if nargout < 2; return; end
+            alpha = exp(-x/2); m = 2; % order of differentiation
+            beta  = (-0.5).^[1:m].'*ones(1,numel(x));
+            D = am_lib.get_differentiation_matrix(x, alpha, beta);
+            if nargout < 3; return; end
+            w(:,1) = V(1,fwd).^2;
+            if contains(flag,'edge')
+                w = [0;w];
+            end
+        end
+        
+        function [x,D,w] = hermiter_(n) % roots of Hermite polynomial (harmonic oscilator solution) [-Inf,+Inf] 
+            % Integrates functions between [-Inf,+Inf] weighed by exp(-x^2):
+            %   _            2
+            %  /  oo      - x               __ n
+            %  |        e      f(x) dx  =  \      F  . w
+            % _/   - oo                    /__ i   i    i
+            % 
+            %  asciiTeX "\int_{-\infty}^{\infty} e^{-x^2} f(x) dx = \sum_i^n  F_i . w_i"
+
+            % R. E. Greenwood and J. J. Miller, Bulletin of the American Mathematical Society 54, 765 (1948).
+            % George Papazafeiropoulos
+            A = sqrt((1:n-1)/2); J = diag(A,1)+diag(A,-1); [V,x]=eig(J,'vector'); [x,fwd]=sort(x(:));
+            if nargout < 2; return; end
+            alpha = exp(-x.^2/2); beta = [ones(size(x'));-x']; m = 2; % order of differentiation
+            for l = 3:m+1; beta(l,:) = -x'.*beta(l-1,:)-(l-2)*beta(l-2,:); end; beta(1,:) = [];
+            D = am_lib.get_differentiation_matrix(x, alpha, beta);
+            if nargout < 3; return; end
+            w = sqrt(pi)*V(1,fwd)'.^2;
+        end
+
+        function [x,D,w] = fourierr_(n) % roots of fourier function 
+            x(1:n,1) = [0:(n-1)]/n;
+            if nargout < 2; return; end
+            D = get_fourier_differentiation_matrix(n);
+            if nargout < 3; return; end
+            w(1:n,1) = 1/n;
+            function [D] = get_fourier_differentiation_matrix(n)
+                re = [0,0.5*(-1).^(1:n-1).*cot((1:n-1)*pi/n)]; 
+                im = (-1).^(1:n)*sqrt(-1)/2;
+                D  = real(2*pi*toeplitz(re+im,-re+im));
+            end
+        end
+
+        function [D] = get_differentiation_matrix(varargin) 
+            % get_differentiation_matrix(x)
+            % get_differentiation_matrix(x,order)
+            % get_differentiation_matrix(x,alpha,beta)
+            
+            % select inputs
+            switch numel(varargin)
+                case 1; x = varargin{1}(:);
+                case 2; x = varargin{1}(:); N = numel(x); alpha = ones(N,1);      M = varargin{2}; B = zeros(M,N);
+                case 3; x = varargin{1}(:); N = numel(x); alpha = varargin{2}(:); B = varargin{3}; M = size(B,1); 
+            end
+            
+            % select the algorithm
+            switch numel(varargin)
+                case 1
+                    % based on the function by Greg von Winckel
+                    % only first derivative is output
+                    x=sort(x(:));                       N=length(x); N1=N+1; N2=N*N;
+                    X=repmat(x,1,N);                    Xdiff=X-X'+eye(N);
+                    W=repmat(1./prod(Xdiff,2),1,N);     D=W./(W'.*Xdiff); 
+                    D(1:N1:N2)=1-sum(D);                D=-D';
+                case {2,3}
+                    % based on the function by Weideman and Reddy
+                    % all derivatives up to M-th is output, weight functions B can be utilized
+                        L = logical(eye(N));
+                       XX = x(:,ones(1,N)); DX = XX-XX'; DX(L) = ones(N,1);
+                        c = alpha.*prod(DX,2); C = c(:,ones(1,N)); C = C./C';
+                        Z = 1./DX; Z(L) = zeros(N,1); X = Z'; X(L) = [];
+                        X = reshape(X,N-1,N); Y = ones(N-1,N); DM = eye(N);
+
+                    for i = 1:M
+                        Y = cumsum([B(i,:); i*Y(1:N-1,:).*X]); 
+                        DM = i*Z.*(C.*repmat(diag(DM),1,N) - DM);  DM(L) = Y(N,:); 
+                        D(:,:,i) = DM;
+                    end
+            end
+        end
+  
+        function [w] = get_integration_weights(x)
+            % works only for polynomials integrating between -1 and 1
+            % Greg von Winckel
+            [x,fwd]=sort(x(:));
+            [xl,wl]=lgwt(numel(x)+4,min(x),max(x));
+            w(fwd)=lagrange(x,xl)*wl;
+            function [x,w,L]=lgwt(N,a,b)
+                N=N-1; N1=N+1; N2=N+2;
+                y1=cos((2*(0:N)'+1)*pi/(2*N+2)); y=y1; L=zeros(N1,N2); Lp=zeros(N1,N2); y0=2;
+                % Iterate until new points are uniformly within epsilon of old points
+                while max(abs(y-y0))>eps
+                    L(:,1)=1;    Lp(:,1)=0;
+                    L(:,2)=y;    Lp(:,2)=1;    
+                    for k=2:N1
+                        L(:,k+1)=( (2*k-1)*y.*L(:,k)-(k-1)*L(:,k-1) )/k;
+                    end
+                    Lp=(N2)*( L(:,N1)-y.*L(:,N2) )./(1-y.^2);
+                    y0=y;
+                    y=y0-L(:,N2)./Lp;
+                end
+                % Linear map from[-1,1] to [a,b]
+                x=(a*(1-y)+b*(1+y))/2;      
+                % Compute the weights
+                w=(b-a)./((1-y.^2).*Lp.^2)*(N2/N1)^2;
+            end
+            function L=lagrange(x,xl)
+                n=length(x); N=length(xl); x=x(:); X=repmat(x,1,n);
+                % Compute the weights
+                wg=1./prod(X-X'+eye(n),2); xdiff=repmat(xl.',n,1)-repmat(x,1,N);
+                % find all the points where the difference is zero
+                zerodex=(xdiff==0); 
+                % See eq. 3.1 in Ref (1)
+                lfun=prod(xdiff,1);
+                % kill zeros
+                xdiff(zerodex)=eps;
+                % Compute lebesgue function
+                L=diag(wg)*repmat(lfun,n,1)./xdiff;
+            end
+        end
+        
+        % integration
+
+        function [X,W] = simplex_quad_(N,vert)
+            % example: integrate (x+y+z).^2 over tetrahedron
+            % V=[1/sqrt(3) 0 0; -sqrt(3)/6,1/2,0;-sqrt(3)/6,-1/2,0;0 0 sqrt(6)/3];
+            % n = 3; V=eye(n+1,n); 
+            % [X,W]=simplex_quad_(n,V); 
+            % Q=W'*(X(:,1)+X(:,2)+X(:,3)).^2
+            % 
+            % % plot stuff
+            % figure(1);set(gcf,'color','w'); hold on;
+            % % plot points
+            % scatter3(X(:,1),X(:,2),X(:,3),'o');
+            % % plot convex hull
+            % scatter3(V(:,1),V(:,2),V(:,3),'.k');
+            % CH=convhull(V(:,1),V(:,2),V(:,3));
+            % h=trisurf(CH,V(:,1),V(:,2),V(:,3));
+            % h.FaceColor='k'; h.FaceAlpha=0.02;
+            % daspect([1 1 1]);
+            % hold off;
+
+            [m,n]=size(vert); Nn=N^n;
+            if n==1 % The 1-D simplex is only an interval
+                [q,w]=rquad(N,0); len=diff(vert);
+                X=vert(1)+len*q;  W=abs(len)*w;
+            else % Find quadrature rules for higher dimensional domains     
+                for k=1:n 
+                    [q{k},w{k}]=rquad(N,n-k);
+                end
+                [Q{1:n}]=ndgrid(q{:}); q=reshape(cat(n,Q{:}),Nn,n);
+                [W{1:n}]=ndgrid(w{:}); w=reshape(cat(n,W{:}),Nn,n);
+                map=eye(m); map(2:m,1)=-1; c=map*vert;
+                W=abs(det(c(2:m,:)))*prod(w,2);
+                qp=cumprod(q,2); e=ones(Nn,1);
+                X=[e [(1-q(:,1:n-1)),e].*[e,qp(:,1:n-2),qp(:,n)]]*c;
+            end
+            function [x,w]=rquad(N,k)
+                k1=k+1; k2=k+2; v=1:N;  nnk=2*v+k;
+                A=[k/k2 repmat(k^2,1,N)./(nnk.*(nnk+2))];
+                v=2:N; nnk=nnk(v);
+                B1=4*k1/(k2*k2*(k+3)); nk=v+k; nnk2=nnk.*nnk;
+                B=4*(v.*nk).^2./(nnk2.*nnk2-nnk2);
+                ab=[A' [(2^k1)/k1; B1; B']]; s=sqrt(ab(2:N,2));
+                [V,Y]=eig(diag(ab(1:N,1),0)+diag(s,-1)+diag(s,1));
+                [Y,I]=sort(diag(Y));    
+                x=(Y+1)/2; w=(1/2)^(k1)*ab(1,2)*V(1,I)'.^2;
+            end
         end
         
         
@@ -2303,7 +2550,7 @@ classdef am_lib
         end
 
 
-        % spectral methods
+        % differentiation, interpolation, and spectral methods
         
         function c    = finite_difference_coefficients(x,n,algo)
             % x = collocation points
@@ -2311,6 +2558,9 @@ classdef am_lib
             % for example, 
             %   x = [-2,0,1,2];
             %   n = 3;
+            % for centered space methods:
+            %   x = [-1,1]; % x is even
+            %   n = 1;
             %
             nxs = numel(x);
             if nxs <= n; error('n is not bigger than the number of elements in x'); end
@@ -2459,7 +2709,7 @@ classdef am_lib
                     [~,a,b]=unique(rnd_(c),'rows','stable'); a=a.'; b=b.';
             end
             
-        end
+        end          
         
         
         % linear interpolation
