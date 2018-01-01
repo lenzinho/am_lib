@@ -195,7 +195,110 @@ classdef am_lib
             end
         end
 
+        function     test()
 
+            z=[];
+            syms z; n = 50;
+
+            % [-1,+1]
+            F = {@(n) am_lib.chebyshevTr_(n,'edge'), ...
+                 @(n) am_lib.chebyshevUr_(n,'edge'), ...
+                 @(n) am_lib.legendrer_(n), ...
+                 @(n) am_lib.clenshawcurtisr_(n)};
+
+            f_ = @(x) x.^2; w_ = @(x) 1;
+            exact = double(int(f_(z).*w_(z),z,-1,+1));
+            dfdx_ = matlabFunction(diff(f_(z)));
+
+            label = {'Chebyshev T','Chebyshev U','Legendre','Clenshaw-Curtis'};
+            for i = 1:numel(F)
+                [x,D,w]= F{i}(n); D=D(:,:,1);
+                L(1) = exact-sum(f_(x).*w);
+                L(2) = max(abs(dfdx_(x)-D*f_(x)));
+                criteria = L<am_lib.tiny;
+                test_(all(criteria), sprintf('%s',label{i}), ...
+                                     sprintf('failed (%g)',L(~criteria)));
+            end
+
+            % [0,2*pi]
+            F = {@(n) am_lib.fourierr_(n)};
+
+            f_ = @(x) sin(12*pi*x); w_ = @(x) 1;
+            exact = double(int(f_(z).*w_(z),z,-1,+1));
+            dfdx_ = matlabFunction(diff(f_(z)));
+
+            label = {'Fourier'};
+            for i = 1:numel(F)
+                [x,D,w]= F{i}(n); D=D(:,:,1);
+                L(1) = exact-sum(f_(x).*w);
+                L(2) = max(abs(dfdx_(x)-D*f_(x)));
+                criteria = L<am_lib.tiny;
+                test_(all(criteria), sprintf('%s',label{i}), ...
+                                     sprintf('failed (%g)',L(~criteria)));
+            end
+
+            % [0,+Inf]
+            F = {@(n) am_lib.laguerrer_(n,'edge')};
+
+            f_ = @(x) exp(-3*x.^2); w_ = @(x) exp(-x);
+            exact = double(int(f_(z).*w_(z),z,0,Inf));
+            dfdx_ = matlabFunction(diff(f_(z)));
+
+            label = {'Laguerre'};
+            for i = 1:numel(F)
+                [x,D,w]= F{i}(n); D=D(:,:,1);
+                L(1) = exact-sum(f_(x).*w);
+                L(2) = max(abs(dfdx_(x)-D*f_(x)));
+                criteria = L<am_lib.tiny;
+                test_(all(criteria), sprintf('%s',label{i}), ...
+                                     sprintf('failed (%g)',L(~criteria)));
+            end
+
+            % [-Inf,+Inf]
+            F = {@(n) am_lib.hermiter_(n)};
+
+            f_ = @(x) exp(-3*x.^2); w_ = @(x) exp(-x.^2);
+            exact = double(int(f_(z).*w_(z),z,-Inf,Inf));
+            dfdx_ = matlabFunction(diff(f_(z)));
+
+            label = {'Hermite'};
+            for i = 1:numel(F)
+                [x,D,w]= F{i}(n); D=D(:,:,1);
+                L(1) = exact-sum(f_(x).*w);
+                L(2) = max(abs(dfdx_(x)-D*f_(x)));
+                criteria = L<am_lib.tiny;
+                test_(all(criteria), sprintf('%s',label{i}), ...
+                                     sprintf('failed (%g)',L(~criteria)));
+            end
+
+            % finite difference (with pbc)
+            n = 10*n; x = [0:n-1]/n; f_ = @(x) sin(2*pi*x);
+            label = {'Central Difference [-1, 0,+1]','Central Difference [-1,+1]   ','Forward Difference [ 0,+1,+2]','Backward Difference [-2,-1, 0]'};
+            q = {[-1,0,1],[-1,1],[0,1,2],[-2,-1,0]}; 
+            for i = 1:numel(q)
+                c = am_lib.get_differentiation_weights(q{i},1);
+                f    = f_(x);
+                dfdx = sum( c .* am_lib.circshift_(f,-q{i}), 2)./(x(2)-x(1));
+                dfdx_= matlabFunction(diff(f_(z))); % exact
+                
+                L(1) = max(abs(dfdx_(x)-dfdx(:).'));
+                criteria = L<am_lib.tiny;
+                test_(all(criteria), sprintf('%s',label{i}), ...
+                                     sprintf('failed (%g)',L(~criteria)));
+            end
+
+            plot(x,dfdx_(x),'.',x,dfdx,'-')
+            
+            function test_(logical,test_name,fail_msg)
+                if logical
+                    fprintf('      %s: pass\n',test_name);
+                else
+                    fprintf('      %s: %s\n',test_name,fail_msg);
+                end 
+            end
+        end
+
+        
         % numerical precision
         
         function [C] = mod_(A,tol)
@@ -299,7 +402,7 @@ classdef am_lib
         
         % vectorization
         
-        function X = outer_(A,B,op) % Define outer operations (generalizes outer product to any operation).
+        function X   = outer_(A,B,op) % Define outer operations (generalizes outer product to any operation).
             X = op(repmat(A,1,length(B)), repmat(B,length(A),1)); 
         end
 
@@ -325,6 +428,14 @@ classdef am_lib
             elseif i == 1
                 C = reshape(A,[1,n(1),n(2:end)]) + reshape(B,[m(1),1,m(2:end)]);
                 C = reshape(C,[n(1)*m(1),max([n(2:end);m(2:end)])]);
+            end
+        end
+        
+        function [C] = circshift_(A,B)
+            [a,b] = size(A); m = size(B,2);
+            C = zeros(a,b,m);
+            for i = 1:m
+                C(:,:,i) = circshift(A,B(:,i));
             end
         end
         
@@ -680,11 +791,30 @@ classdef am_lib
             T = sparse( A(:), B(:), ones(1,pd), pd, pd );
         end
 
-        function [yq] = average_matrix_1d(data,x,xq)
-            [~,i]=min(abs(permute(x,[3,1,2])-xq(:))); i = permute(i,[2,3,1]);
-            yq = accumarray(i(:),data(:),[],@sum).';
+        function [Dq]= hist_(varargin) % hist_(x,D,xq), hist_(x,y,D,xq,yq)
+            switch nargin
+                case 3 % hist_(x,D,xq)
+                    x = varargin{1}(:); 
+                    D = varargin{2}(:); 
+                    xq= varargin{3}(:); [m,n] = size(varargin{3});
+                    x = x.'; xq = xq.';
+                case 5 % hist_(x,y,D,xq,yq)
+                    x = varargin{1}(:); 
+                    y = varargin{2}(:); 
+                    D = varargin{3}(:); 
+                    xq= varargin{4}(:); 
+                    yq= varargin{5}(:); [m,n] = size(varargin{4});
+                    x = [x,y].'; xq = [xq,yq].';
+                otherwise
+                    error('invalid input');
+            end
+            % find index of closest xq point for each x
+            i = knnsearch(xq.',x.');
+            Dq = accumarray(i(:),D,[],@sum).';
             nvalues = sum(i(:)==[1:max(i(:))],1);
-            yq = yq./nvalues;
+            Dq = Dq./nvalues;
+            Dq(numel(Dq)+1:m*n) = NaN;
+            Dq = reshape(Dq,[m,n]);
         end
         
         
@@ -1059,7 +1189,52 @@ classdef am_lib
             end
         end
 
-        function [D] = get_differentiation_matrix(varargin) 
+        function [c,x]   = get_differentiation_weights(x,n)
+            % x = collocation points or number of collocation points
+            % n = order of differentiation
+            % for example, 
+            %   x = [-2,0,1,2];
+            %   n = 3;
+            % for centered space methods:
+            %   x = [-1,1]; % x is even
+            %   n = 1;
+            %
+            nxs = numel(x);
+            if nxs == 1; N = x; x = [0:(N-1)]-(N-1)/2; nxs = numel(x); end
+            if nxs <= n; error('n is not bigger than the number of elements in x'); end
+            algo = 1; 
+            switch algo
+                case 1
+                    % This algorithm is numerically more stable, based on the recursion formula in:
+                    % B. Fornberg, "Calculation of weights in finite difference formulas", SIAM Review 40 (1998), pp. 685-691.
+                    c1 = 1; c4 = x(1); C = zeros(nxs-1,n+1); C(1,1) = 1;
+                    for i=1:nxs-1
+                        i1 = i+1; mn = min(i,n); c2 = 1; c5 = c4; c4 = x(i1);
+                        for j=0:i-1
+                            j1 = j+1; c3 = x(i1) - x(j1); c2 = c2*c3;
+                            if j==i-1
+                                for s=mn:-1:1
+                                    s1 = s+1; C(i1,s1) = c1*(s*C(i1-1,s1-1) - c5*C(i1-1,s1))/c2;
+                                end
+                                C(i1,1) = -c1*c5*C(i1-1,1)/c2;
+                            end
+                            for s=mn:-1:1
+                                s1 = s+1; C(j1,s1) = (c4*C(j1,s1) - s*C(j1,s1-1))/c3;
+                            end
+                            C(j1,1) = c4*C(j1,1)/c3;
+                        end
+                        c1 = c2;
+                    end
+                    c = C(:,end).';
+                case 2
+                    % explicit methodology
+                    % Obtained by taylor expanding at each stencil point and setting the sum of coefficients equal to 
+                    % all derivatives equal to zero, except to the those derivative for which the sum equals factorial(n).
+                    A = [x.^([1:nxs].'-1)]; B = zeros(nxs,1); B(n+1) = factorial(n); c = ( A \ B ).';
+            end
+        end
+        
+        function [D]     = get_differentiation_matrix(varargin) 
             % get_differentiation_matrix(x)
             % get_differentiation_matrix(x,order)
             % get_differentiation_matrix(x,alpha,beta)
@@ -1097,7 +1272,7 @@ classdef am_lib
             end
         end
   
-        function [w] = get_integration_weights(x)
+        function [w]     = get_integration_weights(x)
             % works only for polynomials integrating between -1 and 1
             % Greg von Winckel
             [x,fwd]=sort(x(:));
@@ -1136,6 +1311,7 @@ classdef am_lib
                 L=diag(wg)*repmat(lfun,n,1)./xdiff;
             end
         end
+        
         
         % integration
 
@@ -1676,6 +1852,35 @@ classdef am_lib
             % confirm properties of new eigenvectors
 %             assert(unitaricity_(U)<am_lib.eps, 'U is not unitary.');
             assert(any(~abs(diag(U'*D*U)-E)<am_lib.eps), 'E is mismatched.');
+        end
+        
+        function [y] = tridiag( A, f )
+            %  Solve the  n x n  tridiagonal system for y:
+            %
+            %  [ a(1)  c(1)                                  ] [  y(1)  ]   [  f(1)  ]
+            %  [ b(2)  a(2)  c(2)                            ] [  y(2)  ]   [  f(2)  ]
+            %  [       b(3)  a(3)  c(3)                      ] [        ]   [        ]
+            %  [            ...   ...   ...                  ] [  ...   ] = [  ...   ]
+            %  [                    ...    ...    ...        ] [        ]   [        ]
+            %  [                        b(n-1) a(n-1) c(n-1) ] [ y(n-1) ]   [ f(n-1) ]
+            %  [                                 b(n)  a(n)  ] [  y(n)  ]   [  f(n)  ]
+            %
+            %  f must be a vector (row or column) of length n
+            %  a, b, c must be vectors of length n (note that b(1) and c(n) are not used)s
+            n = length(f);
+            % get tridiagonal vectores
+            a = diag(A); b = diag(A,-1); c = diag(A,+1);
+            % initialize loop
+            v = zeros(n,1); y = v; w = a(1); y(1) = f(1)/w;
+            % solve tridiagonal system of equations
+            for i=2:n
+                v(i-1) = c(i-1)/w;
+                w = a(i) - b(i)*v(i-1);
+                y(i) = ( f(i) - b(i)*y(i-1) )/w;
+            end
+            for j=n-1:-1:1
+               y(j) = y(j) - v(j)*y(j+1);
+            end
         end
         
         
@@ -2550,52 +2755,8 @@ classdef am_lib
         end
 
 
-        % differentiation, interpolation, and spectral methods
+        % interpolation
         
-        function c    = finite_difference_coefficients(x,n,algo)
-            % x = collocation points
-            % n = order of differentiation
-            % for example, 
-            %   x = [-2,0,1,2];
-            %   n = 3;
-            % for centered space methods:
-            %   x = [-1,1]; % x is even
-            %   n = 1;
-            %
-            nxs = numel(x);
-            if nxs <= n; error('n is not bigger than the number of elements in x'); end
-            if nargin<3;algo=2; end
-            switch algo
-                case 1
-                    % explicit methodology
-                    % Obtained by taylor expanding at each stencil point and setting the sum of coefficients equal to 
-                    % all derivatives equal to zero, except to the those derivative for which the sum equals factorial(n).
-                    A = [x.^([1:nxs].'-1)]; B = zeros(nxs,1); B(n+1) = factorial(n); c = ( A \ B ).';
-                case 2
-                    % This algorithm is numerically more stable, based on the recursion formula in:
-                    % B. Fornberg, "Calculation of weights in finite difference formulas", SIAM Review 40 (1998), pp. 685-691.
-                    c1 = 1; c4 = x(1); C = zeros(nxs-1,n+1); C(1,1) = 1;
-                    for i=1:nxs-1
-                        i1 = i+1; mn = min(i,n); c2 = 1; c5 = c4; c4 = x(i1);
-                        for j=0:i-1
-                            j1 = j+1; c3 = x(i1) - x(j1); c2 = c2*c3;
-                            if j==i-1
-                                for s=mn:-1:1
-                                    s1 = s+1; C(i1,s1) = c1*(s*C(i1-1,s1-1) - c5*C(i1-1,s1))/c2;
-                                end
-                                C(i1,1) = -c1*c5*C(i1-1,1)/c2;
-                            end
-                            for s=mn:-1:1
-                                s1 = s+1; C(j1,s1) = (c4*C(j1,s1) - s*C(j1,s1-1))/c3;
-                            end
-                            C(j1,1) = c4*C(j1,1)/c3;
-                        end
-                        c1 = c2;
-                    end
-                    c = C(:,end).';
-            end
-        end
-
         function [fq] = fftinterp_(f,q,n,algo)
             % fourier interpolate f(k) at points q; f must be periodic over [0,1)
             %
