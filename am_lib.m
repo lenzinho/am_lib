@@ -753,7 +753,7 @@ classdef am_lib
             C = (sum(cumsum(A~=0,2)==0,2)+1);
             C = C .* ~all(A==0,2);
         end
-       
+        
         function [A] = sum_(A,n,varargin)
             % sum over dimensions n: sum_(A,[2,3])
             for i = 1:numel(n)
@@ -850,6 +850,13 @@ classdef am_lib
             C = C( sortrowsc(rnd_(imag(A(:,C)),tol).',[1:size(A,1)]) ); 
         end                 
 
+        function [C] = findc_(A)
+            % define function to find the first nonzero value in each row of matrix A
+            % returns 0 for rows containing all zeros
+            C = sum(cumsum(A~=0,1)==0,1)+1;
+            C = C .* ~all(A==0,1);
+        end
+        
         function [I] = match_(A,B)
             % find the indicies I which permute column entries of A to match B
             % for example: A=[[1;4;3],[1;3;4],[3;1;4]]; B=[3;1;4]; X=match_(A,B); accessc_(A,X)-B
@@ -1024,7 +1031,49 @@ classdef am_lib
         
         % special mathematical functions 
         
-        function [y] = sinc_(x) % sinc function
+        function [Z] = zeros_(varargin)
+            n = numel([varargin{:}]);
+            if n == 1
+                Z = zeros(varargin{1},1);
+            else
+                Z = zeros(varargin{:});
+            end
+        end
+        
+        function [y] = rand_(varargin) % uniformly-distributed random number 
+            % uniformly distributed random number between 0 and 1
+            % Garcia p 347
+            seed = round(clock*flipud(cumprod([1 60 60 24 31 12].')));
+            y = am_lib.zeros_(varargin{:}); n = prod(varargin{:});
+            a = 7^5; c = 0; M = 2^31-1;
+            y(1) = mod(seed,M);
+            if n > 2; for i = 2:n
+                y(i) = mod(a*y(i-1)+c,M);
+            end; end
+            y = y./M;
+        end
+        
+        function [y] = rande_(varargin) % exponentially distributed random number with decay 1 
+            % exponentially distributed random number with decay 
+            % Garcia p 349
+            y = am_lib.rand_([varargin{:}]); y = -log(1-y);
+        end
+        
+        function [y] = randn_(varargin) % normally-distributed random number with std 1, mean 0 
+            % Box-Muller normally distributed number with std 1, mean 0
+            % Garcia p 349
+            % generate an even number of uniformly distributed random variables between 0 and 1
+            n = prod([varargin{:}]); y = am_lib.rand_(n+mod(n,2));
+            % apply box muller
+            a = sqrt(-2*log(y(1:2:end))); b = 2*pi*y(2:2:end);
+            y(1:2:end) = a.*sin(b); y(2:2:end) = a.*cos(b);
+            % reshape output variable
+            m = numel([varargin{:}]); 
+            if m==1; y = reshape(y(1:n),[varargin{1},1]);
+            else;    y = reshape(y(1:n),[varargin{:}]); end
+        end
+        
+        function [y] = sinc_(x) % sinc function 
             y = sin(x)./x; y(x==0) = 1;
         end
         
@@ -1058,16 +1107,22 @@ classdef am_lib
         
         function [w] = tukeyw_(n,r) % tukey window
             if nargin == 1; r = 0.5; end
-            t = linspace(0,1,n)'; per = r/2; tl = floor(per*(n-1))+1; th = n-tl+1;
-            w = [ ((1+cos(pi/per*(t(1:tl) - per)))/2);  ones(th-tl-1,1); ((1+cos(pi/per*(t(th:end) - 1 + per)))/2)];
+            if r <= 0 ; w = ones(1,n); elseif r >= 1; w = am_lib.hannw_(n); else
+                t = linspace(0,1,n)'; per = r/2; tl = floor(per*(n-1))+1; th = n-tl+1;
+                w = [ ((1+cos(pi/per*(t(1:tl) - per)))/2);  ones(th-tl-1,1); ((1+cos(pi/per*(t(th:end) - 1 + per)))/2)];
+            end
         end
+        
+        function [w] = hannw_(n)
+            w = 0.5-0.5*cos(2*pi*[0:n-1].'/(n-1));
+        end % hanning window
         
         function [w] = gaussw_(n,r) % gaussian window
             N = n-1; n = (0:N)'-N/2; w = exp(-(1/2)*(r*n/(N/2)).^2);
         end
         
         
-        function [x] = canonicalr_(n) % roots of canonical all-one polynomial
+        function [x]     = canonicalr_(n) % roots of canonical all-one polynomial
            x(:,1) = zeros(n,1);
         end
         
@@ -1754,6 +1809,17 @@ classdef am_lib
             F = sparse([],[],[], m, n);
             F(indep_rows, i_indep) = R(indep_rows, i_dep) \ R(indep_rows, i_indep);
             F(indep_rows, i_dep) = speye(length(i_dep));
+        end
+        
+        function [C] = cconv_(A,B)
+            n = size(A); m = size(B);
+            if all(n==m)
+                % convolution with pbc in Fourier Space
+                C = ifftn(fftn(A).*fftn(B));
+            else
+                % convolution by circlshift in real space
+                error('not yet implemented');
+            end
         end
         
         function [A] = force_hermiticity_(A)
@@ -2897,7 +2963,74 @@ classdef am_lib
         end
         
 
-        
+        % utilities
+        function [ha, pos] = subplot_(Nh, Nw, gap, marg_h, marg_w)
+
+        % tight_subplot creates "subplot" axes with adjustable gaps and margins
+        %
+        % [ha, pos] = tight_subplot(Nh, Nw, gap, marg_h, marg_w)
+        %
+        %   in:  Nh      number of axes in hight (vertical direction)
+        %        Nw      number of axes in width (horizontaldirection)
+        %        gap     gaps between the axes in normalized units (0...1)
+        %                   or [gap_h gap_w] for different gaps in height and width 
+        %        marg_h  margins in height in normalized units (0...1)
+        %                   or [lower upper] for different lower and upper margins 
+        %        marg_w  margins in width in normalized units (0...1)
+        %                   or [left right] for different left and right margins 
+        %
+        %  out:  ha     array of handles of the axes objects
+        %                   starting from upper left corner, going row-wise as in
+        %                   subplot
+        %        pos    positions of the axes objects
+        %
+        %  Example: ha = tight_subplot(3,2,[.01 .03],[.1 .01],[.01 .01])
+        %           for ii = 1:6; axes(ha(ii)); plot(randn(10,ii)); end
+        %           set(ha(1:4),'XTickLabel',''); set(ha,'YTickLabel','')
+
+        % Pekka Kumpulainen 21.5.2012   @tut.fi
+        % Tampere University of Technology / Automation Science and Engineering
+
+
+            if nargin<3; gap = .02; end
+            if nargin<4 || isempty(marg_h); marg_h = .05; end
+            if nargin<5; marg_w = .05; end
+
+            if numel(gap)==1; 
+                gap = [gap gap];
+            end
+            if numel(marg_w)==1; 
+                marg_w = [marg_w marg_w];
+            end
+            if numel(marg_h)==1; 
+                marg_h = [marg_h marg_h];
+            end
+
+            axh = (1-sum(marg_h)-(Nh-1)*gap(1))/Nh; 
+            axw = (1-sum(marg_w)-(Nw-1)*gap(2))/Nw;
+
+            py = 1-marg_h(2)-axh; 
+
+            % ha = zeros(Nh*Nw,1);
+            ii = 0;
+            for ih = 1:Nh
+                px = marg_w(1);
+
+                for ix = 1:Nw
+                    ii = ii+1;
+                    ha(ii) = axes('Units','normalized', ...
+                        'Position',[px py axw axh], ...
+                        'XTickLabel','', ...
+                        'YTickLabel','');
+                    px = px+axw+gap(2);
+                end
+                py = py-axh-gap(1);
+            end
+            if nargout > 1
+                pos = get(ha,'Position');
+            end
+            ha = ha(:);
+        end
         
     end
 
