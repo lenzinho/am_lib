@@ -272,16 +272,16 @@ classdef am_lib
             end
 
             % finite difference (with pbc)
-            n = 10*n; x = [0:n-1]/n; f_ = @(x) sin(2*pi*x);
+            n = 10*n; x = [0:n-1]'/n; f_ = @(x) sin(2*pi*x);
             label = {'Central Difference [-1, 0,+1]','Central Difference [-1,+1]   ','Forward Difference [ 0,+1,+2]','Backward Difference [-2,-1, 0]'};
             q = {[-1,0,1],[-1,1],[0,1,2],[-2,-1,0]}; 
             for i = 1:numel(q)
                 c = am_lib.get_differentiation_weights(q{i},1);
                 f    = f_(x);
-                dfdx = sum( c .* am_lib.circshift_(f,-q{i}), 2)./(x(2)-x(1));
+                dfdx = squeeze(am_lib.circshift_(f(:),-q{i})) *c(:) ./(x(2)-x(1));
                 dfdx_= matlabFunction(diff(f_(z))); % exact
                 
-                L(1) = max(abs(dfdx_(x)-dfdx(:).'));
+                L(1) = max(abs(dfdx_(x)-dfdx(:)));
                 criteria = L<am_lib.tiny;
                 test_(all(criteria), sprintf('%s',label{i}), ...
                                      sprintf('failed (%g)',L(~criteria)));
@@ -473,6 +473,17 @@ classdef am_lib
             for i = 1:n
                 d(i) = det(A(:,:,i));
             end
+        end
+        
+        function [d] = diag_(A)
+            n = size(A); m = min(n(1),n(2));
+            d = zeros(m,prod(n(3:end)));
+            for i = 1:m; d(i,:) = A(i,i,:); end
+            d = reshape(d,[m,n(3:end)]);
+        end
+        
+        function [T] = trace_(A)
+            T = sum(am_lib.diag_(A),1);
         end
         
         function [C] = mtimes_(varargin)
@@ -1231,7 +1242,7 @@ classdef am_lib
             w = sqrt(pi)*V(1,fwd)'.^2;
         end
 
-        function [x,D,w] = fourierr_(n) % roots of fourier function 
+        function [x,D,w] = fourierr_(n) % roots of fourier function [0,1) 
             x(1:n,1) = [0:(n-1)]/n;
             if nargout < 2; return; end
             D = get_fourier_differentiation_matrix(n);
@@ -1240,10 +1251,28 @@ classdef am_lib
             function [D] = get_fourier_differentiation_matrix(n)
                 re = [0,0.5*(-1).^(1:n-1).*cot((1:n-1)*pi/n)]; 
                 im = (-1).^(1:n)*sqrt(-1)/2;
-                D  = real(2*pi*toeplitz(re+im,-re+im));
+                D  = real(2*pi*toeplitz(re+im,-re+im)); 
+                % D = D./(2*pi); % use this if x = [0,1); if x = [0,2pi) comment it out.
             end
         end
-
+        
+        function [x,D,w] = cdiff_(n) % evenly spaced central difference [0,1)
+            x(1:n,1) = [0:n-1]/n;
+            if nargout < 2; return; end
+            % get first and second derivative
+            D = zeros(n,n,2);
+            for i = 1:2
+                v = [-1,0,1]; c = am_lib.get_differentiation_weights(v,1); m = ceil(numel(v)/2);
+                D(:,:,i) = toeplitz([c(m:-1:1),zeros(1,n-m)],[c(m:end),zeros(1,n-m)])*n.^(i);
+            end
+            % correct first derivative at boundaries (forward and backward difference)
+            D(1,1:2,1)=[-1,1]*n; D(end,end-1:end,1) = -[-1,1]*n;
+            % to do: need to correct second derivative at boundary some how...
+            warning('second derivative cdiff matrix has not been corrected at boundary');
+            if nargout < 3; return; end
+            w(1:n,1) = 1;
+        end        
+    
         function [c,x]   = get_differentiation_weights(x,n)
             % x = collocation points or number of collocation points
             % n = order of differentiation
@@ -1828,14 +1857,6 @@ classdef am_lib
         
         function [A] = force_symmetricity_(A)
             A = (A.'+A)/2;
-        end
-        
-        function [a] = trace_(A)
-            [m]=size(A,3);[n]=size(A,4);
-            a = zeros(m,n);
-            for i = 1:m; for j = 1:n
-                a(i,j) = trace(A(:,:,i,j));
-            end; end
         end
         
         function [U] = orth_(U,E)
@@ -2494,10 +2515,10 @@ classdef am_lib
             daspect([1 1 1])
         end       
 
-        function [cmap] = color_(n,palette)
+        function [cmap] = color_(n,flag)
             % color_(n,palette)
             
-            if nargin < 2; palette='spectral'; end
+            if nargin < 2; flag='spectral'; end
             %   
             brighten_ = @(x,alpha) x*alpha + (1-alpha);
             dim_ = @(x,beta) x*beta;
@@ -2506,7 +2527,11 @@ classdef am_lib
             set2 = brighten_([[228, 26, 28];[ 55, 126, 184]; [ 77, 175, 74];[ 255, 127, 0];[ 255, 237, 111]*.85;[ 166, 86, 40];[ 247, 129, 191];[ 153, 153, 153];[ 152, 78, 163]],0.9);
             set3 = dim_([[141, 211, 199];[ 255, 237, 111];[ 190, 186, 218];[ 251, 128, 114];[ 128, 177, 211];[ 253, 180, 98];[ 179, 222, 105];[ 188, 128, 189];[ 217, 217, 217];[ 204, 235, 197];[ 252, 205, 229];[ 255, 255, 179]],0.93);
             % interpolating function
-            map_ = @(n,cmap) interp1([0:(size(cmap,1)-1)]./(size(cmap,1)-1),cmap,linspace(0,1,n));
+            if contains(flag,'cyclic')
+                map_ = @(n,cmap) interp1([0:size(cmap,1)]./size(cmap,1),[cmap;cmap(1,:)],linspace(0,1,n));
+            else
+                map_ = @(n,cmap) interp1([0:size(cmap,1)-1]./(size(cmap,1)-1),cmap,linspace(0,1,n));
+            end
             % switch based on N
             switch n
                 case {1}
@@ -2518,7 +2543,9 @@ classdef am_lib
                 case {10, 11, 12}
                     cmap = set3(1:n,:)./255;
                 otherwise 
-                    switch palette
+                    switch flag
+                        case 'jet'
+                            cmap = jet(5);
                         case 'virdis'
                             cmap =[...
                             0.267004,0.004874,0.329415; 0.268510,0.009605,0.335427; 0.269944,0.014625,0.341379; 0.271305,0.019942,0.347269; 0.272594,0.025563,0.353093; ...
@@ -2691,10 +2718,11 @@ classdef am_lib
             C = (x(:).^[0:n])\y(:);
         end
         
-        function [y] = peval_(x,C)
+        function [y] = peval_(C,x)
             n = numel(C)-1;
             % evaluate least squares fit polynomial of degree n to data
             y = (x(:).^[0:n])*C(:);
+            y = reshape(y,size(x));
         end
         
         function [y] = pinterp_(x,x0,y0,n)
@@ -2707,6 +2735,20 @@ classdef am_lib
 
         
         % fft related
+        
+        
+        function [phi]  = arg_(cmplx) % argument (phase) of complex number 
+            phi = atan2(imag(cmplx),real(cmplx));
+        end 
+        
+        function [h]    = hilbert_(f) % hilbert transform
+            % Hilbert Transform is a 90 degree phase shift. Time domain to time domain.
+            % t = [0:(N-1)]'/N; dt = t(2)-t(1); % time signal
+            if any(abs(imag(f))>1E-8); error('hilbert only works on real-valued signals'); end
+            N = numel(f); v = [0:(N-1)]'-floor(N/2);
+            h = ifft(fftshift(sign(v(:))).*fft(f(:)))+f(:);
+            h = reshape(h,size(f));
+        end
         
         function [r,gr] = fft_(k,gk,flag)
             
@@ -2731,17 +2773,19 @@ classdef am_lib
             % f = [(x,y,z),x,y,z) -> [(dx,dy,dz),x,y,z)
             % curl of vector field
             
-            n = size(f); if n(1)~=3; error('curl_ requires (x,y,z) in first dimension'); end; n = n(2:4);
+            [m,n(1),n(2),n(3)] = size(f); if m~=2&&m~=3; error('curl_ requires (x,y) or (x,y,z) in first dimension'); end
 
             % generate Fourier mesh
             fftmesh = @(N) fftshift([0:(N-1)]'-floor(N/2)); 
             [r(1,:,:,:),r(2,:,:,:),r(3,:,:,:)]=meshgrid(fftmesh(n(1)),fftmesh(n(2)),fftmesh(n(3)));
 
             % compute curl
-            C = zeros([3,n]);
-            for i = 1:3; C(i,:,:,:) =  fftn(f(i,:,:,:)); end
-            C = cross( 1i*2*pi*r, C, 1);
-            for i = 1:3; C(i,:,:,:) = ifftn(C(i,:,:,:)); end
+            C = zeros([m,n]);
+            for i = 1:m; C(i,:,:,:) =  fftn(f(i,:,:,:)); end
+            C = cross( 2i*pi*r, C, 1);
+            for i = 1:m; C(i,:,:,:) = ifftn(C(i,:,:,:)); end
+            
+            if all(isreal(f(:))); C = real(C); end
         end
 
         function [G]    = grad_(f)
@@ -2752,51 +2796,61 @@ classdef am_lib
             n = size(f); 
             
             switch numel(n)
-                case 4 % vector field
-                    if n(1)~=3; error('curl_ requires (x,y,z) in first dimension'); end; n = n(2:4);
+                % vector field
+                % 2D [(x,y)  ,x,y,z]
+                % 3D [(x,y,z),x,y,z]
+                case 4
+                    
+                    m=n(1); n=n(2:4);                    
+                    if m~=2&&m~=3; error('grad_ requires (x,y) or (x,y,z) in first dimension'); end
 
                     % generate Fourier mesh
                     fftmesh = @(N) fftshift([0:(N-1)]'-floor(N/2)); 
                     [r(1,:,:,:),r(2,:,:,:),r(3,:,:,:)]=meshgrid(fftmesh(n(1)),fftmesh(n(2)),fftmesh(n(3)));
 
                     % compute gradient d/dx + d/dy + d/dz
-                    G = zeros([3,3,n]);
-                    for i = 1:3
-                       fi =  fftn(f(i,:,:,:));
-                    for j = 1:3
-                        G(i,j,:,:,:) = ifftn( dot( 1i*2*pi*r(j,:,:,:), fi, 1) );
-                    end
-                    end
-                case 3 % scalar field
+                    G = zeros([m,m,n]);
+                    for i = 1:m; fi = fftn(f(i,:,:,:));
+                    for j = 1:m; G(i,j,:,:,:) = ifftn( dot( 1i*2*pi*r(j,:,:,:), fi, 1) );
+                    end; end
+                
+                % scalar field
+                % 3D [(x,y,z),x,y,z]
+                case 3
+                    
                     % generate Fourier mesh
                     fftmesh = @(N) fftshift([0:(N-1)]'-floor(N/2)); 
                     [r(1,:,:,:),r(2,:,:,:),r(3,:,:,:)]=meshgrid(fftmesh(n(1)),fftmesh(n(2)),fftmesh(n(3)));
 
                     % compute gradient d/dx, d/dy, d/dz
                     G = zeros([1,3,n]); fi(1,:,:,:) = fftn(f);
-                    for j = 1:3
-                        G(1,j,:,:,:) = ifftn( dot( 1i*2*pi*r(j,:,:,:), fi(1,:,:,:), 1) );
+                    for j = 1:3; G(1,j,:,:,:) = ifftn( dot( 1i*2*pi*r(j,:,:,:), fi(1,:,:,:), 1) );
                     end
+                    
                 otherwise
                     error('invalid input size');
             end
+            
+            if all(isreal(f(:))); G = real(G); end
         end
         
         function [D]    = div_(f)
             % f = [(x,y,z),x,y,z) -- > d/dx+d/dy+d/dz [x,y,z]
             % divergence of vector field (trace over tensor of vector field gradient)
             
-            n = size(f); if n(1)~=3; error('div_ requires (x,y,z) in first dimension'); end; n = n(2:4);
+            
+            [m,n(1),n(2),n(3)] = size(f); if m~=2&&m~=3; error('div_ requires (x,y) or (x,y,z) in first dimension'); end
 
             % generate Fourier mesh
             fftmesh = @(N) fftshift([0:(N-1)]'-floor(N/2)); 
             [r(1,:,:,:),r(2,:,:,:),r(3,:,:,:)]=meshgrid(fftmesh(n(1)),fftmesh(n(2)),fftmesh(n(3)));
 
             % compute gradient d/dx + d/dy + d/dz
-            D = zeros(n);
-            for i = 1:3
-                D = D + ifftn(dot( 1i*2*pi*r(i,:,:,:), fftn(f(i,:,:,:)), 1));
-            end
+            D = zeros([1,n]);
+            for i = 1:m; D = D + ifftn(dot( 1i*2*pi*r(i,:,:,:), fftn(f(i,:,:,:)), 1)); end
+            D = squeeze(D);
+            
+            if all(isreal(f(:))); D = real(D); end
         end
         
         function          plot_power_spectrum_(t,y,leg)
