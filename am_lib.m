@@ -401,6 +401,10 @@ classdef am_lib
         
         
         % vectorization
+
+        function [C] = flatten_(A)
+            C = A(:);
+        end
         
         function X   = outer_(A,B,op) % Define outer operations (generalizes outer product to any operation).
             X = op(repmat(A,1,length(B)), repmat(B,length(A),1)); 
@@ -432,11 +436,8 @@ classdef am_lib
         end
         
         function [C] = circshift_(A,B)
-            [a,b] = size(A); m = size(B,2);
-            C = zeros(a,b,m);
-            for i = 1:m
-                C(:,:,i) = circshift(A,B(:,i));
-            end
+            for i = 1:size(B,2); C{i} = circshift(A,B(:,i)); end
+            C = cat(ndims(C{1})+1,C{:});
         end
         
         function [c] = if_(L,a,b)
@@ -540,10 +541,6 @@ classdef am_lib
             
             if nargin == 2; applysqueeze = true; end
             if applysqueeze; C = squeeze(C); end
-        end
-
-        function [C] = flatten_(A)
-            C = A(:);
         end
 
         function [C] = kronsum_(A,B)
@@ -1288,7 +1285,7 @@ classdef am_lib
             w(1:n,1) = 1;
         end        
     
-        function [c,x]   = get_differentiation_weights(x,n)
+        function [c,x]   = get_differentiation_weights(x,n) 
             % x = collocation points or number of collocation points
             % n = order of differentiation
             % for example, 
@@ -1780,6 +1777,22 @@ classdef am_lib
         function x   = ndims_(A)
             % number of dimensions after squeezing
             x = max(sum(size(A)~=1),1);
+        end
+        
+        function [A,A_inv] = circulant_(v)
+            % get the circulant matrix corresponding to vector v and its inverse
+            switch 1 % algo
+                case 1; A = toeplitz(v(:),circshift(flipud(v(:)),1).');
+                case 2; n = numel(v); F = dftmtx(n); A = F*diag(fft(v))*F'./n;
+            end
+            % get inverse of A if requested
+            if nargout==2
+                switch 0 % algo
+                    case 0; A_inv = am_lib.am_lib.circulant_(ifft(1./fft(v))); % complete fft-based solution
+                    case 1; n = numel(v); F = dftmtx(n); A_inv = F'*1./(fft(v)*n)*F; % using FFT
+                    case 2; n = numel(v); F = dftmtx(n); A_inv = F*diag(1./diag(F'*A*F))*F'; % explicitly (diagonalize, flip, revert to original basis)
+                end
+            end
         end
         
         function [A] = frref_(A)
