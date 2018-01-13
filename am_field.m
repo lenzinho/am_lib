@@ -1,5 +1,10 @@
 classdef am_field
 
+    properties (Constant)
+        tiny = 1E-8; 
+        mu0  = 1; % vacuum permeability
+    end
+    
     properties
         T = []; % type (scalar/vector)
         d = []; % dimensions (2 or 3)
@@ -56,6 +61,34 @@ classdef am_field
             
             figure(1); plot_jacobian(F);
             figure(2); plot_hessian(F);
+            
+        end
+        
+        function F = demo_biot_savart()
+            
+            import am_field.*
+            
+            F   = define_field([2,2,2].^[5,5,5],[1,1,1],{'chebyshev','chebyshev','chebyshev'});
+            F.R = get_collocation_points(F);
+
+            D_ = @(N)      sparse([1:N],1+[1:N],1,N,N+1)-sparse([1:N],[1:N],1,N,N+1); % Define forward-difference and forward-mean transforms.
+            M_ = @(N) 0.5*(sparse([1:N],1+[1:N],1,N,N+1)+sparse([1:N],[1:N],1,N,N+1));
+
+            I_ = {@(d,th,M) [d*sin(2*pi*th) ,d*cos(2*pi*th),zeros(M+1,1)]; % Define a library of current paths: circle, solenoid, and straight wire.
+                  @(d,th,M) [d*sin(20*pi*th),d*cos(20*pi*th),linspace(min(F.R(3,:)),max(F.R(3,:)),M+1)'];
+                  @(d,th,M) [zeros(M+1,1),zeros(M+1,1),mpgrid(M+1)];};
+
+            iI = 1; r = 0.5; M = 500; th = [0:M]'/M; % Select and construct a current path.
+            dI = (D_(M)*I_{iI}(r,th,M)).'; 
+             I = (M_(M)*I_{iI}(r,th,M)).';
+
+            F.F = am_field.get_vector_potential(F.R,dI,I); % get magnetic vector potential 
+            F = F.get_derivatives(); % compute derivatives
+
+            subplot(1,2,1); F.plot_vector_field('F'); axis tight; title('vector potential A'); % plot magnetic vector potential
+            line(I(1,:),I(2,:),I(3,:),'linewidth',2,'color',[1 1 1]*0.5); % draw wire
+            subplot(1,2,2); F.plot_vector_field('C'); axis tight; title('magnetic field B'); % plot magnetic field (curl of vector potential)
+            line(I(1,:),I(2,:),I(3,:),'linewidth',2,'color',[1 1 1]*0.5); % draw wire
             
         end
 
@@ -184,6 +217,10 @@ classdef am_field
         function [D] = get_divergence(F)
             D = am_lib.trace_(F.J);
         end
+        
+        function [D] = get_laplacian(F)
+            D = am_lib.trace_(F.H);
+        end
 
         function [C] = get_curl(F)
             C = cat(1, F.J(3,2,:,:,:)-F.J(2,3,:,:,:), ...
@@ -274,6 +311,29 @@ classdef am_field
             end
         end
         
+        function [h] = plot_vector_field(F,field)
+            figure(1); set(gcf,'color','w');
+            quiver3(F.R(1,:),F.R(2,:),F.R(3,:),...
+                    F.(field)(1,:),F.(field)(2,:),F.(field)(3,:),'AutoScaleFactor',6,'ShowArrowHead','off','linewidth',0.5);
+            % line(I(1,:),I(2,:),I(3,:),'linewidth',2,'color',[1 1 1]*0.5); axis([-1 +1 -1 +1 -1 +1]);
+            streamslice(squeeze(F.R(2,:,:,:)),squeeze(F.R(1,:,:,:)),squeeze(F.R(3,:,:,:)),...
+                        squeeze(F.(field)(2,:,:,:)),squeeze(F.(field)(1,:,:,:)),squeeze(F.(field)(3,:,:,:)),...
+                        [min(F.R(2,:))],[min(F.R(1,:))],[min(F.R(2,:))]);
+            set(gca,'DataAspectRatio',[1,1,1],'CameraPosition',[2,1,1],'Box','on');
+        end
+        
+    end
+    
+    % electricity/magnetism
+    
+    methods (Static)
+        
+        function [A] = get_vector_potential(R,dI,I)
+            % get the magnetic vector potential A [3,x,y,z] at positons R [x,y,z] given current flow dI [3,(x,y,z)] at positions I [3,(x,y,z)]
+            I = reshape(I,3,[]); dI = reshape(dI,3,[]); M = size(I,2);
+            if size(I,2)~=size(dI,2); error('dI and I dimension mismatch'); end
+            A = am_field.mu0/(4*pi)*sum(reshape(dI,3,1,1,1,M)./(am_field.tiny+am_lib.normc_(R-reshape(I,3,1,1,1,M))),5);
+        end
         
     end
 end
