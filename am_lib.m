@@ -1277,10 +1277,19 @@ classdef am_lib
                 [c,v] = am_lib.get_differentiation_weights([-1,0,1],i); nvs = numel(v); m = ceil(nvs/2);
                 D(:,:,i) = toeplitz([c(m:-1:1),zeros(1,n-m)],[c(m:end),zeros(1,n-m)])*n.^(i);
             end
-            % correct first derivative at boundaries (forward and backward difference)
-            % D(1,1:2,1)=[-1,1]*n; D(end,end-1:end,1) = -[-1,1]*n;
-            % to do: need to correct second derivative at boundary some how...
-            % warning('second derivative cdiff matrix has not been corrected at boundary');
+            if nargout < 3; return; end
+            w(1:n,1) = 1;
+        end        
+            
+        function [x,D,w] = pdiff_(n) % evenly spaced  periodic central difference [0,1)
+            x(1:n,1) = [0:n-1]/n;
+            if nargout < 2; return; end
+            % get first and second derivative
+            D = zeros(n,n,2);
+            for i = 1:2
+                [c,v] = am_lib.get_differentiation_weights([-1,0,1],i); nvs = numel(v); m = ceil(nvs/2);
+                D(:,:,i) = am_lib.circulant_(circshift([c,zeros(1,n-nvs)],m-nvs))*n.^(i);
+            end
             if nargout < 3; return; end
             w(1:n,1) = 1;
         end        
