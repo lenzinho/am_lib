@@ -95,6 +95,36 @@ classdef am_field
             
         end
 
+        function F = demo_hilliard_cahn()
+            
+            import am_field.* 
+
+            % F = am_field.define_field([2,2].^[6,6],[1,1],{'chebyshev','chebyshev'}); % initialize field
+            F = am_field.define_field([2,2].^[6,6],[1,1],{'pdiff','pdiff'}); % initialize field
+            % F = am_field.define_field([2,2].^[6,6],[1,1],{'fourier','fourier'}); % initialize field
+
+            M = 100000; dt = 0.001; % Define number of time steps and step size 
+
+            g = 0.02; % Set coefficients: g is domain width.
+
+            syms x; V_ = @(x) (x.^2-1).^2/4; % Define the potential landscape and its functional.
+            f_ = matlabFunction(diff(V_(x),x));
+
+            [~,L] = get_flattened_differentiation_matrices(F); L2 = L^2; % Get laplacian and laplacian squared.
+
+            N = prod(F.n); F.F = rand([1,F.n]); F.F = 4*(F.F-mean(F.F(:))); % Initialize random scalar field
+            for i = [1:M]
+%                 F.F(1:prod(F.n)) = F.F(:) + dt*L*( f_(F.F(:))-g^2*L*F.F(:) ); % Step forward using Euler forward differences.
+                F.F(1:prod(F.n)) = (speye(N)+dt*g^2*L2) \ (F.F(:)+dt*L*f_(F.F(:))); % Semi-implicit for unknown landscape
+                if any(isnan(F.F(:))); warning('NaN'); break; end
+                if mod(i,1)==0
+                    F.plot_field('F');
+                    drawnow;
+                end
+            end
+            
+        end
+        
         function [F] = define_field(n,a,s)
             m = numel(n);
             if numel(s)~=m; error('s dimensions mismatch'); end
@@ -148,37 +178,6 @@ classdef am_field
             end
         end
         
-        function [D,L] = get_flattened_differentiation_matrices(F)
-            % checked with this code:
-            % % 2D difference matrix
-            % F = am_field.define_field([500,500],[1,1]*2*pi,{'chebyshev','chebyshev'});
-            % F.F = sum(sin(F.R),1); F = F.get_derivatives; 
-            % [D,L] = get_flattened_differentiation_matrices(F);
-            % L = reshape(L*F.F(:),F.n);
-            % max(abs(L(:)-F.L(:)))
-            % subplot(1,2,1); surf(L,'edgecolor','none'); view([0 0 1]); daspect([1 1 1]); axis tight;
-            % subplot(1,2,2); surf(squeeze(F.L),'edgecolor','none'); view([0 0 1]); daspect([1 1 1]); axis tight;
-            
-            for i = 1:F.d % loop over dimensions
-                switch F.s{i}
-                    case 'chebyshev'; [~,Q{i}] = am_lib.chebyshevUr_(F.n(i),'edge'); 
-                    case 'legendre';  [~,Q{i}] = am_lib.legendrer_(F.n(i));
-                    case 'fourier';   [~,Q{i}] = am_lib.fourierr_(F.n(i));
-                    case 'cdiff';     [~,Q{i}] = am_lib.cdiff_(F.n(i));
-                    otherwise; error('unknown s');
-                end 
-                Q{i} = Q{i}./reshape(F.a(i).^[1:2],1,1,2);
-            end
-            % note: although the specral differentiation matrix may be full, 
-            %       when spanning multiple dimensions it will become sparse.
-            % divergence
-            D = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
-            D = am_lib.get_flattened_divergence(D{:});
-            % laplacian
-            L = cellfun(@(x)sparse(x(:,:,2)),Q,'UniformOutput',false);
-            L = am_lib.get_flattened_divergence(L{:});
-        end
-        
         function [h] = plot_field(F,field)
             
             sl_ = @(field,i)   squeeze(F.(field)(i,:,:,:,:,:));
@@ -188,8 +187,9 @@ classdef am_field
                     switch F.d
                         case 2 % 2D
                             set(gcf,'color','w');
-                            h = surf(sl_('R',1), sl_('R',2), squeeze(F.F)); 
-                            h.EdgeColor= 'none'; h.LineWidth = 1; view([0 0 1]); daspect([1 1 1]); axis tight;
+                            h = surf(sl_('R',1), sl_('R',2), squeeze(F.(field))); 
+                            h.EdgeColor= 'none'; h.LineWidth = 1; 
+                            view([0 0 1]); daspect([1 1 1]); axis tight;
                         case 3 % 3D
                             error('not yet implemented');
                         otherwise; error('invalid field dimension');
@@ -281,6 +281,7 @@ classdef am_field
                     case 'legendre';  R{i} = am_lib.legendrer_(n(i));
                     case 'fourier';   R{i} = am_lib.fourierr_(n(i));
                     case 'cdiff';     R{i} = am_lib.cdiff_(n(i));
+                    case 'pdiff';     R{i} = am_lib.pdiff_(n(i));
                     otherwise; error('unknown s');
                 end
                 n(i) = 1; R{i} = repmat(permute(F.a(i)*R{i},circshift([1,2,3],i-1)),n);
@@ -307,6 +308,7 @@ classdef am_field
                     case 'legendre';  [~,D] = am_lib.legendrer_(F.n(i));
                     case 'fourier';   [~,D] = am_lib.fourierr_(F.n(i));
                     case 'cdiff';     [~,D] = am_lib.cdiff_(F.n(i));
+                    case 'pdiff';     [~,D] = am_lib.pdiff_(F.n(i));
                     otherwise; error('unknown s');
                 end 
                 D = D(:,:,1)/F.a(i); % keep only first derivative
@@ -332,6 +334,7 @@ classdef am_field
                     case 'legendre';  [~,D] = am_lib.legendrer_(F.n(i));
                     case 'fourier';   [~,D] = am_lib.fourierr_(F.n(i));
                     case 'cdiff';     [~,D] = am_lib.cdiff_(F.n(i));
+                    case 'pdiff';     [~,D] = am_lib.pdiff_(F.n(i));
                     otherwise; error('unknown s');
                 end 
                 D = D(:,:,1)/F.a(i); % keep only first derivative
@@ -358,6 +361,38 @@ classdef am_field
                        F.J(1,3,:,:,:)-F.J(3,1,:,:,:), ...
                        F.J(2,1,:,:,:)-F.J(1,2,:,:,:));
             C = permute(C,[1,3,4,5,6,7,8,2]);
+        end
+        
+        function [D,L] = get_flattened_differentiation_matrices(F)
+            % checked with this code:
+            % % 2D difference matrix
+            % F = am_field.define_field([500,500],[1,1]*2*pi,{'chebyshev','chebyshev'});
+            % F.F = sum(sin(F.R),1); F = F.get_derivatives; 
+            % [D,L] = get_flattened_differentiation_matrices(F);
+            % L = reshape(L*F.F(:),F.n);
+            % max(abs(L(:)-F.L(:)))
+            % subplot(1,2,1); surf(L,'edgecolor','none'); view([0 0 1]); daspect([1 1 1]); axis tight;
+            % subplot(1,2,2); surf(squeeze(F.L),'edgecolor','none'); view([0 0 1]); daspect([1 1 1]); axis tight;
+            
+            for i = 1:F.d % loop over dimensions
+                switch F.s{i}
+                    case 'chebyshev'; [~,Q{i}] = am_lib.chebyshevUr_(F.n(i),'edge'); 
+                    case 'legendre';  [~,Q{i}] = am_lib.legendrer_(F.n(i));
+                    case 'fourier';   [~,Q{i}] = am_lib.fourierr_(F.n(i));
+                    case 'cdiff';     [~,Q{i}] = am_lib.cdiff_(F.n(i));
+                    case 'pdiff';     [~,Q{i}] = am_lib.pdiff_(F.n(i));
+                    otherwise; error('unknown s');
+                end 
+                Q{i} = Q{i}./reshape(F.a(i).^[1:2],1,1,2);
+            end
+            % note: although the specral differentiation matrix may be full, 
+            %       when spanning multiple dimensions it will become sparse.
+            % divergence
+            D = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
+            D = am_lib.get_flattened_divergence(D{:});
+            % laplacian
+            L = cellfun(@(x)sparse(x(:,:,2)),Q,'UniformOutput',false);
+            L = am_lib.get_flattened_divergence(L{:});
         end
         
     end
