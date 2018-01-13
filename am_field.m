@@ -40,13 +40,13 @@ classdef am_field
 
     methods (Static)
         
-        function demo()
+        function F = demo()
             
             import am_field.*
             
-            F   = define_field([2,2].^[5,8],[1,1]*2*pi,{'fourier','fourier'});
+            F   = define_field([2,2].^[7,8],[2*pi,2*pi],{'cdiff','fourier'});
             F.R = get_collocation_points(F);
-            F.F = cat(1,sin(2*pi*F.R(1,:,:,:)), sin(2*pi*F.R(2,:,:,:))); 
+            F.F = cat(1,sin(F.R(1,:,:,:)), sin(F.R(2,:,:,:))); 
             F.F = sum(F.F,1);
             F.T = get_field_type(F);
             F.J = get_jacobian(F);
@@ -127,7 +127,7 @@ classdef am_field
                     case 'cdiff';     R{i} = am_lib.cdiff_(n(i));
                     otherwise; error('unknown s');
                 end
-                n(i) = 1; R{i} = repmat(permute(R{i},circshift([1,2,3],i-1)),n);
+                n(i) = 1; R{i} = repmat(permute(F.a(i)*R{i},circshift([1,2,3],i-1)),n);
             end
             R = permute(cat(4,R{:}),[4,1,2,3]);
         end
@@ -167,7 +167,7 @@ classdef am_field
                     case 'chebyshev'; [~,D] = am_lib.chebyshevUr_(F.n(i),'edge');
                     case 'legendre';  [~,D] = am_lib.legendrer_(F.n(i));
                     case 'fourier';   [~,D] = am_lib.fourierr_(F.n(i));
-                    case 'cdiff';     [~,D] = am_lib.cdiff_(F.n(i)); D = sparse(D);
+                    case 'cdiff';     [~,D] = am_lib.cdiff_(F.n(i));
                     otherwise; error('unknown s');
                 end 
                 D = D(:,:,1)/F.a(i); % keep only first derivative
