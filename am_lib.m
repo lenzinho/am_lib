@@ -1285,6 +1285,28 @@ classdef am_lib
             w(1:n,1) = 1;
         end        
     
+        function [D]     = get_flattened_divergence(Dx,Dy,Dz)
+            switch nargin
+                case 1
+                    D = Dx;
+                case 2
+                    n(1) = size(Dx,1); n(2) = size(Dy,1); 
+                    D = kron(eye(n(2)),Dx) + ... 
+                        kron(Dy,eye(n(1)));
+                case 3
+                    n(1) = size(Dx,1); n(2) = size(Dy,1); n(3) = size(Dz,1);
+                    D = kron(eye(n(3)),kron(eye(n(2)),Dx)) + ... 
+                        kron(eye(n(3)),kron(Dy,eye(n(1)))) + ...
+                        kron(Dz,kron(eye(n(2)),eye(n(1))));
+                otherwise
+                    error('not yet implemented');
+            end
+        end
+        
+        function [L]     = get_flattened_laplacian(varargin) 
+            L = am_lib.get_divergence_matrix(varargin{:})^2;
+        end
+
         function [c,x]   = get_differentiation_weights(x,n) 
             % x = collocation points or number of collocation points
             % n = order of differentiation
