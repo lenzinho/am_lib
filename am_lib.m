@@ -546,6 +546,17 @@ classdef am_lib
             C = A(:);
         end
 
+        function [C] = kronsum_(A,B)
+            % % only works for 2d matrices A and B
+            % [m,n]=size(A); [p,q]=size(B);
+            % C = repelem(A,p,q)+repmat(B,m,n);
+            
+            % works for all cases:
+            % define high dimensional kronecker self-sum: for i=[1:size(A,3)]; C(:,:,i)=kron(A(:,:,i),B(:,:,i)); end
+            C = reshape( permute(A,[4 1 5 2 3]) ...
+                       + permute(B,[1 4 2 5 3]), size(A,1)*size(B,1),[],size(A,3));
+        end
+        
         function [C] = kron_(A,B)
             % define high dimensional kronecker self-product: for i=[1:size(A,3)]; C(:,:,i)=kron(A(:,:,i),B(:,:,i)); end
             C = reshape( permute(A,[4 1 5 2 3]) ...
@@ -1039,7 +1050,7 @@ classdef am_lib
             fclose(fid);
         end
         
-        
+
         % special mathematical functions 
         
         function [Z] = zeros_(varargin)
@@ -1084,10 +1095,14 @@ classdef am_lib
             else;    y = reshape(y(1:n),[varargin{:}]); end
         end
         
+        function [p] = arg_(cmplx) % argument (phase) of complex number 
+            p = atan2(imag(cmplx),real(cmplx));
+        end 
+        
         function [y] = sinc_(x) % sinc function 
             y = sin(x)./x; y(x==0) = 1;
         end
-        
+  
         function [y] = expsum_(x,N) % sum_{n=0}^{N} exp(i n x)
             if N < 1E8 % finite
                 y = (1 - exp(1i*N*x))./(1-exp(1i*x)); y(x==0)=1;
@@ -1262,13 +1277,13 @@ classdef am_lib
             % get first and second derivative
             D = zeros(n,n,2);
             for i = 1:2
-                v = [-1,0,1]; c = am_lib.get_differentiation_weights(v,1); m = ceil(numel(v)/2);
+                [c,v] = am_lib.get_differentiation_weights([-1,0,1],i); nvs = numel(v); m = ceil(nvs/2);
                 D(:,:,i) = toeplitz([c(m:-1:1),zeros(1,n-m)],[c(m:end),zeros(1,n-m)])*n.^(i);
             end
             % correct first derivative at boundaries (forward and backward difference)
-            D(1,1:2,1)=[-1,1]*n; D(end,end-1:end,1) = -[-1,1]*n;
+            % D(1,1:2,1)=[-1,1]*n; D(end,end-1:end,1) = -[-1,1]*n;
             % to do: need to correct second derivative at boundary some how...
-            warning('second derivative cdiff matrix has not been corrected at boundary');
+            % warning('second derivative cdiff matrix has not been corrected at boundary');
             if nargout < 3; return; end
             w(1:n,1) = 1;
         end        
@@ -2734,12 +2749,7 @@ classdef am_lib
         end
 
         
-        % fft related
-        
-        
-        function [phi]  = arg_(cmplx) % argument (phase) of complex number 
-            phi = atan2(imag(cmplx),real(cmplx));
-        end 
+        % integral transforms related
         
         function [h]    = hilbert_(f) % hilbert transform
             % Hilbert Transform is a 90 degree phase shift. Time domain to time domain.
@@ -2748,6 +2758,46 @@ classdef am_lib
             N = numel(f); v = [0:(N-1)]'-floor(N/2);
             h = ifft(fftshift(sign(v(:))).*fft(f(:)))+f(:);
             h = reshape(h,size(f));
+        end
+        
+        function [G,f,t]= stft_(y,t,w_) % short-time fourier transform, y = signal, t = time vector, w_ = window function
+            % options for windows:
+            % 
+            %	*) w = 0.03; w_ = @(x) am_lib.gauss_(x./w)*w; % gaussian window for gabor
+            %   *) 
+            % 
+            % example:
+            % 
+            % N = 1001; t = [0:N-1]/N;
+            % y = chirp(t,100,1,400)+chirp(t,-100,1,200); % define signal
+            % w = 0.03; w_ = @(x) am_lib.gauss_(x./w)*w; % define window
+            % am_lib.stft_(y,t,w);
+            N  = numel(t);
+            fs = 1./(t(2)-t(1));% define sampling frequency
+            f  = fftshift(fs/N*([0:N-1]-ceil(N/2))); % define frequencies
+            G  = fft(w_(t.'-t).*y(:),[],1); % apply fft
+            [f,t] = ndgrid(f,t);
+            if nargout==0
+                surf(t,f,abs(G),'edgecolor','none'); view([0 0 1]);
+            end
+        end
+        
+        function [g]    = dct_(f) % discrete cosine transform
+            % Equivalent to this transform kernel:
+            % N = 1000;
+            % k = [0:(N-1)]'/N; r = [0:(N-1)]'-floor(N/2);
+            % K = cos(2*pi*r*k.'); % Define cosine transform kernel.
+            % f = K * g; % Evaluate transform.
+            g = real(fftshift(fft(f)));
+        end
+        
+        function [g]    = dst_(f) % discrete sine transform 
+            % Equivalent to this transform kernel:
+            % N = 1000;
+            % k = [0:(N-1)]'/N; r = [0:(N-1)]'-floor(N/2);
+            % K = sin(2*pi*r*k.'); % Define sine transform kernel.
+            % f = K * g; % Evaluate transform.
+            g = -imag(fftshift(fft(f)));
         end
         
         function [r,gr] = fft_(k,gk,flag)
@@ -2768,6 +2818,30 @@ classdef am_lib
                 otherwise; error('fft_: Unknown flag.');
             end
         end
+        
+        function          plot_power_spectrum_(t,y,leg)
+            import am_lib.*
+            % count number of scans
+            nys=size(y,2);
+            % apply fft
+            for i = 1:nys; [f(:,i),yf(:,i)] = fft_(t(:,i).',y(:,i).'); end
+            % plot results
+            figure(1); set(gcf,'color','w'); clf
+            a=arrayfun(@(i){t(:,i),y(:,i)},[1:nys],'UniformOutput',false);a=[a{:}];
+            axes('position',[0.1 0.1+0.5 0.85 0.35]); plot(a{:}); axis tight;
+            xlabel('t'); ylabel('g(t)');
+            a=arrayfun(@(i){1./f(:,i),abs(yf(:,i)).^2},[1:nys],'UniformOutput',false);a=[a{:}];
+            axes('position',[0.1 0.1 0.85 0.35]); loglog(a{:}); axis tight;
+            xlabel('1/f'); ylabel('abs( F[g(t)](f) )^2');
+            if nargin<3
+            legend(arrayfun(@(i){num2str(i)},[1:nys]),'location','southeast');
+            else
+            legend(leg,'location','southeast');
+            end
+        end
+
+
+        % vector calculous
         
         function [C]    = curl_(f)
             % f = [(x,y,z),x,y,z) -> [(dx,dy,dz),x,y,z)
@@ -2853,28 +2927,7 @@ classdef am_lib
             if all(isreal(f(:))); D = real(D); end
         end
         
-        function          plot_power_spectrum_(t,y,leg)
-            import am_lib.*
-            % count number of scans
-            nys=size(y,2);
-            % apply fft
-            for i = 1:nys; [f(:,i),yf(:,i)] = fft_(t(:,i).',y(:,i).'); end
-            % plot results
-            figure(1); set(gcf,'color','w'); clf
-            a=arrayfun(@(i){t(:,i),y(:,i)},[1:nys],'UniformOutput',false);a=[a{:}];
-            axes('position',[0.1 0.1+0.5 0.85 0.35]); plot(a{:}); axis tight;
-            xlabel('t'); ylabel('g(t)');
-            a=arrayfun(@(i){1./f(:,i),abs(yf(:,i)).^2},[1:nys],'UniformOutput',false);a=[a{:}];
-            axes('position',[0.1 0.1 0.85 0.35]); loglog(a{:}); axis tight;
-            xlabel('1/f'); ylabel('abs( F[g(t)](f) )^2');
-            if nargin<3
-            legend(arrayfun(@(i){num2str(i)},[1:nys]),'location','southeast');
-            else
-            legend(leg,'location','southeast');
-            end
-        end
-
-
+        
         % interpolation
         
         function [fq] = fftinterp_(f,q,n,algo)
