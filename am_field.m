@@ -178,6 +178,92 @@ classdef am_field
             end
         end
         
+        function [F] = solve_differential_equation(F,equation,x,solver,dt,M)
+            % examples
+            % F = am_field.define_field([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
+            % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
+            % F = F.solve_differential_equation('SW76',{0.1,1.0},'implicit',2,500);         % hexagons
+            % F = F.solve_differential_equation('SW76',{0.3,0.0},'implicit',2,500);         % finger prints
+            % F = F.solve_differential_equation('SW76',{0.8,1.85},'explicit',0.03,5000);    % maze
+            % F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000);
+            % F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'implicit',1,1000);
+            % F = F.solve_differential_equation('GL50',{@(x)(x^2-1)^2/4,1},'explicit',0.01,5000);
+            %
+            import am_field.*
+            
+            [~,L] = F.get_flattened_differentiation_matrices(); % Get laplacian.
+            
+            N=prod(F.n); % Simplify notation: get total number of grid points.
+
+			switch solver
+            case {'explicit','implicit','crank-nicolson'}
+            	if strcmp(solver,'explicit') || strcmp(solver,'crank-nicolson')
+	                % equations of the form F(n+1) = F(n) + dt * LHS
+                    switch equation
+                        case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
+                            LHSe_ = @(U,x) x{1}*U(:) - (L+speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=2;
+                        case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
+                            LHSe_ = @(U,x) x{1}*U(:) - (L+speye(N))^2*(L+x{3}.^2*speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=3;
+                        case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
+                            syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
+                            LHSe_ = @(U,x) L*( x{1}(U(:)) - x{2}*L*U(:) ); nargs=2;
+                        case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
+                            syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
+                            LHSe_ = @(U,x)   ( x{1}(U(:)) + x{2}*L*U(:) ); nargs=2;
+                        otherwise
+                            error('unknown propagator');
+                    end
+                end
+                if strcmp(solver,'implicit') || strcmp(solver,'crank-nicolson')
+                % equations of the form F(n+1) = (1 - dt*LHS)\F(n)
+                    switch equation
+                        case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
+                            LHSi_ = @(U,x) x{1}*speye(N) - (L+speye(N))^2 + x{2}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N); nargs=2;
+                        case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
+                            LHSi_ = @(U,x) x{1}*speye(N) - (L+speye(N))^2*(L+x{3}.^2*speye(N))^2 + x{2}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N); nargs=3;
+                        case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
+                            syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
+                            LHSi_ = @(U,x) L*( spdiags(x{1}(U(:)),0,N,N) - x{2}*L ); nargs=2;
+                        case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
+                            syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
+                            LHSi_ = @(U,x)   ( spdiags(x{1}(U(:)),0,N,N) + x{2}*L ); nargs=2;
+                        otherwise
+                            error('unknown propagator');
+                    end
+                end
+            otherwise
+                error('unknown solver');
+            end
+            
+            if ~iscell(x); x=num2cell(x); end % convert array to cells if necessary (cells allow passing functions)
+            if numel(x)~=nargs; error('incorrect number of parameters'); end % check parameters
+            if isempty(F.F); error('field has not been initialized'); end % check parameters
+
+            % Propagate in time 
+            switch solver
+                case 'explicit' % unstable for large steps
+                    for i = [1:M]
+                        F.F(1:N) = F.F(:) + dt*LHSe_(F.F,x);
+                        if any(isnan(F.F(:))); warning('NaN'); break; end
+                        if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
+                    end
+                case 'implicit' % more stable
+                    for i = [1:M]
+                        F.F(1:N) = (speye(N)-dt*LHSi_(F.F,x))\F.F(:);
+                        if any(isnan(F.F(:))); warning('NaN'); break; end
+                        if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
+                    end
+                case 'crank-nicolson'
+                    for i = [1:M]
+                        F.F(1:N) = ( (speye(N)-dt*LHSi_(F.F,x))\F.F(:) + F.F(:)+dt*LHSe_(F.F,x) )/2;
+                        if any(isnan(F.F(:))); warning('NaN'); break; end
+                        if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
+                    end
+                otherwise
+                    error('unknown solver');
+            end
+        end
+        
         function [h] = plot_field(F,field)
             
             sl_ = @(field,i)   squeeze(F.(field)(i,:,:,:,:,:));
