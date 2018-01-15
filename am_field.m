@@ -99,30 +99,9 @@ classdef am_field
             
             import am_field.* 
 
-            % F = am_field.define_field([2,2].^[6,6],[1,1],{'chebyshev','chebyshev'}); % initialize field
-            F = am_field.define_field([2,2].^[6,6],[1,1],{'pdiff','pdiff'}); % initialize field
-            % F = am_field.define_field([2,2].^[6,6],[1,1],{'fourier','fourier'}); % initialize field
-
-            M = 100000; dt = 0.001; % Define number of time steps and step size 
-
-            g = 0.02; % Set coefficients: g is domain width.
-
-            syms x; V_ = @(x) (x.^2-1).^2/4; % Define the potential landscape and its functional.
-            f_ = matlabFunction(diff(V_(x),x));
-
-            [~,L] = get_flattened_differentiation_matrices(F); L2 = L^2; % Get laplacian and laplacian squared.
-
-            N = prod(F.n); F.F = rand([1,F.n]); F.F = 4*(F.F-mean(F.F(:))); % Initialize random scalar field
-            for i = [1:M]
-%                 F.F(1:prod(F.n)) = F.F(:) + dt*L*( f_(F.F(:))-g^2*L*F.F(:) ); % Step forward using Euler forward differences.
-                F.F(1:prod(F.n)) = (speye(N)+dt*g^2*L2) \ (F.F(:)+dt*L*f_(F.F(:))); % Semi-implicit for unknown landscape
-                if any(isnan(F.F(:))); warning('NaN'); break; end
-                if mod(i,1)==0
-                    F.plot_field('F');
-                    drawnow;
-                end
-            end
-            
+            F = am_field.define_field([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize object
+            F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
+            F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000); % solve
         end
         
         function [F] = define_field(n,a,s)
@@ -134,7 +113,7 @@ classdef am_field
         
     end 
     
-    methods
+    methods 
 
         function [F] = extract_slice(F,i,j)
             % i = dimension extracting
@@ -402,11 +381,11 @@ classdef am_field
             for i = 1:F.d % loop over dimensions
                 n = F.n;
                 switch F.s{i}
-                    case 'chebyshev'; R{i} = am_lib.chebyshevUr_(n(i),'edge');
-                    case 'legendre';  R{i} = am_lib.legendrer_(n(i));
-                    case 'fourier';   R{i} = am_lib.fourierr_(n(i));
-                    case 'cdiff';     R{i} = am_lib.cdiff_(n(i));
-                    case 'pdiff';     R{i} = am_lib.pdiff_(n(i));
+                    case 'chebyshev'; R{i} = am_field.chebyshevUr_(n(i),'edge');
+                    case 'legendre';  R{i} = am_field.legendrer_(n(i));
+                    case 'fourier';   R{i} = am_field.fourierr_(n(i));
+                    case 'cdiff';     R{i} = am_field.cdiff_(n(i));
+                    case 'pdiff';     R{i} = am_field.pdiff_(n(i));
                     otherwise; error('unknown s');
                 end
                 n(i) = 1; R{i} = repmat(permute(F.a(i)*R{i},circshift([1,2,3],i-1)),n);
@@ -429,11 +408,11 @@ classdef am_field
             J = zeros([3,3,F.n]);
             for i = 1:F.d % loop over dimensions
                 switch F.s{i}
-                    case 'chebyshev'; [~,D] = am_lib.chebyshevUr_(F.n(i),'edge');
-                    case 'legendre';  [~,D] = am_lib.legendrer_(F.n(i));
-                    case 'fourier';   [~,D] = am_lib.fourierr_(F.n(i));
-                    case 'cdiff';     [~,D] = am_lib.cdiff_(F.n(i));
-                    case 'pdiff';     [~,D] = am_lib.pdiff_(F.n(i));
+                    case 'chebyshev'; [~,D] = am_field.chebyshevUr_(F.n(i),'edge');
+                    case 'legendre';  [~,D] = am_field.legendrer_(F.n(i));
+                    case 'fourier';   [~,D] = am_field.fourierr_(F.n(i));
+                    case 'cdiff';     [~,D] = am_field.cdiff_(F.n(i));
+                    case 'pdiff';     [~,D] = am_field.pdiff_(F.n(i));
                     otherwise; error('unknown s');
                 end 
                 D = D(:,:,1)/F.a(i); % keep only first derivative
@@ -455,11 +434,11 @@ classdef am_field
             H = zeros([3,3,F.n]);
             for i = 1:F.d % loop over dimensions
                 switch F.s{i}
-                    case 'chebyshev'; [~,D] = am_lib.chebyshevUr_(F.n(i),'edge');
-                    case 'legendre';  [~,D] = am_lib.legendrer_(F.n(i));
-                    case 'fourier';   [~,D] = am_lib.fourierr_(F.n(i));
-                    case 'cdiff';     [~,D] = am_lib.cdiff_(F.n(i));
-                    case 'pdiff';     [~,D] = am_lib.pdiff_(F.n(i));
+                    case 'chebyshev'; [~,D] = am_field.chebyshevUr_(F.n(i),'edge');
+                    case 'legendre';  [~,D] = am_field.legendrer_(F.n(i));
+                    case 'fourier';   [~,D] = am_field.fourierr_(F.n(i));
+                    case 'cdiff';     [~,D] = am_field.cdiff_(F.n(i));
+                    case 'pdiff';     [~,D] = am_field.pdiff_(F.n(i));
                     otherwise; error('unknown s');
                 end 
                 D = D(:,:,1)/F.a(i); % keep only first derivative
@@ -501,11 +480,11 @@ classdef am_field
             
             for i = 1:F.d % loop over dimensions
                 switch F.s{i}
-                    case 'chebyshev'; [~,Q{i}] = am_lib.chebyshevUr_(F.n(i),'edge'); 
-                    case 'legendre';  [~,Q{i}] = am_lib.legendrer_(F.n(i));
-                    case 'fourier';   [~,Q{i}] = am_lib.fourierr_(F.n(i));
-                    case 'cdiff';     [~,Q{i}] = am_lib.cdiff_(F.n(i));
-                    case 'pdiff';     [~,Q{i}] = am_lib.pdiff_(F.n(i));
+                    case 'chebyshev'; [~,Q{i}] = am_field.chebyshevUr_(F.n(i),'edge'); 
+                    case 'legendre';  [~,Q{i}] = am_field.legendrer_(F.n(i));
+                    case 'fourier';   [~,Q{i}] = am_field.fourierr_(F.n(i));
+                    case 'cdiff';     [~,Q{i}] = am_field.cdiff_(F.n(i));
+                    case 'pdiff';     [~,Q{i}] = am_field.pdiff_(F.n(i));
                     otherwise; error('unknown s');
                 end 
                 Q{i} = Q{i}./reshape(F.a(i).^[1:2],1,1,2);
@@ -514,10 +493,308 @@ classdef am_field
             %       when spanning multiple dimensions it will become sparse.
             % divergence
             D = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
-            D = am_lib.get_flattened_divergence(D{:});
+            D = am_field.get_flattened_divergence(D{:});
             % laplacian
             L = cellfun(@(x)sparse(x(:,:,2)),Q,'UniformOutput',false);
-            L = am_lib.get_flattened_divergence(L{:});
+            L = am_field.get_flattened_divergence(L{:});
+        end
+        
+    end
+     
+    methods (Static) % polynomials and spectral methods
+
+        function [x]     = canonicalr_(n) % roots of canonical all-one polynomial
+           x(:,1) = zeros(n,1);
+        end
+        
+        function [x,D,w] = clenshawcurtisr_(n) % Clenshaw-Curtis collocation [-1,+1]
+            if     n==1; w=2; x=0;
+            elseif n==2; w=[1;1]; x=[-1;1];
+            else
+                N=n-1; c=zeros(n,2);
+                c(1:2:n,1)=(2./[1 1-(2:2:N).^2 ])'; c(2,2)=1;
+                f=real(ifft([c(1:n,:);c(N:-1:2,:)]));
+                w=2*([f(1,1); 2*f(2:N,1); f(n,1)])/2;
+                x=N*f(n:-1:1,2);
+            end
+            D = am_field.get_differentiation_matrix(x);
+        end
+        
+        function [x,D,w] = chebyshevTr_(n,flag) % roots of Chebyshev T (1st kind) (-1,+1)
+            if nargin<2; flag=''; end
+            f_ = @(n) -cos(pi*(2*[1:n]-1)/(2*n)).';
+            if contains(flag,'edge')
+                n=n-2; x(:,1)=[-1;f_(n);1]; 
+            else
+                x(:,1)=f_(n); 
+            end
+            if nargout < 2; return; end
+            D = am_field.get_differentiation_matrix(x); D = cat(3,D,D^2);
+            if nargout < 3; return; end
+            w(:,1) = am_field.get_integration_weights(x);
+        end
+        
+        function [x,D,w] = chebyshevUr_(n,flag) % roots of Chebyshev U (2nd kind) [-1,+1] 
+            if nargin<2; flag=''; end
+            f_ = @(n) -cos(pi*[1:n]/(n+1)).';
+            if contains(flag,'edge')
+                n=n-2; x(:,1)=[-1;f_(n);1]; 
+            else
+                x(:,1)=f_(n); 
+            end
+            if nargout < 2; return; end
+            D = am_field.get_differentiation_matrix(x); D = cat(3,D,D^2);
+            if nargout < 3; return; end
+            w(:,1) = am_field.get_integration_weights(x);
+        end
+        
+        function [x,D,w] = legendrer_(n) % roots of Legendre [-1,+1] 
+            % Integrates functions between [-1,+1] without integration weight function:
+            %   _
+            %  /   + 1              __ n
+            %  |       f(x) dx  =  \      F  w
+            % _/   - 1             /__ i   i  i
+            %
+            % asciiTeX "\int_{-1}^{+1} f(x) dx = \sum_i^n  F_i w_i"
+
+            % A. N. Lowan, N. Davids, and A. Levenson, Bulletin of the American Mathematical Society 48, 739 (1942).
+            A = (1:n-1)./sqrt(4*(1:n-1).^2-1); J = diag(A,-1)+diag(A,1); [V,x] = eig(J,'vector'); [x,fwd]=sort(x(:));
+            if nargout < 2; return; end
+            D = am_field.get_differentiation_matrix(x); D = cat(3,D,D^2);
+            if nargout < 3; return; end
+            w(:,1) = 2*V(1,fwd)'.^2;
+        end
+        
+        function [x,D,w] = laguerrer_(n,flag) % roots of Laguerre [0,+Inf]
+            % Integrates functions between [0,+Inf] weighed by exp(-x):
+            %   _
+            %  /  oo   - x              __
+            %  |     e     f(x) dx  =  \      F  . w
+            % _/  0                    /__ i   i    i
+            % 
+            % asciiTeX "\int_0^\infty e^{-x} f(x) dx = \sum_i  F_i . w_i"
+            
+            if nargin<2; flag=''; end
+            J_ = @(n) diag(1:2:2*n-1)-diag(1:n-1,1)-diag(1:n-1,-1);
+            if contains(flag,'edge')
+                n=n-1; [V,D]=eig(J_(n),'vector'); [x,fwd]=sort(D(:)); x=[0;x];
+            else
+                       [V,D]=eig(J_(n),'vector'); [x,fwd]=sort(D(:));
+            end
+            if nargout < 2; return; end
+            alpha = exp(-x/2); m = 2; % order of differentiation
+            beta  = (-0.5).^[1:m].'*ones(1,numel(x));
+            D = am_field.get_differentiation_matrix(x, alpha, beta);
+            if nargout < 3; return; end
+            w(:,1) = V(1,fwd).^2;
+            if contains(flag,'edge')
+                w = [0;w];
+            end
+        end
+        
+        function [x,D,w] = hermiter_(n) % roots of Hermite polynomial (harmonic oscilator solution) [-Inf,+Inf] 
+            % Integrates functions between [-Inf,+Inf] weighed by exp(-x^2):
+            %   _            2
+            %  /  oo      - x               __ n
+            %  |        e      f(x) dx  =  \      F  . w
+            % _/   - oo                    /__ i   i    i
+            % 
+            %  asciiTeX "\int_{-\infty}^{\infty} e^{-x^2} f(x) dx = \sum_i^n  F_i . w_i"
+
+            % R. E. Greenwood and J. J. Miller, Bulletin of the American Mathematical Society 54, 765 (1948).
+            % George Papazafeiropoulos
+            A = sqrt((1:n-1)/2); J = diag(A,1)+diag(A,-1); [V,x]=eig(J,'vector'); [x,fwd]=sort(x(:));
+            if nargout < 2; return; end
+            alpha = exp(-x.^2/2); beta = [ones(size(x'));-x']; m = 2; % order of differentiation
+            for l = 3:m+1; beta(l,:) = -x'.*beta(l-1,:)-(l-2)*beta(l-2,:); end; beta(1,:) = [];
+            D = am_field.get_differentiation_matrix(x, alpha, beta);
+            if nargout < 3; return; end
+            w = sqrt(pi)*V(1,fwd)'.^2;
+        end
+
+        function [x,D,w] = fourierr_(n) % roots of fourier function [0,1) 
+            x(1:n,1) = [0:(n-1)]/n;
+            if nargout < 2; return; end
+            D = get_fourier_differentiation_matrix(n);
+            if nargout < 3; return; end
+            w(1:n,1) = 1/n;
+            function [D] = get_fourier_differentiation_matrix(n)
+                re = [0,0.5*(-1).^(1:n-1).*cot((1:n-1)*pi/n)]; 
+                im = (-1).^(1:n)*sqrt(-1)/2;
+                D  = real(2*pi*toeplitz(re+im,-re+im)); 
+                % D = D./(2*pi); % use this if x = [0,1); if x = [0,2pi) comment it out.
+            end
+        end
+        
+        function [x,D,w] = cdiff_(n) % evenly spaced central difference [0,1)
+            x(1:n,1) = [0:n-1]/n;
+            if nargout < 2; return; end
+            % get first and second derivative
+            D = zeros(n,n,2);
+            for i = 1:2
+                [c,v] = am_field.get_differentiation_weights([-1,0,1],i); nvs = numel(v); m = ceil(nvs/2);
+                D(:,:,i) = toeplitz([c(m:-1:1),zeros(1,n-m)],[c(m:end),zeros(1,n-m)])*n.^(i);
+            end
+            if nargout < 3; return; end
+            w(1:n,1) = 1;
+        end        
+
+        function [x,D,w] = pdiff_(n) % evenly spaced  periodic central difference [0,1)
+            x(1:n,1) = [0:n-1]/n;
+            if nargout < 2; return; end
+            % get first and second derivative
+            D = zeros(n,n,2);
+            for i = 1:2
+                [c,v] = am_field.get_differentiation_weights([-1,0,1],i); nvs = numel(v); m = ceil(nvs/2);
+                D(:,:,i) = am_lib.circulant_(circshift([c,zeros(1,n-nvs)],m-nvs))*n.^(i);
+            end
+            if nargout < 3; return; end
+            w(1:n,1) = 1;
+        end        
+    
+        function [D]     = get_flattened_divergence(Dx,Dy,Dz) 
+            switch nargin
+                case 1
+                    D = Dx;
+                case 2
+                    n(1) = size(Dx,1); n(2) = size(Dy,1); 
+                    D = kron(eye(n(2)),Dx) + ... 
+                        kron(Dy,eye(n(1)));
+                case 3
+                    n(1) = size(Dx,1); n(2) = size(Dy,1); n(3) = size(Dz,1);
+                    D = kron(eye(n(3)),kron(eye(n(2)),Dx)) + ... 
+                        kron(eye(n(3)),kron(Dy,eye(n(1)))) + ...
+                        kron(Dz,kron(eye(n(2)),eye(n(1))));
+                otherwise
+                    error('not yet implemented');
+            end
+        end
+        
+        function [L]     = get_flattened_laplacian(varargin) 
+            L = am_field.get_divergence_matrix(varargin{:})^2;
+        end
+
+        function [c,x]   = get_differentiation_weights(x,n) 
+            % x = collocation points or number of collocation points
+            % n = order of differentiation
+            % for example, 
+            %   x = [-2,0,1,2];
+            %   n = 3;
+            % for centered space methods:
+            %   x = [-1,1]; % x is even
+            %   n = 1;
+            %
+            nxs = numel(x);
+            if nxs == 1; N = x; x = [0:(N-1)]-(N-1)/2; nxs = numel(x); end
+            if nxs <= n; error('n is not bigger than the number of elements in x'); end
+            algo = 1; 
+            switch algo
+                case 1
+                    % This algorithm is numerically more stable, based on the recursion formula in:
+                    % B. Fornberg, "Calculation of weights in finite difference formulas", SIAM Review 40 (1998), pp. 685-691.
+                    c1 = 1; c4 = x(1); C = zeros(nxs-1,n+1); C(1,1) = 1;
+                    for i=1:nxs-1
+                        i1 = i+1; mn = min(i,n); c2 = 1; c5 = c4; c4 = x(i1);
+                        for j=0:i-1
+                            j1 = j+1; c3 = x(i1) - x(j1); c2 = c2*c3;
+                            if j==i-1
+                                for s=mn:-1:1
+                                    s1 = s+1; C(i1,s1) = c1*(s*C(i1-1,s1-1) - c5*C(i1-1,s1))/c2;
+                                end
+                                C(i1,1) = -c1*c5*C(i1-1,1)/c2;
+                            end
+                            for s=mn:-1:1
+                                s1 = s+1; C(j1,s1) = (c4*C(j1,s1) - s*C(j1,s1-1))/c3;
+                            end
+                            C(j1,1) = c4*C(j1,1)/c3;
+                        end
+                        c1 = c2;
+                    end
+                    c = C(:,end).';
+                case 2
+                    % explicit methodology
+                    % Obtained by taylor expanding at each stencil point and setting the sum of coefficients equal to 
+                    % all derivatives equal to zero, except to the those derivative for which the sum equals factorial(n).
+                    A = [x.^([1:nxs].'-1)]; B = zeros(nxs,1); B(n+1) = factorial(n); c = ( A \ B ).';
+            end
+        end
+        
+        function [D]     = get_differentiation_matrix(varargin) 
+            % get_differentiation_matrix(x)
+            % get_differentiation_matrix(x,order)
+            % get_differentiation_matrix(x,alpha,beta)
+            
+            % select inputs
+            switch numel(varargin)
+                case 1; x = varargin{1}(:);
+                case 2; x = varargin{1}(:); N = numel(x); alpha = ones(N,1);      M = varargin{2}; B = zeros(M,N);
+                case 3; x = varargin{1}(:); N = numel(x); alpha = varargin{2}(:); B = varargin{3}; M = size(B,1); 
+            end
+            
+            % select the algorithm
+            switch numel(varargin)
+                case 1
+                    % based on the function by Greg von Winckel
+                    % only first derivative is output
+                    x=sort(x(:));                       N=length(x); N1=N+1; N2=N*N;
+                    X=repmat(x,1,N);                    Xdiff=X-X'+eye(N);
+                    W=repmat(1./prod(Xdiff,2),1,N);     D=W./(W'.*Xdiff); 
+                    D(1:N1:N2)=1-sum(D);                D=-D';
+                case {2,3}
+                    % based on the function by Weideman and Reddy
+                    % all derivatives up to M-th is output, weight functions B can be utilized
+                        L = logical(eye(N));
+                       XX = x(:,ones(1,N)); DX = XX-XX'; DX(L) = ones(N,1);
+                        c = alpha.*prod(DX,2); C = c(:,ones(1,N)); C = C./C';
+                        Z = 1./DX; Z(L) = zeros(N,1); X = Z'; X(L) = [];
+                        X = reshape(X,N-1,N); Y = ones(N-1,N); DM = eye(N);
+
+                    for i = 1:M
+                        Y = cumsum([B(i,:); i*Y(1:N-1,:).*X]); 
+                        DM = i*Z.*(C.*repmat(diag(DM),1,N) - DM);  DM(L) = Y(N,:); 
+                        D(:,:,i) = DM;
+                    end
+            end
+        end
+  
+        function [w]     = get_integration_weights(x) 
+            % works only for polynomials integrating between -1 and 1
+            % Greg von Winckel
+            [x,fwd]=sort(x(:));
+            [xl,wl]=lgwt(numel(x)+4,min(x),max(x));
+            w(fwd)=lagrange(x,xl)*wl;
+            function [x,w,L]=lgwt(N,a,b)
+                N=N-1; N1=N+1; N2=N+2;
+                y1=cos((2*(0:N)'+1)*pi/(2*N+2)); y=y1; L=zeros(N1,N2); Lp=zeros(N1,N2); y0=2;
+                % Iterate until new points are uniformly within epsilon of old points
+                while max(abs(y-y0))>eps
+                    L(:,1)=1;    Lp(:,1)=0;
+                    L(:,2)=y;    Lp(:,2)=1;    
+                    for k=2:N1
+                        L(:,k+1)=( (2*k-1)*y.*L(:,k)-(k-1)*L(:,k-1) )/k;
+                    end
+                    Lp=(N2)*( L(:,N1)-y.*L(:,N2) )./(1-y.^2);
+                    y0=y;
+                    y=y0-L(:,N2)./Lp;
+                end
+                % Linear map from[-1,1] to [a,b]
+                x=(a*(1-y)+b*(1+y))/2;      
+                % Compute the weights
+                w=(b-a)./((1-y.^2).*Lp.^2)*(N2/N1)^2;
+            end
+            function L=lagrange(x,xl)
+                n=length(x); N=length(xl); x=x(:); X=repmat(x,1,n);
+                % Compute the weights
+                wg=1./prod(X-X'+eye(n),2); xdiff=repmat(xl.',n,1)-repmat(x,1,N);
+                % find all the points where the difference is zero
+                zerodex=(xdiff==0); 
+                % See eq. 3.1 in Ref (1)
+                lfun=prod(xdiff,1);
+                % kill zeros
+                xdiff(zerodex)=eps;
+                % Compute lebesgue function
+                L=diag(wg)*repmat(lfun,n,1)./xdiff;
+            end
         end
         
     end
