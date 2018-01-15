@@ -189,6 +189,9 @@ classdef am_field
             % F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'implicit',1,1000);
             % F = F.solve_differential_equation('GL50',{@(x)(x^2-1)^2/4,1},'explicit',0.01,5000);
             %
+            % rho = am_lib.gauss_(am_lib.normc_(F.R-[30;30]));                              % Poisson solver
+            % F = F.solve_differential_equation('poisson',{-rho},'explicit',0.01,5000);
+            %
             import am_field.*
             
             [~,L] = F.get_flattened_differentiation_matrices(); % Get laplacian.
@@ -196,8 +199,8 @@ classdef am_field
             N=prod(F.n); % Simplify notation: get total number of grid points.
 
 			switch solver
-            case {'explicit','implicit','crank-nicolson'}
-            	if strcmp(solver,'explicit') || strcmp(solver,'crank-nicolson')
+            case {'explicit','implicit','crank-nicolson','jacobi','gauss-seidel'}
+            	if any(strcmp(solver,{'explicit','crank-nicolson'}))
 	                % equations of the form F(n+1) = F(n) + dt * LHS
                     switch equation
                         case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
@@ -210,11 +213,13 @@ classdef am_field
                         case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
                             syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
                             LHSe_ = @(U,x)   ( x{1}(U(:)) + x{2}*L*U(:) ); nargs=2;
+                        case 'poisson' % Poisson equation
+                            LHSe_ = @(U,x) L * U(:) - x{1}(:); nargs=1;
                         otherwise
                             error('unknown propagator');
                     end
                 end
-                if strcmp(solver,'implicit') || strcmp(solver,'crank-nicolson')
+                if any(strcmp(solver,{'implicit','crank-nicolson'}))
                 % equations of the form F(n+1) = (1 - dt*LHS)\F(n)
                     switch equation
                         case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
@@ -227,6 +232,17 @@ classdef am_field
                         case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
                             syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
                             LHSi_ = @(U,x)   ( spdiags(x{1}(U(:)),0,N,N) + x{2}*L ); nargs=2;
+                        case 'poisson' % Poisson equation
+                            LHSi_ = @(U,x) L - spdiags(x{1}(:),0,N,N); nargs=1;
+                        otherwise
+                            error('unknown propagator');
+                    end
+                end
+                if any(strcmp(solver,{'jacobi','gauss-seidel'}))
+                % equations of the form F(n+1) = (LHS*F(n)-x{1}), i.e. Ax-b = 0 
+                    switch equation
+                        case 'poisson' % Poisson equation
+                            LHSx_ = @(x) L; nargs=1; % b is implicitly assumed
                         otherwise
                             error('unknown propagator');
                     end
@@ -256,6 +272,29 @@ classdef am_field
                 case 'crank-nicolson'
                     for i = [1:M]
                         F.F(1:N) = ( (speye(N)-dt*LHSi_(F.F,x))\F.F(:) + F.F(:)+dt*LHSe_(F.F,x) )/2;
+                        if any(isnan(F.F(:))); warning('NaN'); break; end
+                        if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
+                    end
+                case 'jacobi'
+                    % not working
+                    % not working
+                    % not working
+                    LDU_ = @(A) deal( -(tril(A)-spdiags(diag(A),0,N,N)), spdiags(diag(A),0,N,N), -(triu(A)-spdiags(diag(A),0,N,N)) ); % A = D - L - U;
+                    w = 2/3; [L,D,U] = LDU_(LHSx_(x)); Rj = D\(L+U); Rw = (1-w)*speye(N) + w*Rj; 
+                    for i = [1:M]
+                        F.F(1:N) = Rw * F.F(:);
+                        if any(isnan(F.F(:))); warning('NaN'); break; end
+                        if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
+                    end
+                case 'gauss-seidel'
+                    % not working
+                    % not working
+                    % not working
+                    % not working
+                    LDU_ = @(A) deal( -(tril(A)-spdiags(diag(A),0,N,N)), spdiags(diag(A),0,N,N), -(triu(A)-spdiags(diag(A),0,N,N)) ); % A = D - L - U;
+                    [L,D,U] = LDU_(LHSx_(x)); Rg = (D-L)\U; 
+                    for i = [1:M]
+                        F.F(1:N) = Rg*F.F(:);
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
                     end

@@ -1144,6 +1144,7 @@ classdef am_lib
             N = n-1; n = (0:N)'-N/2; w = exp(-(1/2)*(r*n/(N/2)).^2);
         end
         
+        % polynomials and spectral methods
         
         function [x]     = canonicalr_(n) % roots of canonical all-one polynomial
            x(:,1) = zeros(n,1);
@@ -1439,7 +1440,6 @@ classdef am_lib
             end
         end
         
-        
         % integration
 
         function [X,W] = simplex_quad_(N,vert)
@@ -1488,7 +1488,6 @@ classdef am_lib
                 x=(Y+1)/2; w=(1/2)^(k1)*ab(1,2)*V(1,I)'.^2;
             end
         end
-        
         
         % functions that should of existed
         
@@ -1935,21 +1934,32 @@ classdef am_lib
             end
         end
         
-        function [c] = diagonalicity_(A)
-            c = max(max(abs(diag(diag(A))-A)));
+        % matrix properties
+        
+        function [L] = isdiagdom_(A)
+            L = all((2*abs(diag(A))) >= sum(abs(A),2));
         end
         
-        function [c] = hermiticity_(A)
-            c = max(max(abs(A'-A)));
+        function [L] = ishermitian_(A,tol)
+            if nargin==1; tol=am_lib.tiny; end
+            L = max(max(abs(A'-A))) < tol;
         end
         
-        function [c] = unitaricity_(A)
-            c = max(max(abs( A'*A - eye(size(A)) )));
+        function [L] = isunitary_(A,tol)
+            if nargin==1; tol=am_lib.tiny; end
+            L = max(max(abs( A'*A - eye(size(A)) ))) < tol;
         end
         
-        function [c] = symmetricity_(A)
-            c = max(max(abs(A-A.')));
+        function [L] = issymmetric_(A,tol)
+            if nargin==1; tol=am_lib.tiny; end
+            L = max(max(abs(A-A.'))) < tol;
         end
+        
+        function [L] = isdiagonal_(A,tol)
+            if nargin==1; tol=am_lib.tiny; end
+            L = max(max(abs(diag(diag(A))-A))) < tol;
+        end
+        
         
         function [U,E] = eig_(D)
             % diagonalize and get nice eigenvectors for Hermitian or symmetric matrices D
@@ -2000,7 +2010,10 @@ classdef am_lib
             assert(any(~abs(diag(U'*D*U)-E)<am_lib.eps), 'E is mismatched.');
         end
         
-        function [y] = tridiag( A, f )
+        
+        % A x = b solvers
+        
+        function x = tridiag_(A,b)
             %  Solve the  n x n  tridiagonal system for y:
             %
             %  [ a(1)  c(1)                                  ] [  y(1)  ]   [  f(1)  ]
@@ -2013,22 +2026,62 @@ classdef am_lib
             %
             %  f must be a vector (row or column) of length n
             %  a, b, c must be vectors of length n (note that b(1) and c(n) are not used)s
-            n = length(f);
+            n = length(b);
             % get tridiagonal vectores
             a = diag(A); b = diag(A,-1); c = diag(A,+1);
             % initialize loop
-            v = zeros(n,1); y = v; w = a(1); y(1) = f(1)/w;
+            v = zeros(n,1); y = v; w = a(1); y(1) = b(1)/w;
             % solve tridiagonal system of equations
             for i=2:n
                 v(i-1) = c(i-1)/w;
                 w = a(i) - b(i)*v(i-1);
-                y(i) = ( f(i) - b(i)*y(i-1) )/w;
+                y(i) = ( b(i) - b(i)*y(i-1) )/w;
             end
             for j=n-1:-1:1
                y(j) = y(j) - v(j)*y(j+1);
             end
         end
         
+        function x = ddsolver_(A,b,x,algo,m)
+            if ~am_lib.isdiagdom_(A); error('ddsolver_ only works on diagonally dominant matrices'); end
+            % set break condition
+            if m < 1; break_ = @(x,i) norm(x) < m;
+            else;     break_ = @(x,i) i == m; end
+            % A = D + L + U; Notice the different defifinition from Multigrid Tutorial
+            LDU_ = @(A,n) deal( (tril(A)-spdiags(diag(A),0,n,n)), ...
+                                         spdiags(diag(A),0,n,n) , ...
+                                (triu(A)-spdiags(diag(A),0,n,n))); 
+            % initialize variables
+            i = 0; n = size(A,1); 
+            % define iterative A x = b solver of the form: x(j+1) = R*x(j) + B;
+            switch algo
+                case {'J','jacobi'}
+                    [L,D,U] = LDU_(A,n); R = -D\(L+U); B = D\b;
+                case {'Jw','weighted-jacobi'}
+                    [L,D,U] = LDU_(A,n); w = 2/3;
+                    R = -D\(L+U); R = (1-w)*speye(n) + w*R; B = (D/w)\b;
+                case {'SOR','successive-over-relaxation'}
+                    [L,D,U] = LDU_(A,n); w = 2/3;
+                    if am_lib.issymmetric_(A) 
+                        % Symmetric Successive Over-Relaxation
+                        % Templates p 12
+                        B1 = (D+w*U)\(-w*L+(1-w)*D);
+                        B2 = (D+w*L)\(-w*U+(1-w)*D);
+                        R = B1*B2; B = w*(2-w) * ((D+w*U)\D) * ((D+w*L)\b);
+                    else
+                        % Successive Over-Relaxation
+                        % Templates p 11
+                        B = (D+w*L)\(w*b); R = (D+w*L)\((1-w)*D-w*U);
+                    end
+                case {'GS','gauss-seidel'}
+                    [L,D,U] = LDU_(A,n); R = -(D+L)\U; B = (D+L)\b; 
+            end
+            % iterate
+            while true
+                xp = x; x = R*xp + B;
+                if break_(x-xp,i); return; else; i = i+1; end
+            end
+        end
         
         % fitting functions
         
