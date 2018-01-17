@@ -285,12 +285,23 @@ classdef am_field
                                 h.EdgeColor= 'none'; h.LineWidth = 1; 
                                 view([0 0 1]); daspect([1 1 1]); axis tight;
                             else
-                                cmap  = am_lib.cmap_('jet',200); n = size(cmap,1); 
-                                phase = angle(F.(field))/(2*pi)+1/2; % [0,1]
-                                % amp   = log(abs(F.(field))); % amp = 2*(mod(amp,1)-1/2); % [-1,1]
                                 
-                                % cmap = reshape(  am_lib.clight_(cmap(ceil(n*phase),:),amp) ,[F.n,3]);
-                                cmap = reshape(                cmap(ceil(n*phase),:)      , [F.n,3]);
+                                switch 1
+                                    case 1 
+                                        cmap  = am_lib.cmap_('spectral',200); n = size(cmap,1); 
+                                        phase = angle(F.(field))/(2*pi)+1/2; % [0,1]
+                                        phase = 2*(phase-1/2); % [-1,1]
+                                        amp   = log(abs(F.(field))); amp = (amp-min(amp(:)))./(max(amp(:))-min(amp(:)));
+                                        cmap  = reshape( am_lib.clight_(cmap(ceil((n-1)*amp+1),:),phase) , [F.n,3]);
+                                    case 2 % phase
+                                        cmap  = am_lib.cmap_('jet',200); n = size(cmap,1); 
+                                        phase = angle(F.(field))/(2*pi)+1/2; % [0,1]
+                                        cmap  = reshape( cmap(ceil(n*phase),:) , [F.n,3]);
+                                    case 3 % amplitude
+                                        cmap  = am_lib.cmap_('jet',200); n = size(cmap,1); 
+                                        amp   = log(abs(F.(field))); amp = (amp-min(amp(:)))./(max(amp(:))-min(amp(:))); 
+                                        cmap  = reshape( cmap(ceil((n-1)*amp+1),:) , [F.n,3]);
+                                end
                                 
                                 set(gcf,'color','w');
                                 h = surf(sl_('R',1), sl_('R',2), squeeze(abs(F.(field))), cmap); 

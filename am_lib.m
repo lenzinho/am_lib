@@ -1776,11 +1776,14 @@ classdef am_lib
             end
         end
         
-        function x = ddsolver_(A,b,x,algo,m)
+        function x = ddsolver_(A,x,b,m,algo)
             if ~am_lib.isdiagdom_(A); error('ddsolver_ only works on diagonally dominant matrices'); end
+            %
+            if isempty(x); x = zeros(size(A,2),1); end
+            if isempty(b); b = zeros(size(A,2),1); end
             % set break condition
-            if m < 1; break_ = @(x,i) norm(x) < m;
-            else;     break_ = @(x,i) i == m; end
+            if m < 1; break_ = @(x,i,m) norm(x) < m;
+            else;     break_ = @(x,i,m) i == m; end
             % A = D + L + U; Notice the different defifinition from Multigrid Tutorial
             LDU_ = @(A,n) deal( (tril(A)-spdiags(diag(A),0,n,n)), ...
                                          spdiags(diag(A),0,n,n) , ...
@@ -1813,7 +1816,7 @@ classdef am_lib
             % iterate
             while true
                 xp = x; x = R*xp + B;
-                if break_(x-xp,i); return; else; i = i+1; end
+                if break_(x-xp,i,m); return; else; i = i+1; end
             end
         end
         
@@ -2697,7 +2700,19 @@ classdef am_lib
             % f = K * g; % Evaluate transform.
             g = -imag(fftshift(fft(f)));
         end
-        
+
+        function [x,y]  = fftdn_(y) % down-sample y by half, x = [0,1)
+            n = numel(y); n = floor(n/2); 
+            x = [0:n-1]/n; y = fft(y); 
+            y = real(ifft(y(1:n))); 
+        end
+
+        function [x,y]  = fftup_(y) % up-sample y two fold, x = [0,1)
+            n = numel(y); x = [0:2*n-1]/(2*n); y = fft(y); 
+            y = [y(1:floor(n/2)),zeros(1,n),y(floor(n/2)+1:end)]; 
+            y = 2*real(ifft(y)); 
+        end
+
         function [r,gr] = fft_(k,gk,flag)
             
             if nargin < 3; flag='half'; end
