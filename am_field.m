@@ -167,8 +167,14 @@ classdef am_field
             % F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000);
             % F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'implicit',1,1000);
             % F = F.solve_differential_equation('GL50',{@(x)(x^2-1)^2/4,1},'explicit',0.01,5000);
+            % 
+            % Complex Ginzburg-Landau
+            % F = am_field.define_field([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
+            % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
+            % F = F.solve_differential_equation('GLXX',{1},'explicit',0.2,2000);
             %
-            % rho = am_lib.gauss_(am_lib.normc_(F.R-[30;30]));                              % Poisson solver
+            % Poisson 
+            % rho = am_lib.gauss_(am_lib.normc_(F.R-[30;30]));                              
             % F = F.solve_differential_equation('poisson',{-rho},'explicit',0.01,5000);
             %
             import am_field.*
@@ -186,9 +192,13 @@ classdef am_field
                             LHSe_ = @(U,x) x{1}*U(:) - (L+speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=2;
                         case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
                             LHSe_ = @(U,x) x{1}*U(:) - (L+speye(N))^2*(L+x{3}.^2*speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=3;
+                        case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
+                            LHSe_ = @(U,x) x{1}*U(:) - (L+speye(N))^2*(L+x{3}.^2*speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=3;
                         case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
                             syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
                             LHSe_ = @(U,x) L*( x{1}(U(:)) - x{2}*L*U(:) ); nargs=2;
+                        case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002)
+                            LHSe_ = @(U,x) ( speye(N)*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) )*U(:); nargs=1;
                         case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
                             syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
                             LHSe_ = @(U,x)   ( x{1}(U(:)) + x{2}*L*U(:) ); nargs=2;
@@ -208,6 +218,8 @@ classdef am_field
                         case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
                             syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
                             LHSi_ = @(U,x) L*( spdiags(x{1}(U(:)),0,N,N) - x{2}*L ); nargs=2;
+                        case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002)
+                            LHSe_ = @(U,x) ( speye(N)*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) ); nargs=1;
                         case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
                             syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
                             LHSi_ = @(U,x)   ( spdiags(x{1}(U(:)),0,N,N) + x{2}*L ); nargs=2;
@@ -254,29 +266,6 @@ classdef am_field
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
                     end
-                case 'jacobi'
-                    % not working
-                    % not working
-                    % not working
-                    LDU_ = @(A) deal( -(tril(A)-spdiags(diag(A),0,N,N)), spdiags(diag(A),0,N,N), -(triu(A)-spdiags(diag(A),0,N,N)) ); % A = D - L - U;
-                    w = 2/3; [L,D,U] = LDU_(LHSx_(x)); Rj = D\(L+U); Rw = (1-w)*speye(N) + w*Rj; 
-                    for i = [1:M]
-                        F.F(1:N) = Rw * F.F(:);
-                        if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
-                    end
-                case 'gauss-seidel'
-                    % not working
-                    % not working
-                    % not working
-                    % not working
-                    LDU_ = @(A) deal( -(tril(A)-spdiags(diag(A),0,N,N)), spdiags(diag(A),0,N,N), -(triu(A)-spdiags(diag(A),0,N,N)) ); % A = D - L - U;
-                    [L,D,U] = LDU_(LHSx_(x)); Rg = (D-L)\U; 
-                    for i = [1:M]
-                        F.F(1:N) = Rg*F.F(:);
-                        if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
-                    end
                 otherwise
                     error('unknown solver');
             end
@@ -290,10 +279,25 @@ classdef am_field
                 case {1} % scalar
                     switch F.d
                         case 2 % 2D
-                            set(gcf,'color','w');
-                            h = surf(sl_('R',1), sl_('R',2), squeeze(F.(field))); 
-                            h.EdgeColor= 'none'; h.LineWidth = 1; 
-                            view([0 0 1]); daspect([1 1 1]); axis tight;
+                            if isreal(F.(field))
+                                set(gcf,'color','w');
+                                h = surf(sl_('R',1), sl_('R',2), squeeze(F.(field))); 
+                                h.EdgeColor= 'none'; h.LineWidth = 1; 
+                                view([0 0 1]); daspect([1 1 1]); axis tight;
+                            else
+                                cmap  = am_lib.cmap_('jet',200); n = size(cmap,1); 
+                                phase = angle(F.(field))/(2*pi)+1/2; % [0,1]
+                                % amp   = log(abs(F.(field))); % amp = 2*(mod(amp,1)-1/2); % [-1,1]
+                                
+                                % cmap = reshape(  am_lib.clight_(cmap(ceil(n*phase),:),amp) ,[F.n,3]);
+                                cmap = reshape(                cmap(ceil(n*phase),:)      , [F.n,3]);
+                                
+                                set(gcf,'color','w');
+                                h = surf(sl_('R',1), sl_('R',2), squeeze(abs(F.(field))), cmap); 
+                                h.EdgeColor= 'none'; h.LineWidth = 1; 
+                                view([0 0 1]); daspect([1 1 1]); axis tight;
+                                
+                            end
                         case 3 % 3D
                             error('not yet implemented');
                         otherwise; error('invalid field dimension');
