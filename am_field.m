@@ -173,6 +173,12 @@ classdef am_field
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
             % F = F.solve_differential_equation('GLXX',{1},'explicit',0.2,2000);
             %
+            % Cahn-Hilliard Polymer (mean = -0.45: hexagons, mean = 0: lines)
+            % F = am_field.define_field([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+            % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field, lines    (mean = 0)
+            % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.455; % initialize field, hexagons (mean = -0.455)
+            % F = F.solve_differential_equation('QP13',{@(x)(x^2-1)^2/4,0.5,0.1},'explicit',0.05,10000);
+            %
             % Poisson 
             % rho = am_lib.gauss_(am_lib.normc_(F.R-[30;30]));                              
             % F = F.solve_differential_equation('poisson',{-rho},'explicit',0.01,5000);
@@ -192,18 +198,24 @@ classdef am_field
                             LHSe_ = @(U,x) x{1}*U(:) - (L+speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=2;
                         case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
                             LHSe_ = @(U,x) x{1}*U(:) - (L+speye(N))^2*(L+x{3}.^2*speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=3;
-                        case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
-                            LHSe_ = @(U,x) x{1}*U(:) - (L+speye(N))^2*(L+x{3}.^2*speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=3;
-                        case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
-                            syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
-                            LHSe_ = @(U,x) L*( x{1}(U(:)) - x{2}*L*U(:) ); nargs=2;
                         case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002)
                             LHSe_ = @(U,x) ( speye(N)*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) )*U(:); nargs=1;
                         case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
                             syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
                             LHSe_ = @(U,x)   ( x{1}(U(:)) + x{2}*L*U(:) ); nargs=2;
+                        case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
+                            syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
+                            LHSe_ = @(U,x) L*( x{1}(U(:)) - x{2}*L*U(:) ); nargs=2;
+                        case 'QP13' % Qin-Pablo (Soft Matter, 2013, 9, 11467)
+                            syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
+                            LHSe_ = @(U,x) L*( x{1}(U(:)) - x{2}*L*U(:) ) - x{3}*(U(:) - mean(U(:))); nargs=3;
                         case 'poisson' % Poisson equation
                             LHSe_ = @(U,x) L * U(:) - x{1}(:); nargs=1;
+                        case 'laplace' % Laplace equation
+                            LHSe_ = @(U,x) L * U(:); nargs=0;
+                        case 'test'
+                            syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
+                            LHSe_ = @(U,x)   ( x{1}(U(:)) + x{2}*L*U(:) ); nargs=2;
                         otherwise
                             error('unknown propagator');
                     end
@@ -215,25 +227,25 @@ classdef am_field
                             LHSi_ = @(U,x) x{1}*speye(N) - (L+speye(N))^2 + x{2}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N); nargs=2;
                         case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
                             LHSi_ = @(U,x) x{1}*speye(N) - (L+speye(N))^2*(L+x{3}.^2*speye(N))^2 + x{2}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N); nargs=3;
-                        case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
-                            syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
-                            LHSi_ = @(U,x) L*( spdiags(x{1}(U(:)),0,N,N) - x{2}*L ); nargs=2;
                         case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002)
                             LHSe_ = @(U,x) ( speye(N)*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) ); nargs=1;
                         case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
                             syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
                             LHSi_ = @(U,x)   ( spdiags(x{1}(U(:)),0,N,N) + x{2}*L ); nargs=2;
+                        case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
+                            syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
+                            LHSi_ = @(U,x) L*( spdiags(x{1}(U(:)),0,N,N) - x{2}*L ); nargs=2;
+                        case 'QP13' % Qin-Pablo (Soft Matter, 2013, 9, 11467)
+                            % Something is wrong about this implicit implementation; results do no match explicit version. Compare:
+                            % F = F.solve_differential_equation('QP13',{@(x)(x^2-1)^2/4,1,0.05},'implicit',1,100);
+                            % F = F.solve_differential_equation('QP13',{@(x)(x^2-1)^2/4,1,0.05},'explicit',0.01,10000);
+                            error('something is wrong with this implementation');
+                            syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
+                            LHSi_ = @(U,x) L*( spdiags(x{1}(U(:)),0,N,N) - x{2}*L ) - x{3}*spdiags(U(:) - mean(U(:)),0,N,N); nargs=3;
                         case 'poisson' % Poisson equation
                             LHSi_ = @(U,x) L - spdiags(x{1}(:),0,N,N); nargs=1;
-                        otherwise
-                            error('unknown propagator');
-                    end
-                end
-                if any(strcmp(solver,{'jacobi','gauss-seidel'}))
-                % equations of the form F(n+1) = (LHS*F(n)-x{1}), i.e. Ax-b = 0 
-                    switch equation
-                        case 'poisson' % Poisson equation
-                            LHSx_ = @(x) L; nargs=1; % b is implicitly assumed
+                        case 'laplace'
+                            LHSi_ = @(U,x) L; nargs=0;
                         otherwise
                             error('unknown propagator');
                     end
@@ -256,7 +268,7 @@ classdef am_field
                     end
                 case 'implicit' % more stable
                     for i = [1:M]
-                        F.F(1:N) = (speye(N)-dt*LHSi_(F.F,x))\F.F(:);
+                        F.F(1:N) = (speye(N) - dt*LHSi_(F.F,x))\F.F(:);
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
                     end
