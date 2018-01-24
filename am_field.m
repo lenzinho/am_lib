@@ -104,6 +104,297 @@ classdef am_field
             F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000); % solve
         end
         
+        function F = demo_ising()
+%isng model with helical boundary conditions and wolff algorithm
+clear;clc; rng(1)
+
+F = am_field.define_field([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+% F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
+% F.F = ones([1,F.n]); % initialize the field
+F.F = 1*(am_lib.normc_(F.R)<max(F.R(:))/2);
+
+
+M = 1; % monte carlo samples
+
+% neighbors (helical boundary condition)
+p = cumprod(F.n);
+n_ = @(i) [mod(i   -1-1,p(end))+1, ...  % up
+           mod(i   +1-1,p(end))+1, ...  % down
+           mod(i-p(1)-1,p(end))+1, ...  % left
+           mod(i+p(1)-1,p(end))+1];     % right
+en_= @(F,i) 2 * F.F(1,i) * sum(F.F(1,n_(i)));
+
+% define beta (multiplication is faster than division)
+kT = 0; %[3.5:-0.1:1]; 
+
+% run monte carlo 
+algo='Wolff'; %'Wolff-queue-vectorized-more';
+switch algo
+    case 'Metropolis'
+        for k = 1:numel(kT); for j = 1:M
+            % pick a random coordinate to flip
+            i = randi(p(end));
+            % calculate energy of flipping
+            E = en_(F,i);
+            % flip?
+            if E <= 0 || rand(1) <= exp(-E/kT(k)); F.F(1,i) = -F.F(1,i); end
+            % plot?
+            if mod(j,10)==0; F.plot_field('F'); drawnow; end
+        end; end
+    case 'Wolff' % 0.03 s
+        % build neighbor list
+        nlist = zeros(numel(n_(1)),p(end));
+        for i = 1:p(end); nlist(:,i) = n_(i); end
+        % allocate space
+        queue   = zeros(1,p(end)); 
+        cluster = zeros(1,p(end));
+        for k = 1:numel(kT); for j = 1:M
+            % pick a random coordinate to flip
+            i = randi(p(end));
+            % flood fill
+            cluster = am_lib.floodfill_(reshape(F.F,F.n),i,nlist,1-exp(-2/kT));
+            % flip cluster
+            F.F(1,cluster) = - F.F(1,cluster);
+            % plot?
+            if mod(j,10)==0; F.plot_field('F'); drawnow; end
+        end; end
+    case 'Wolff-mask' % 0.78 s
+        % allocate space
+        queue   = spalloc(1,p(end),p(end)); 
+        history = spalloc(1,p(end),p(end)); 
+        cluster = spalloc(1,p(end),p(end));
+        for k = 1:numel(beta); for j = 1:M
+            % pick a random coordinate to flip
+            i = randi(p(end));
+            % initialize queue and cluster
+            queue(i) = 1; queue(n_(i)) = 1; 
+            history(:) = 0; history(1) = i; 
+            cluster(:) = 0; cluster(1) = i; 
+            % loop over queue (probabilistic flood fill algorithm)
+            while any(queue~=0); for q = find(queue); queue(q) = 0;
+                % if spin is aligned, add it to cluster with probability 1-exp(-2/kT)
+                if F.F(1,q)==F.F(1,i); if rand() <= 1 - exp(-2/kT(k))
+                    % add to cluster
+                    cluster(q) = 1;
+                    % loop over neighbors which have never been considered
+                    for n = n_(q); if history(n)==0
+                        queue(n) = 1; history(n) = 1;
+                    end; end
+                end; end
+                % % draw floodfill
+                % % sum(history)
+                % spy(reshape(history,F.n),'r');
+                % hold on;
+                % spy(reshape(queue,F.n),'b');
+                % spy(reshape(cluster,F.n),'k');
+                % hold off;
+                % drawnow;
+            end; end
+            % flip cluster
+            F.F(1,logical(cluster)) = - F.F(1,logical(cluster));
+            % plot?
+            if mod(j,10)==0; F.plot_field('F'); drawnow; end
+        end; end
+    case 'Wolff-queue' % 0.36 s
+        % allocate space
+        queue   = zeros(1,p(end)); 
+        cluster = zeros(1,p(end));
+        for k = 1:numel(beta); for j = 1:M
+            % pick a random coordinate to flip
+            i = randi(p(end));
+            % initialize queue and cluster
+            cluster(:) = 0; ic = 1; cluster(1) = i; 
+            queue(:) = 0;   iq = 4; queue(1:4) = n_(i); nq = 0;
+            % loop over queue
+            while nq~=iq
+                % cycle queue
+                nq=nq+1; q = queue(nq); 
+                % if spin is aligned, add it to cluster with probability 1-exp(-2/kT)
+                if F.F(1,q)==F.F(1,i); if rand() <= 1 - exp(-2/kT(k))
+                    % add to cluster
+                    ic = ic+1; cluster(ic) = q;
+                    % loop over neighbors which have never been considered
+                    for n = n_(q); if ~any(queue(1:iq)==n)
+                        iq = iq+1; queue(iq)   = n;
+                    end; end
+                end; end
+                % draw floodfill
+                sp_DEBUG__(queue(queue~=0))=1;     spy(sp_DEBUG__,'r'); sp_DEBUG__(:) = 0;
+                hold on;
+                sp_DEBUG__(cluster(cluster~=0))=1; spy(sp_DEBUG__,'k'); sp_DEBUG__(:) = 0;
+                hold off;
+                drawnow;
+            end
+            % flip cluster
+            F.F(1,cluster(1:ic)) = - F.F(1,cluster(1:ic));
+            % plot?
+            if mod(j,10)==0; F.plot_field('F'); drawnow; end
+        end; end
+    case 'Wolff-queue-vectorized' % 0.13 s
+        % allocate space
+        queue   = zeros(1,p(end)); 
+        cluster = zeros(1,p(end));
+        for k = 1:numel(beta); for j = 1:M
+            % pick a random coordinate to flip
+            i = randi(p(end));
+            % initialize queue and cluster
+            cluster(:) = 0; ic = 1; cluster(1) = i; 
+            queue(:) = 0;   iq = 4; queue(1:4) = n_(i); nq = 0;
+            % loop over queue
+            while nq~=iq
+                % cycle queue
+                nq=nq+1; q=queue(nq:iq); nq=iq;
+                % get aligned spins and add it to cluster with probability 1-exp(-2/kT)
+                ex_ = F.F(1,q)==F.F(1,i); ex_(ex_) = rand(1,sum(ex_)) <= 1-exp(-2/kT(k)); ncs = sum(ex_); 
+                if ncs~=0
+                    % add new queue points to cluster
+                    cluster(ic+[1:ncs]) = q(ex_); ic=ic+ncs;
+                    % loop over neighbors which have never been considered
+                    for n = unique(n_(q(ex_))); if ~any(queue(1:iq)==n)
+                        iq = iq+1; queue(iq) = n;
+                    end; end
+                end
+                % draw floodfill
+                sp_DEBUG__(queue(queue~=0))=1;     spy(sp_DEBUG__,'r'); sp_DEBUG__(:) = 0;
+                hold on;
+                sp_DEBUG__(cluster(cluster~=0))=1; spy(sp_DEBUG__,'k'); sp_DEBUG__(:) = 0;
+                hold off;
+                drawnow;
+            end
+            % flip cluster
+            F.F(1,cluster(1:ic)) = - F.F(1,cluster(1:ic));
+            % plot?
+            if mod(j,10)==0; F.plot_field('F'); drawnow; end
+        end; end
+    case 'Wolff-queue-vectorized-more'
+        % allocate space
+        queue   = zeros(1,p(end)); 
+        cluster = zeros(1,p(end));
+        for k = 1:numel(beta); for j = 1:M
+            % pick a random coordinate to flip
+            i = randi(p(end));
+            % initialize queue and cluster
+            cluster(:) = 0; ic = 1; cluster(1) = i; 
+            queue(:) = 0;   iq = 4; queue(1:4) = n_(i); nq = 0;
+            % loop over queue
+            while nq~=iq
+                % cycle queue
+                nq=nq+1; q=queue(nq:iq); nq=iq;
+                % get aligned spins and add it to cluster with probability 1-exp(-2/kT)
+                ex_ = F.F(1,q)==F.F(1,i); ex_(ex_) = rand(1,sum(ex_)) <= 1-exp(-2/kT(k)); ncs = sum(ex_); 
+                if ncs~=0
+                    % add new queue points to cluster
+                    cluster(ic+[1:ncs]) = q(ex_); ic=ic+ncs;
+                    % loop over neighbors which have never been considered
+                    n = unique(n_(q(ex_))); ex_=isetdiff_(n,queue(1:iq)); nns=sum(ex_);
+                    queue(iq+[1:nns]) = n(ex_); iq=iq+nns;
+                end
+                % draw floodfill
+                sp_DEBUG__(queue(queue~=0))=1;     spy(sp_DEBUG__,'r'); sp_DEBUG__(:) = 0;
+                hold on;
+                sp_DEBUG__(cluster(cluster~=0))=1; spy(sp_DEBUG__,'k'); sp_DEBUG__(:) = 0;
+                hold off;
+                drawnow;
+            end
+            % flip cluster
+            F.F(1,cluster(1:ic)) = - F.F(1,cluster(1:ic));
+            % plot?
+            if mod(j,10)==0; F.plot_field('F'); drawnow; end
+        end; end
+end
+ 
+            
+        end
+        
+        function F = demo_ising_metropolis()
+            F = am_field.define_field([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+            % F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
+            F.F = ones([1,F.n]); % initialize the field
+
+            M = 50000; % monte carlo samples
+            
+            % compute energy difference of flipping ith spin
+            en_ = @(F,x) 2 * F.F(1,x(1),x(2)) * ( ...
+                             F.F(1,mod(x(1)+1,F.n(1))+1,x(2)) + ... %  0, 1, 0
+                             F.F(1,mod(x(1)-1,F.n(1))+1,x(2)) + ... %  1, 0, 1
+                             F.F(1,x(1),mod(x(2)+1,F.n(2))+1) + ... %  0, 1, 0
+                             F.F(1,x(1),mod(x(2)-1,F.n(2))+1) );
+
+            kT_list = [1.3:0.1:3.5]; % meV
+            for k = 1:numel(kT_list)
+                kT = kT_list(k);
+                
+            % monte carlo samples
+            for j = 1:M
+
+                % pick a random coordinate to flip
+                for i = 1:F.d; x(i) = randi(F.n(i)); end
+
+                % calculate energy of flipping
+                E = en_(F,x);
+
+                % flip?
+                if E <= 0 || rand(1) <= exp(-E/kT)
+                    F.F(1,x(1),x(2)) = - F.F(1,x(1),x(2));
+                end
+
+                % plot?
+                if mod(j,2000)==0; F.plot_field('F'); drawnow; end
+
+            end
+            
+                m(k) = mean(F.F(:));
+                s(k) = std(F.F(:));
+            end
+            
+            clf; h = semilogx(kT_list,s,'s-',kT_list,m,'o-'); 
+            line([1 1]*2/log(1+sqrt(2)),get(gca,'YLim'),'Color','k','linewidth',0.5); % ideal Tc
+            
+        end
+        
+        function F = demo_ising_metropolis_helical()
+            %isng model with helical boundary conditions
+            clear;clc;
+
+            F = am_field.define_field([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+            % F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
+            F.F = ones([1,F.n]); % initialize the field
+
+            M = 100000; % monte carlo samples
+
+            % neighbors (helical boundary condition)
+            p = cumprod(F.n);
+            n_ = @(i) [mod(i   -1-1,p(end))+1;  % up
+                       mod(i   +1-1,p(end))+1;  % down
+                       mod(i-p(1)-1,p(end))+1;  % left
+                       mod(i+p(1)-1,p(end))+1]; % right
+            en_= @(F,i) 2 * F.F(1,i) * sum(F.F(1,n_(i)));
+
+            k=0; kT_list = [1:0.3:3.5]; % initalize and loop over temperatures
+            for kT = kT_list
+                % run monte carlo
+                for j = 1:M
+                    % pick a random coordinate to flip
+                    i = randi(p(end));
+                    % calculate energy of flipping
+                    E = en_(F,i);
+                    % flip?
+                    if E <= 0 || rand(1) <= exp(-E/kT)
+                        F.F(1,i) = - F.F(1,i);
+                    end
+                    % plot?
+                    if mod(j,2000)==0; F.plot_field('F'); drawnow; end
+                end
+                % record statistics
+                k=k+1;
+                m(k) = mean(F.F(:));
+                s(k) = std(F.F(:));
+            end
+
+            clf; h = semilogx(kT_list,s,'s-',kT_list,m,'o-'); 
+            line([1 1]*2/log(1+sqrt(2)),get(gca,'YLim'),'Color','k','linewidth',0.5); % ideal Tc 
+        end
+        
         function [F] = define_field(n,a,s)
             m = numel(n);
             if numel(s)~=m; error('s dimensions mismatch'); end
@@ -157,7 +448,7 @@ classdef am_field
             end
         end
         
-        function [F] = solve_differential_equation(F,equation,x,solver,dt,M)
+        function [F] = solve_differential_equation(F,equation,x,algorithm,dt,M)
             % examples
             % F = am_field.define_field([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
@@ -189,9 +480,9 @@ classdef am_field
             
             N=prod(F.n); % Simplify notation: get total number of grid points.
 
-			switch solver
+			switch algorithm
             case {'explicit','implicit','crank-nicolson','jacobi','gauss-seidel'}
-            	if any(strcmp(solver,{'explicit','crank-nicolson'}))
+            	if any(strcmp(algorithm,{'explicit','crank-nicolson'}))
 	                % equations of the form F(n+1) = F(n) + dt * LHS
                     switch equation
                         case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
@@ -220,7 +511,7 @@ classdef am_field
                             error('unknown propagator');
                     end
                 end
-                if any(strcmp(solver,{'implicit','crank-nicolson'}))
+                if any(strcmp(algorithm,{'implicit','crank-nicolson'}))
                 % equations of the form F(n+1) = (1 - dt*LHS)\F(n)
                     switch equation
                         case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
@@ -253,13 +544,13 @@ classdef am_field
             otherwise
                 error('unknown solver');
             end
-            
+
             if ~iscell(x); x=num2cell(x); end % convert array to cells if necessary (cells allow passing functions)
             if numel(x)~=nargs; error('incorrect number of parameters'); end % check parameters
             if isempty(F.F); error('field has not been initialized'); end % check parameters
 
             % Propagate in time 
-            switch solver
+            switch algorithm
                 case 'explicit' % unstable for large steps
                     for i = [1:M]
                         F.F(1:N) = F.F(:) + dt*LHSe_(F.F,x);
@@ -696,7 +987,7 @@ classdef am_field
                     error('not yet implemented');
             end
         end
-        
+
         function [L]     = get_flattened_laplacian(varargin) 
             L = am_field.get_divergence_matrix(varargin{:})^2;
         end

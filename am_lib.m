@@ -1063,9 +1063,10 @@ classdef am_lib
             % uniformly distributed random number between 0 and 1
             % Garcia p 347
             seed = round(clock*flipud(cumprod([1 60 60 24 31 12].')));
-            y = am_lib.zeros_(varargin{:}); n = prod(varargin{:});
+            y = am_lib.zeros_(varargin{:}); n = prod([varargin{:}]);
             a = 7^5; c = 0; M = 2^31-1;
-            y(1) = mod(seed,M);
+            % generate the seed and throw the first five values away
+            y(1) = mod(seed,M); for i = 1:5; y(1) = mod(a*y(1)+c,M); end
             if n > 2; for i = 2:n
                 y(i) = mod(a*y(i-1)+c,M);
             end; end
@@ -1222,6 +1223,7 @@ classdef am_lib
                 x=(Y+1)/2; w=(1/2)^(k1)*ab(1,2)*V(1,I)'.^2;
             end
         end
+        
         
         % functions that should of existed
         
@@ -1668,6 +1670,24 @@ classdef am_lib
             end
         end
         
+        function [C] = conv_(A,B,flag)
+            % A = rand(6); B = rand(5);
+            % conv_(A,B,'full')  - conv2(A,B,'full')
+            % conv_(A,B,'valid') - conv2(A,B,'valid')
+
+            switch flag
+                case 'full'
+                    [m1]=size(A); [m2]=size(B); m = m1+m2-1;
+                    C = ifftn(fftn(A,m).*fftn(B,m));
+                case 'valid'
+                    [m1]=size(A); [m2]=size(B); m = m1+m2-1;
+                    C = ifftn(fftn(A,m).*fftn(B,m));
+                    C = C(m2(1):m1(1),m2(2):m1(2));
+                otherwise
+                    error('unknown flag');
+            end
+        end
+        
         % matrix properties
         
         function [L] = isdiagdom_(A)
@@ -1693,7 +1713,6 @@ classdef am_lib
             if nargin==1; tol=am_lib.tiny; end
             L = max(max(abs(diag(diag(A))-A))) < tol;
         end
-        
         
         function [U,E] = eig_(D)
             % diagonalize and get nice eigenvectors for Hermitian or symmetric matrices D
@@ -1819,6 +1838,7 @@ classdef am_lib
                 if break_(x-xp,i,m); return; else; i = i+1; end
             end
         end
+        
         
         % fitting functions
         
@@ -2603,6 +2623,7 @@ classdef am_lib
 
         end
         
+        
         % correlation and polynomial fitting
         
         function       plotcorr_(x,y)
@@ -2754,7 +2775,50 @@ classdef am_lib
         end
 
         
-        % interesting transforms        
+        % image processing
+        
+        function cluster = floodfill_(F,i,nlist,p)
+            % F = scalar field
+            % i = index of point seeding cluster
+            % nlist(:,i) = list of neighbors for point i
+            % p, probability that a point will be incorporated into the cluster:
+            %       p = 1-exp(-2/kT(k))     for Wolff
+            %       p = 1                   for flood fill
+            % 
+            
+            % get number of neighbors
+            nn = size(nlist,1); 
+            % initialize queue and cluster
+            cluster(:) = 0; ic = 1; cluster(1) = i;  nq = 0;
+            queue(:) = 0;   iq = 4; queue(1:nn) = nlist(:,i); 
+            while nq~=iq
+                % cycle queue
+                nq=nq+1; q=queue(nq:iq); nq=iq;
+                % get aligned spins and add it to cluster with probability 1-exp(-2/kT)
+                ex_ = F(q)==F(i); ex_(ex_) = rand(1,sum(ex_)) <= p; ncs = sum(ex_); 
+                if ncs~=0
+                    % add new queue points to cluster
+                    cluster(ic+[1:ncs]) = q(ex_); ic=ic+ncs;
+                    % loop over neighbors which have never been considered
+                    n = unique(nlist(:,q(ex_))); ex_=isetdiff_(n,queue(1:iq)); nns=sum(ex_);
+                    queue(iq+[1:nns]) = n(ex_); iq=iq+nns;
+                end
+                % % animate floodfill (slows everything down)
+                sp_DEBUG__ = zeros(size(F)); figure(1);
+                hold on;
+                sp_DEBUG__(queue(queue~=0))=1;     spy(sp_DEBUG__,'r'); sp_DEBUG__(:) = 0;
+                sp_DEBUG__(cluster(cluster~=0))=1; spy(sp_DEBUG__,'k'); sp_DEBUG__(:) = 0;
+                hold off;
+                % drawnow;
+            end
+            cluster = cluster(1:ic);
+
+            function [C] = isetdiff_(A,B)
+                % integer set diff
+                C = false(1,max(numel(A),numel(B)));
+                C(A(:)) = true; C(B(:)) = false; C = C(A(:));
+            end
+        end
 
         function [D R] = DT(img)
             % Two-dimensional generalized distance transform
@@ -2863,6 +2927,7 @@ classdef am_lib
             end
         end
 
+        
         % vector calculous
         
         function [C]    = curl_(f)
