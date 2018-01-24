@@ -2803,13 +2803,13 @@ classdef am_lib
                     n = unique(nlist(:,q(ex_))); ex_=isetdiff_(n,queue(1:iq)); nns=sum(ex_);
                     queue(iq+[1:nns]) = n(ex_); iq=iq+nns;
                 end
-                % % animate floodfill (slows everything down)
-                sp_DEBUG__ = zeros(size(F)); figure(1);
-                hold on;
-                sp_DEBUG__(queue(queue~=0))=1;     spy(sp_DEBUG__,'r'); sp_DEBUG__(:) = 0;
-                sp_DEBUG__(cluster(cluster~=0))=1; spy(sp_DEBUG__,'k'); sp_DEBUG__(:) = 0;
-                hold off;
-                % drawnow;
+                % % % animate floodfill (slows everything down)
+                % sp_DEBUG__ = zeros(size(F)); figure(1);
+                % hold on;
+                % sp_DEBUG__(queue(queue~=0))=1;     spy(sp_DEBUG__,'r'); sp_DEBUG__(:) = 0;
+                % sp_DEBUG__(cluster(cluster~=0))=1; spy(sp_DEBUG__,'k'); sp_DEBUG__(:) = 0;
+                % hold off;
+                % % drawnow;
             end
             cluster = cluster(1:ic);
 
