@@ -2777,7 +2777,7 @@ classdef am_lib
         
         % image processing
         
-        function cluster = floodfill_(F,i,nlist,p)
+        function [cluster,neighbor] = floodfill_(F,i,nlist,p,maxclustersize)
             % F = scalar field
             % i = index of seed
             % nlist(:,n) = neighbors of point n
@@ -2787,16 +2787,20 @@ classdef am_lib
             % 
             
             if isempty(i); error('seed must not be empty'); end
+            if nargin < 5; maxclustersize = Inf; end 
             % get number of neighbors
             nn = size(nlist,1); 
             % initialize queue and cluster
-            cluster(:) = 0; ic = 1; cluster(1) = i;  nq = 0;
-            queue(:) = 0;   iq = 4; queue(1:nn) = nlist(:,i); 
+            cluster = zeros(1,numel(F)); ic = 1;  cluster(1) = i;  
+            queue = zeros(1,numel(F)); nq=1; iq=5; queue(1:nn+1) = [i;nlist(:,i)]; 
             while nq~=iq
                 % cycle queue
                 nq=nq+1; q=queue(nq:iq); nq=iq;
                 % get aligned spins and add it to cluster with probability 1-exp(-2/kT)
                 ex_ = F(q)==F(i); ex_(ex_) = rand(1,sum(ex_)) <= p; ncs = sum(ex_); 
+                % limit maximum cluster size
+                m = min(maxclustersize-ic,ncs); ex_(ex_) = [true(1,m),false(1,ncs-m)]; ncs = m;
+                % build cluster
                 if ncs~=0
                     % add new queue points to cluster
                     cluster(ic+[1:ncs]) = q(ex_); ic=ic+ncs;
@@ -2812,8 +2816,8 @@ classdef am_lib
                 % hold off;
                 % % drawnow;
             end
-            cluster = cluster(1:ic);
-
+            cluster = cluster(1:ic); neighbor = queue(isetdiff_(queue(1:iq),cluster)); 
+            
             function [C] = isetdiff_(A,B)
                 % integer set diff
                 C = false(1,max(numel(A),numel(B)));

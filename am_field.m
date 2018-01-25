@@ -406,7 +406,6 @@ classdef am_field
                     error('unknown boundary condition');
             end
             
-            
             % run monte carlo 
             switch algorithm
                 case 'MT53' % Metropolis (J. Chem. Phys. 21, 1087 (1953).)
