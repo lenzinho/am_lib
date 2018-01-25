@@ -385,7 +385,7 @@ classdef am_field
             p = cumprod(F.n);
             
             % define boundary conditions
-            switch lower(boundary)
+            switch boundary
                 case {'pbc','periodic'}
                     [I]      = reshape(1:p(end),F.n);
                     [S{1:2}] = ndgrid(1:F.n(1),1:F.n(2));
@@ -408,8 +408,8 @@ classdef am_field
             
             
             % run monte carlo 
-            switch lower(algorithm)
-                case 'metropolis'
+            switch algorithm
+                case 'MT53' % Metropolis (J. Chem. Phys. 21, 1087 (1953).)
                     for j = 1:M
                         % pick a random coordinate to flip
                         i = randi(p(end));
@@ -420,7 +420,7 @@ classdef am_field
                         % plot?
                         if mod(i,round(M*0.01))==0; F.plot_field('F'); title(num2str(j)); drawnow; end
                     end
-                case 'wolff'
+                case 'WL89' % Wolff (Phys. Rev. Lett. 62, 361 (1989).)
                     % build neighbor list
                     nlist = zeros(numel(n_(1)),p(end));
                     for i = 1:p(end); nlist(:,i) = n_(i); end
@@ -432,6 +432,25 @@ classdef am_field
                         cluster = am_lib.floodfill_( F.F(:), i, nlist, 1-exp(-2*beta) );
                         % flip cluster
                         F.F(1,cluster) = - F.F(1,cluster);
+                        % plot?
+                        if mod(i,round(M*0.01))==0; F.plot_field('F'); title(num2str(j)); drawnow; end
+                    end
+                case 'SW87' % Swendsen-Wang (Phys. Rev. Lett. 58, 86 (1987).)
+                    % build neighbor list
+                    nlist = zeros(numel(n_(1)),p(end));
+                    for i = 1:p(end); nlist(:,i) = n_(i); end
+                    % run algorithm
+                    for j = 1:M
+                        % divide field into clusters by linking parallel spins with probability p = 1-exp(-2*beta)
+                        i=0; C = zeros([1,F.n]); 
+                        while any(C(:)==0)
+                            inds = am_lib.floodfill_( F.F(:) , find(~C(:),1) , nlist , 1-exp(-2*beta) ); i=i+1; C(inds)=i;
+                        end
+                        nclusters=i;
+                        % flip each cluster with probability 1/2
+                        for i = 1:nclusters
+                            if rand()>.5; F.F(1,C(:)==i) = -F.F(1,C(:)==i); end
+                        end
                         % plot?
                         if mod(i,round(M*0.01))==0; F.plot_field('F'); title(num2str(j)); drawnow; end
                     end

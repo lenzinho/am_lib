@@ -2779,13 +2779,14 @@ classdef am_lib
         
         function cluster = floodfill_(F,i,nlist,p)
             % F = scalar field
-            % i = index of point seeding cluster
-            % nlist(:,i) = list of neighbors for point i
+            % i = index of seed
+            % nlist(:,n) = neighbors of point n
             % p, probability that a point will be incorporated into the cluster:
             %       p = 1-exp(-2/kT(k))     for Wolff
             %       p = 1                   for flood fill
             % 
             
+            if isempty(i); error('seed must not be empty'); end
             % get number of neighbors
             nn = size(nlist,1); 
             % initialize queue and cluster
