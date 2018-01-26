@@ -736,11 +736,6 @@ classdef am_lib
             end
         end
         
-        function [C] = normc_(A)
-            % get length of each column vector
-            C = sqrt(sum(abs(A).^2,1));
-        end
-
         function [C] = operm_(A,I)
             % outer permutation operation
             % explicit: 
@@ -754,16 +749,6 @@ classdef am_lib
             import am_lib.*
             
             C = reshape(accessc_(repmat(A,1,size(I,2)),repelem(I,1,size(A,2))),size(I,1),size(I,2),size(A,2));
-        end
-        
-        function [C] = accessc_(A,I)
-            % permute each column of A according to the indicie matrix I
-            % for example: A=randi(10,5,5); [B,I]=sort(A); B-accessc_(A,I)
-            % Explicit: 
-            % for i = 1:size(A,2)
-            %   C(:,i) = C(I(:,i),i);
-            % end
-            C = A(bsxfun(@plus,I,[0:size(A,2)-1]*size(A,1)));
         end
         
         function [C] = findrow_(A)
@@ -837,15 +822,7 @@ classdef am_lib
         end
         
         
-        % matching
-        
-        function [C] = maxabs_(A)
-            C = max(abs(A(:)));
-        end
-        
-        function [C] = minmax_(A)
-            C = [min(A(:)),max(A(:))];
-        end
+        % functions operating on matrix column
         
         function [C] = sortc_(A, tol)
             % column vector-based rank, sort, unique with numeric precision
@@ -874,6 +851,32 @@ classdef am_lib
             % returns 0 for rows containing all zeros
             C = sum(cumsum(A~=0,1)==0,1)+1;
             C = C .* ~all(A==0,1);
+        end
+        
+        function [C] = accessc_(A,I)
+            % permute each column of A according to the indicie matrix I
+            % for example: A=randi(10,5,5); [B,I]=sort(A); B-accessc_(A,I)
+            % Explicit: 
+            % for i = 1:size(A,2)
+            %   C(:,i) = C(I(:,i),i);
+            % end
+            C = A(bsxfun(@plus,I,[0:size(A,2)-1]*size(A,1)));
+        end
+        
+        function [C] = normc_(A)
+            % get length of each column vector
+            C = sqrt(sum(abs(A).^2,1));
+        end
+        
+        
+        % matching
+        
+        function [C] = maxabs_(A)
+            C = max(abs(A(:)));
+        end
+        
+        function [C] = minmax_(A)
+            C = [min(A(:)),max(A(:))];
         end
         
         function [I] = match_(A,B)
@@ -909,6 +912,17 @@ classdef am_lib
                     if c>d2; c=0; return; end
                 end
             end
+        end
+        
+        function [C] = setdiffi_(A,B,n)
+            % return at most n values
+            % integer set diff
+            C = false(1,max(numel(A),numel(B)));
+            C(A(:)) = true; C(B(:)) = false; 
+            if nargin < 3; C = C(A(:));
+            else;          C = C(find(A(:),n));
+            end
+                
         end
         
         function [C,IA,IC] = uniquec_(A,tol)
@@ -1687,6 +1701,7 @@ classdef am_lib
                     error('unknown flag');
             end
         end
+        
         
         % matrix properties
         
@@ -2777,10 +2792,10 @@ classdef am_lib
         
         % image processing
         
-        function [cluster,neighbor] = floodfill_(F,i,nlist,p,maxclustersize)
+        function [cluster,neighbor] = floodfill_(F,G,i,p,maxclustersize)
             % F = scalar field
+            % G(2,n) = edge list; edge n connects G(1,n) to G(2,n) 
             % i = index of seed
-            % nlist(:,n) = neighbors of point n
             % p, probability that a point will be incorporated into the cluster:
             %       p = 1-exp(-2/kT(k))     for Wolff
             %       p = 1                   for flood fill
@@ -2788,41 +2803,36 @@ classdef am_lib
             
             if isempty(i); error('seed must not be empty'); end
             if nargin < 5; maxclustersize = Inf; end 
-            % get number of neighbors
-            nn = size(nlist,1); 
             % initialize queue and cluster
-            cluster = zeros(1,numel(F)); ic = 1;  cluster(1) = i;  
-            queue = zeros(1,numel(F)); nq=1; iq=5; queue(1:nn+1) = [i;nlist(:,i)]; 
+            cluster = zeros(1,numel(F)); ic = 1;  cluster(1) = i;  nn = sum(G(1,:)==i);
+            queue = zeros(1,numel(F)); nq=1; iq=5; queue(1:nn+1) = [i, G(2,G(1,:)==i)]; 
             while nq~=iq
                 % cycle queue
                 nq=nq+1; q=queue(nq:iq); nq=iq;
                 % get aligned spins and add it to cluster with probability 1-exp(-2/kT)
                 ex_ = F(q)==F(i); ex_(ex_) = rand(1,sum(ex_)) <= p; ncs = sum(ex_); 
                 % limit maximum cluster size
-                m = min(maxclustersize-ic,ncs); ex_(ex_) = [true(1,m),false(1,ncs-m)]; ncs = m;
+                if ~isinf(maxclustersize)
+                    m = min(maxclustersize-ic,ncs); v = [true(1,m),false(1,ncs-m)];
+                    ex_(ex_) = v(randperm(ncs)); ncs = m;
+                end
                 % build cluster
                 if ncs~=0
                     % add new queue points to cluster
                     cluster(ic+[1:ncs]) = q(ex_); ic=ic+ncs;
                     % loop over neighbors which have never been considered
-                    n = unique(nlist(:,q(ex_))); ex_=isetdiff_(n,queue(1:iq)); nns=sum(ex_);
-                    queue(iq+[1:nns]) = n(ex_); iq=iq+nns;
+                    n=G(2,any(G(1,:)==q(ex_).',1)); n=unique(n(n~=0)); ex_=am_lib.setdiffi_(n,queue(1:iq)); 
+                    nns=sum(ex_); queue(iq+[1:nns]) = n(ex_); iq=iq+nns;
                 end
-                % % % animate floodfill (slows everything down)
-                % sp_DEBUG__ = zeros(size(F)); figure(1);
-                % hold on;
-                % sp_DEBUG__(queue(queue~=0))=1;     spy(sp_DEBUG__,'r'); sp_DEBUG__(:) = 0;
-                % sp_DEBUG__(cluster(cluster~=0))=1; spy(sp_DEBUG__,'k'); sp_DEBUG__(:) = 0;
-                % hold off;
-                % % drawnow;
+                % % animate floodfill (slows everything down)
+                sp_DEBUG__ = zeros(size(F)); figure(1);
+                hold on;
+                sp_DEBUG__(queue(queue~=0))=1;     spy(sp_DEBUG__,'r'); sp_DEBUG__(:) = 0;
+                sp_DEBUG__(cluster(cluster~=0))=1; spy(sp_DEBUG__,'k'); sp_DEBUG__(:) = 0;
+                hold off;
+                drawnow;
             end
-            cluster = cluster(1:ic); neighbor = queue(isetdiff_(queue(1:iq),cluster)); 
-            
-            function [C] = isetdiff_(A,B)
-                % integer set diff
-                C = false(1,max(numel(A),numel(B)));
-                C(A(:)) = true; C(B(:)) = false; C = C(A(:));
-            end
+            cluster = cluster(1:ic); neighbor = queue(am_lib.setdiffi_(queue(1:iq),cluster)); 
         end
 
         function [D R] = DT(img)

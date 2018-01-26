@@ -420,30 +420,30 @@ classdef am_field
                         if mod(i,round(M*0.01))==0; F.plot_field('F'); title(num2str(j)); drawnow; end
                     end
                 case 'WL89' % Wolff (Phys. Rev. Lett. 62, 361 (1989).)
-                    % build neighbor list
-                    nlist = zeros(numel(n_(1)),p(end));
-                    for i = 1:p(end); nlist(:,i) = n_(i); end
+                    % build edge list
+                    G = zeros(2,4*p(end)); G(1,:) = repelem(1:p(end),4);
+                    for i = 1:p(end); G(2,4*(i-1)+[1:4]) = n_(i); end
                     % run algorithm
                     for j = 1:M
                         % pick a random coordinate to flip
                         i = randi(p(end));
                         % flood fill
-                        cluster = am_lib.floodfill_( F.F(:), i, nlist, 1-exp(-2*beta) );
+                        cluster = am_lib.floodfill_( F.F(:), G, i, 1-exp(-2*beta) );
                         % flip cluster
                         F.F(1,cluster) = - F.F(1,cluster);
                         % plot?
                         if mod(i,round(M*0.01))==0; F.plot_field('F'); title(num2str(j)); drawnow; end
                     end
                 case 'SW87' % Swendsen-Wang (Phys. Rev. Lett. 58, 86 (1987).)
-                    % build neighbor list
-                    nlist = zeros(numel(n_(1)),p(end));
-                    for i = 1:p(end); nlist(:,i) = n_(i); end
+                    % build edge list
+                    G = zeros(2,4*p(end)); G(1,:) = repelem(1:p(end),4);
+                    for i = 1:p(end); G(2,4*(i-1)+[1:4]) = n_(i); end
                     % run algorithm
                     for j = 1:M
                         % divide field into clusters by linking parallel spins with probability p = 1-exp(-2*beta)
                         i=0; C = zeros([1,F.n]); 
                         while any(C(:)==0)
-                            inds = am_lib.floodfill_( F.F(:) , find(~C(:),1) , nlist , 1-exp(-2*beta) ); i=i+1; C(inds)=i;
+                            inds = am_lib.floodfill_( F.F(:) , G , find(~C(:),1) , 1-exp(-2*beta) ); i=i+1; C(inds)=i;
                         end
                         nclusters=i;
                         % flip each cluster with probability 1/2
