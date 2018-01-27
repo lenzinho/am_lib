@@ -914,15 +914,11 @@ classdef am_lib
             end
         end
         
-        function [C] = setdiffi_(A,B,n)
+        function [C] = setdiffi_(A,B)
             % return at most n values
             % integer set diff
             C = false(1,max(numel(A),numel(B)));
-            C(A(:)) = true; C(B(:)) = false; 
-            if nargin < 3; C = C(A(:));
-            else;          C = C(find(A(:),n));
-            end
-                
+            C(A(:)) = true; C(B(:)) = false; C = C(A(:));
         end
         
         function [C,IA,IC] = uniquec_(A,tol)
@@ -2794,22 +2790,44 @@ classdef am_lib
         
         function [cluster,neighbor] = floodfill_(F,G,i,p,maxclustersize)
             % F = scalar field
-            % G(2,n) = edge list; edge n connects G(1,n) to G(2,n) 
+            % G(2,n) = edge list; edge n connects G(1,n) to G(2,n) with weight G(3,:)
             % i = index of seed
             % p, probability that a point will be incorporated into the cluster:
             %       p = 1-exp(-2/kT(k))     for Wolff
             %       p = 1                   for flood fill
             % 
             
+            % no input is passed
+            if nargin == 0
+                % define dimensions, seed, and target cluster
+                rng(1); n=[4,4]; j = 5; F = zeros(n); F(j+[1:2])=1;
+                % compute dimensions
+                p = cumprod(n);
+                % define neighbors
+                n_ = @(i) [mod(i   -1-1,p(end))+1, ...  % up
+                           mod(i   +1-1,p(end))+1, ...  % down
+                           mod(i-p(1)-1,p(end))+1, ...  % left
+                           mod(i+p(1)-1,p(end))+1];     % right       
+                % build edge list
+                G = zeros(2,4*p(end)); G(1,:) = repelem(1:p(end),4);
+                for i = 1:p(end); G(2,4*(i-1)+[1:4]) = n_(i); end
+                % perform floodfill
+                [ind,nbr] = am_lib.floodfill_( F , G , j , 1 , 2 )  % 1-exp(-2*beta)
+                % for j=5;
+                %   ind should equal [5,9]
+                %   nbr should equal [4,6,1,8,10,13]
+                return;
+            end
+            
             if isempty(i); error('seed must not be empty'); end
             if nargin < 5; maxclustersize = Inf; end 
             % initialize queue and cluster
             cluster = zeros(1,numel(F)); ic = 1;  cluster(1) = i;  nn = sum(G(1,:)==i);
-            queue = zeros(1,numel(F)); nq=1; iq=5; queue(1:nn+1) = [i, G(2,G(1,:)==i)]; 
+            queue = zeros(1,numel(F)); nq=1; queue(1:nn+1) = [i, G(2,G(1,:)==i)]; iq=sum(queue~=0); 
             while nq~=iq
                 % cycle queue
                 nq=nq+1; q=queue(nq:iq); nq=iq;
-                % get aligned spins and add it to cluster with probability 1-exp(-2/kT)
+                % get aligned spins and add it to cluster with probability 1-exp(-2/kT)s
                 ex_ = F(q)==F(i); ex_(ex_) = rand(1,sum(ex_)) <= p; ncs = sum(ex_); 
                 % limit maximum cluster size
                 if ~isinf(maxclustersize)
@@ -2825,12 +2843,12 @@ classdef am_lib
                     nns=sum(ex_); queue(iq+[1:nns]) = n(ex_); iq=iq+nns;
                 end
                 % % animate floodfill (slows everything down)
-                sp_DEBUG__ = zeros(size(F)); figure(1);
-                hold on;
-                sp_DEBUG__(queue(queue~=0))=1;     spy(sp_DEBUG__,'r'); sp_DEBUG__(:) = 0;
-                sp_DEBUG__(cluster(cluster~=0))=1; spy(sp_DEBUG__,'k'); sp_DEBUG__(:) = 0;
-                hold off;
-                drawnow;
+                % sp_DEBUG__ = zeros(size(F)); figure(1);
+                % hold on;
+                % sp_DEBUG__(queue(queue~=0))=1;     spy(sp_DEBUG__,'r'); sp_DEBUG__(:) = 0;
+                % sp_DEBUG__(cluster(cluster~=0))=1; spy(sp_DEBUG__,'k'); sp_DEBUG__(:) = 0;
+                % hold off;
+                % drawnow;
             end
             cluster = cluster(1:ic); neighbor = queue(am_lib.setdiffi_(queue(1:iq),cluster)); 
         end
