@@ -387,13 +387,13 @@ classdef am_field
             % define boundary conditions
             switch boundary
                 case {'pbc','periodic'}
-                    [I]      = reshape(1:p(end),F.n);
-                    [S{1:2}] = ndgrid(1:F.n(1),1:F.n(2));
+                    x = reshape(1:p(end),F.n);
+                    [y{1:2}] = ndgrid(1:F.n(1),1:F.n(2));
                     % get neighbors
-                    n_ = @(i) [I(mod(S{1}(i)+1-1,F.n(1))+1,S{2}(i)), ...
-                               I(mod(S{1}(i)-1-1,F.n(1))+1,S{2}(i)), ...
-                               I(S{1}(i),mod(S{2}(i)+1-1,F.n(2))+1), ...
-                               I(S{1}(i),mod(S{2}(i)-1-1,F.n(2))+1)];
+                    n_ = @(i) [x(mod(y{1}(i)+1-1,F.n(1))+1,y{2}(i)), ...
+                               x(mod(y{1}(i)-1-1,F.n(1))+1,y{2}(i)), ...
+                               x(y{1}(i),mod(y{2}(i)+1-1,F.n(2))+1), ...
+                               x(y{1}(i),mod(y{2}(i)-1-1,F.n(2))+1)];
                     % get energy gain from flipping spin
                     en_ = @(F,i) 2 * F.F(1,i) * sum( F.F(1,n_(i)) );
                 case {'hbc','helical'}
@@ -428,7 +428,7 @@ classdef am_field
                         % pick a random coordinate to flip
                         i = randi(p(end));
                         % flood fill
-                        cluster = am_lib.floodfill_( F.F(:), G, i, 1-exp(-2*beta) );
+                        cluster = am_lib.floodfill_( F.F(:), G, 1-exp(-2*beta), i );
                         % flip cluster
                         F.F(1,cluster) = - F.F(1,cluster);
                         % plot?
@@ -443,7 +443,7 @@ classdef am_field
                         % divide field into clusters by linking parallel spins with probability p = 1-exp(-2*beta)
                         i=0; C = zeros([1,F.n]); 
                         while any(C(:)==0)
-                            inds = am_lib.floodfill_( F.F(:) , G , find(~C(:),1) , 1-exp(-2*beta) ); i=i+1; C(inds)=i;
+                            inds = am_lib.floodfill_( F.F(:), G, 1-exp(-2*beta), find(~C(:),1) ); i=i+1; C(inds)=i;
                         end
                         nclusters=i;
                         % flip each cluster with probability 1/2
@@ -453,6 +453,84 @@ classdef am_field
                         % plot?
                         if mod(i,round(M*0.01))==0; F.plot_field('F'); title(num2str(j)); drawnow; end
                     end
+                case {'KL87','MULTI'} % Kandel-Loh Multigrid (Phys. Rev. Lett. 60, 1591 (1988)) 
+                    % NOT WORKING PROPERLY. TO DO:
+                    % D. Kandel et al., PRL 60, 1591 (1988) uses weights to describe bonds between high level clusters
+                    % weights N{l}(3,:) would need to equal the neighbors shared between clusters, not just set to 1 as it is now.
+                    %
+                    % Data structures:
+                    % I maps clusters between levels
+                    % N maps clusters within levels (weights are ignored).
+                    
+                    % set maximum cluster dimension
+                    cdim = 5;
+                    % define multigrid pattern
+                    updn=[1,1,1,1,1,1,1,1,-1,0,1,-1,0,-1,0,-1,0,-1,0,-1,0,-1,0,-1,0,-1,0]; % updn=repmat(updn,1,10);
+                    % updn=[1,1,1,1,0];
+                    % initialize: field S(i) for i clusters
+                    S = [F.F(1,:),NaN(1,100)];
+                    % initialize: level counter
+                    l=1;
+                    % initialize: edge list G(1:3,i) for i clusters (cluster-to-cluster connections within same lvl)
+                    N{l} = ones(3,4*p(end)); N{l}(1,:) = repelem(1:p(end),4);
+                    for i = 1:p(end); N{l}(2,4*(i-1)+[1:4]) = n_(i); end
+                    % create edge list P(1:3,i) for i clusters ( cluster(lvl-1)-to-cluster(lvl) )
+                    I{l} = [1:p(end);zeros(1,p(end));ones(1,p(end))];
+
+                    % perform monte carlo run
+                    for k = 1:numel(updn); l=l+updn(k);
+                        switch updn(k)
+                            case  0 % do M metropolis sweeps
+                                x = am_lib.minmax_(I{l}(1,:)); dx=x(2)-x(1)+1;
+                                for j = 1:M*dx
+                                    % pick a random cluster to flip
+                                    i = x(1)+randi(dx)-1;
+                                    % calculate the energy of flipping
+                                    E = 2*S(i)*sum(S(N{l}(2,N{l}(1,:)==i)));
+                                    % flip?
+                                    if E <= 0 || rand(1) <= exp(-E/kT); S(i) = -S(i); end
+                                end
+                            case -1 % refine
+                                % distribute course field values on fine clusters 
+                                S(I{l+1}(2,:))=S(I{l+1}(1,:));
+                                % reset l+1 level
+                                x=am_lib.minmax_(I{l+1}(1,:)); S(x(1):x(2))=NaN; I(l+1)=[]; N(l+1)=[]; 
+                            case +1 % coursen
+                                % Sj marks which spins have already been considered consider, j is the next position to sweep, iC counts and labels clusters
+                                i=0; nIs=0; nNs=0; N{l}=zeros(3,4*p(end)); I{l}=zeros(3,4*p(end)); 
+                                x=am_lib.minmax_(I{l-1}(1,:)); j=x(1); iC=x(2); Sj=S; Sj(1:x(1)-1)=NaN; 
+                                % divide field into clusters by linking parallel spins with probability p = 1-exp(-2/kT)
+                                while ~isempty(j)
+                                    % perform flood fill
+                                    [I_,N_] = am_lib.floodfill_( Sj , N{l-1} , 1-exp(-2/kT) , j , cdim );
+                                    % mark sites as visited and find next node which has not been assigned a cluster
+                                    i=i+1; iC=iC+1; Sj(I_)=NaN; j=find(~isnan(Sj(:)),1);
+                                    % save clusters and neighbors (in terms of last lvl's cluster) 
+                                    nI = numel(I_); I{l}(:,nIs+[1:nI]) = [repmat(iC,1,nI);I_;ones(1,nI)]; nIs=nIs+nI; %
+                                    nN = numel(N_); N{l}(:,nNs+[1:nN]) = [repmat(iC,1,nN);N_;ones(1,nN)]; nNs=nNs+nN; % 
+                                end
+                                % trim un-used space
+                                N{l} = N{l}(:,1:nNs); I{l} = I{l}(:,1:nIs);
+                                % rewrite same-level cluster-cluster edge list in terms of clusters on this lvl
+                                aux=[]; aux(I{l}(2,:))=I{l}(1,:); N{l}(2,:)=aux(N{l}(2,:));
+                                % pass on field values on to new level. S(1,2,3,4,...,nclusters)
+                                aux=[]; aux(I{l}(1,:))=I{l}(2,:); S(aux~=0)=S(aux(aux~=0));
+                                % keep only one instance of each edge (not consistent with Kendal's original algorithm).
+                                N{l}=am_lib.uniquec_(N{l});
+
+                                % plot graph
+                                subplot(1,2,2);
+                                X=cat(2,I{2:end}); X = unique(sort(X(1:2,:)',2),'rows')'; 
+                                plot(graph(X(1,:),X(2,:)),'Layout','layered','Sinks',unique(I{1}(1,:)),'Sources',unique(I{end}(1,:)))
+                                ylim([0, max(cumsum(updn))+2]); drawnow; 
+                        end
+                        % distribute course field values on fine clusters and update F
+                        for i = l-1:-1:1; S(I{i+1}(2,:))=S(I{i+1}(1,:)); end
+                        F.F = reshape(S(1:p(end)),[1,F.n]);
+                        % plot
+                        subplot(1,2,1);
+                        F.plot_field('F'); drawnow;
+                    end                    
                 otherwise
                     error('unknown algorithm');
             end

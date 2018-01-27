@@ -918,7 +918,11 @@ classdef am_lib
             % return at most n values
             % integer set diff
             C = false(1,max(numel(A),numel(B)));
+            try
             C(A(:)) = true; C(B(:)) = false; C = C(A(:));
+            catch
+                asdf
+            end
         end
         
         function [C,IA,IC] = uniquec_(A,tol)
@@ -2788,13 +2792,13 @@ classdef am_lib
         
         % image processing
         
-        function [cluster,neighbor] = floodfill_(F,G,i,p,maxclustersize)
+        function [cluster,neighbor] = floodfill_(F,G,P,i,maxclustersize)
             % F = scalar field
             % G(2,n) = edge list; edge n connects G(1,n) to G(2,n) with weight G(3,:)
-            % i = index of seed
-            % p, probability that a point will be incorporated into the cluster:
+            % P, probability that a point will be incorporated into the cluster:
             %       p = 1-exp(-2/kT(k))     for Wolff
             %       p = 1                   for flood fill
+            % i = index of seed
             % 
             
             % no input is passed
@@ -2828,7 +2832,7 @@ classdef am_lib
                 % cycle queue
                 nq=nq+1; q=queue(nq:iq); nq=iq;
                 % get aligned spins and add it to cluster with probability 1-exp(-2/kT)s
-                ex_ = F(q)==F(i); ex_(ex_) = rand(1,sum(ex_)) <= p; ncs = sum(ex_); 
+                ex_ = F(q)==F(i); ex_(ex_) = rand(1,sum(ex_)) <= P; ncs = sum(ex_); 
                 % limit maximum cluster size
                 if ~isinf(maxclustersize)
                     m = min(maxclustersize-ic,ncs); v = [true(1,m),false(1,ncs-m)];
