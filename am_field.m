@@ -656,7 +656,7 @@ classdef am_field
         
     end
    
-    methods % internal stuff
+    methods (Access = protected) % internal stuff
         
         function [R] = get_collocation_points(F)
             for i = 1:F.d % loop over dimensions
@@ -782,7 +782,7 @@ classdef am_field
         
     end
      
-    methods (Static) % polynomials and spectral methods
+    methods (Static, Access = protected) % polynomials and spectral methods
 
         function [x]     = canonicalr_(n) % roots of canonical all-one polynomial
            x(:,1) = zeros(n,1);

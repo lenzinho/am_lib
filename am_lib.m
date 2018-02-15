@@ -401,6 +401,20 @@ classdef am_lib
         
         
         % vectorization
+        
+        function [C] = field2array_(A,field)
+            n = numel(A); C = zeros(1,n);
+            for i = 1:n
+                C(i) = A(i).(field);
+            end
+        end
+
+        function [C] = field2cell_(A,field)
+            n = numel(A); C = cell(1,n);
+            for i = 1:n
+                C{i} = A(i).(field){:};
+            end
+        end
 
         function [C] = flatten_(A)
             C = A(:);
@@ -1242,18 +1256,22 @@ classdef am_lib
         % functions that should of existed
         
         function n = gcd_(n)
-            % operates on vector n = [n1,n2,n3 ...]
-            x=1; p=n;
-            while(size(n,2))>=2
-                p= n(:,size(n,2)-1:size(n,2));
-                n=n(1,1:size(n,2)-2);
-                x=1;
-                while(x~=0)
-                    x= max(p)-min(p);
-                    p = [x,min(p)];
-                end    
-                n = [n,max(p)];
-                p = [];
+            if any(n==0)
+                n = am_lib.gcd_(n(n~=0));
+            else
+                % operates on vector n = [n1,n2,n3 ...]
+                x=1; p=n;
+                while(size(n,2))>=2
+                    p= n(:,size(n,2)-1:size(n,2));
+                    n=n(1,1:size(n,2)-2);
+                    x=1;
+                    while(x~=0)
+                        x= max(p)-min(p);
+                        p = [x,min(p)];
+                    end    
+                    n = [n,max(p)];
+                    p = [];
+                end
             end
         end
         
