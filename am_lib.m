@@ -380,6 +380,19 @@ classdef am_lib
             [~,IA,IC] = unique(am_lib.rnd_(X,tol),varargin{:}); C = X(:,IA);
         end
         
+        % data-type conversion
+        
+        function [B] = str2num_(A)
+            if iscell(A)
+                nAs = numel(A);
+                B = zeros(1,nAs);
+                for i = 1:nAs
+                    B(i) = str2num(A{i});
+                end
+            else isstring(A)
+                B = str2num(A);
+            end
+        end
         
         % symbolic
         
@@ -1970,28 +1983,54 @@ classdef am_lib
         function [c,f,l] = fit_peak_(x,y,profile)
             import am_lib.*
             switch profile
+                case 'lorentz'
+                    % define function
+                    func_ = @(c,x) c(1).*lorentz_((x-c(2)).*c(3)) + c(5);
+                    FWHM_ = @(c) sqrt(2*log(2))*c(3); 
+                    % name parameter
+                    label = {'Amp','Center','Width''Background'};
+                    % estimate parameters
+                    [~,j] = max(conv(y,ones(1,20)/20,'same'));
+                    x0    = [ max(y), x(j), 1E-1, 0.5, 0]; 
+                    % define rescaling
+                    fscale_= @(c) [log(c(1)),c(2:4),log(c(5))];
+                    rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
+                case 'gauss'
+                    % define function
+                    func_ = @(c,x) c(1).*gauss_((x-c(2)).*c(3)) + c(5);
+                    FWHM_ = @(c) sqrt(2*log(2))*c(3); 
+                    % name parameter
+                    label = {'Amp','Center','Width''Background'};
+                    % estimate parameters
+                    [~,j] = max(conv(y,ones(1,20)/20,'same'));
+                    x0    = [ max(y), x(j), 1E-1, 0.5, 0]; 
+                    % define rescaling
+                    fscale_= @(c) [log(c(1)),c(2:4),log(c(5))];
+                    rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
                 case 'pvoigt'
                     % define function
                     func_ = @(c,x) c(1).*pvoigt_((x-c(2)).*c(3),c(4)) + c(5);
-                    FWHM_ = @(c) 2/c(3);
+                    FWHM_ = @(c) 2/c(3); 
                     % name parameter
                     label = {'Amp','Center','Width','Lorentzian Fraction','Background'};
                     % estimate parameters
                     [~,j] = max(conv(y,ones(1,20)/20,'same'));
-                    x0    = [ max(y), x(j), 1E2, 0.5, 0]; 
+                    x0    = [ max(y), x(j), 1E-1, 0.5, 0]; 
                     % define rescaling
                     fscale_= @(c) [log(c(1)),c(2:4),log(c(5))];
                     rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
             end
 
             % define cost function
-            cost_ = @(c) abs(log(func_(rscale_(c),x)) - log(y(:))).*y(:);
+%             cost_ = @(c) abs(log(func_(rscale_(c),x)) - log(y(:))).*y(:); % weigh top heavy
+            cost_ = @(c) abs(log(func_(rscale_(c),x)) - log(y(:))); % uniform weight
 
             % optimization options
             opts_ = optimoptions(@lsqnonlin,'Display','none','MaxIterations',1E10,'StepTolerance',1E-18,'FunctionTolerance',1E-18);
 
-            c = lsqnonlin(cost_,fscale_(x0),[0 0 0 0 0],[Inf Inf Inf 1 Inf],opts_); c = rscale_(c); f = func_; l = label;
+            c = lsqnonlin(cost_,fscale_(x0),[-Inf -Inf -Inf -Inf -Inf],[Inf Inf Inf 1 Inf],opts_); c = rscale_(c); f = func_; l = label;
             figure(1); set(gcf,'color','w'); plot(x,func_(c,x),'-k',x,y,'.-','linewidth',1); title(sprintf('FWHM = %g',FWHM_(c)));
+            set(gca,'yscale','log');
 
         end
 
@@ -2715,7 +2754,7 @@ classdef am_lib
             h = reshape(h,size(f));
         end
         
-        function [G,f,t]= stft_(y,t,w_) % short-time fourier transform, y = signal, t = time vector, w_ = window function
+        function [G,f,t]= stft_(t,y,w_,flag) % short-time fourier transform, y = signal, t = time vector, w_ = window function
             % options for windows:
             % 
             %	*) w = 0.03; w_ = @(x) am_lib.gauss_(x./w)*w; % gaussian window for gabor
@@ -2726,14 +2765,35 @@ classdef am_lib
             % N = 1001; t = [0:N-1]/N;
             % y = chirp(t,100,1,400)+chirp(t,-100,1,200); % define signal
             % w = 0.03; w_ = @(x) am_lib.gauss_(x./w)*w; % define window
-            % am_lib.stft_(y,t,w);
+            % am_lib.stft_(t,y,w);
+            if nargin<4; flag=''; end
+            if nargout==0
+                if contains(flag,'detail')
+                    % define plotting grid
+                    a=6; b=6; g=reshape(1:a*b,b,a).';
+                    % plot curve
+                    subplot(a,b,g(1,1:end-1)); plot(t,y); axis tight; set(gca,'xtick',[]);
+                    % plot periodogram
+                    [f,yf] = am_lib.fft_(t,y);
+                    subplot(a,b,g(2:end,end)); loglog(abs(yf).^2,(1:numel(f))); axis tight; set(gca,'ytick',[]);
+                    % plot short time FT
+                    subplot(a,b,am_lib.flatten_(g(2:end,1:end-1))); am_lib.stft_(t,y,w_,'half'); axis tight; set(gca,'yscale','log'); box on; 
+                else
+                    [G,f,t] = am_lib.stft_(t,y,w_,flag);
+                    surf(t,f,log(abs(G)),'edgecolor','none'); view([0 0 1]);
+                end
+                return;
+            end
+            % main part:
             N  = numel(t);
             fs = 1./(t(2)-t(1));% define sampling frequency
             f  = fftshift(fs/N*([0:N-1]-ceil(N/2))); % define frequencies
             G  = fft(w_(t.'-t).*y(:),[],1); % apply fft
             [f,t] = ndgrid(f,t);
-            if nargout==0
-                surf(t,f,abs(G),'edgecolor','none'); view([0 0 1]);
+            if contains(flag,'half')
+                f = f(1:floor(end/2),:);
+                t = t(1:floor(end/2),:);
+                G = G(1:floor(end/2),:);
             end
         end
         
@@ -2786,12 +2846,22 @@ classdef am_lib
             end
         end
         
+        function [y]    = fft_background_correction(y,nfftcomponents,npasses)
+            % nfftcomponents = 5; npasses = 5;
+            d = numel(y); x = [1:d].';
+            for i = 1:npasses
+                [f,yf]=am_lib.fft_(x,y,'half');
+                b = real(ifft(yf.*(1:numel(f)<nfftcomponents),d));
+                y = y-b.'; % y = y-mean(y);
+                % plot(x,b./max(abs(b))-i,x,y./max(abs(y))-i)
+            end            
+        end
+        
         function          plot_power_spectrum_(t,y,leg)
-            import am_lib.*
             % count number of scans
             nys=size(y,2);
             % apply fft
-            for i = 1:nys; [f(:,i),yf(:,i)] = fft_(t(:,i).',y(:,i).'); end
+            for i = 1:nys; [f(:,i),yf(:,i)] = am_lib.fft_(t(:,i).',y(:,i).'); end
             % plot results
             figure(1); set(gcf,'color','w'); clf
             a=arrayfun(@(i){t(:,i),y(:,i)},[1:nys],'UniformOutput',false);a=[a{:}];
