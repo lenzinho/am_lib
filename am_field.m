@@ -50,9 +50,7 @@ classdef am_field
         
         function F = demo()
             
-            import am_field.*
-            
-            F   = define_field([2,2].^[7,8],[2*pi,2*pi],{'cdiff','fourier'});
+            F   = am_field.define([2,2].^[7,8],[2*pi,2*pi],{'cdiff','fourier'});
             F.R = get_collocation_points(F);
             F.F = cat(1,sin(F.R(1,:,:,:)), sin(F.R(2,:,:,:))); 
             F.F = sum(F.F,1);
@@ -69,9 +67,7 @@ classdef am_field
         
         function F = demo_biot_savart()
             
-            import am_field.*
-            
-            F   = define_field([2,2,2].^[5,5,5],[1,1,1],{'chebyshev','chebyshev','chebyshev'});
+            F   = am_field.define([2,2,2].^[5,5,5],[1,1,1],{'chebyshev','chebyshev','chebyshev'});
             F.R = get_collocation_points(F);
 
             D_ = @(N)      sparse([1:N],1+[1:N],1,N,N+1)-sparse([1:N],[1:N],1,N,N+1); % Define forward-difference and forward-mean transforms.
@@ -96,16 +92,14 @@ classdef am_field
         end
 
         function F = demo_hilliard_cahn()
-            
-            import am_field.* 
 
-            F = am_field.define_field([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize object
+            F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
             F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000); % solve
         end
         
-        function F = demo_ising_metropolis()
-            F = am_field.define_field([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+        function F = demo_ising_metropolis_periodic_bc()
+            F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
             % F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
             F.F = ones([1,F.n]); % initialize the field
 
@@ -150,11 +144,11 @@ classdef am_field
             
         end
         
-        function F = demo_ising_metropolis_helical()
+        function F = demo_ising_metropolis_helical_bc()
             %isng model with helical boundary conditions
             clear;clc;
 
-            F = am_field.define_field([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+            F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
             % F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
             F.F = ones([1,F.n]); % initialize the field
 
@@ -193,17 +187,44 @@ classdef am_field
             line([1 1]*2/log(1+sqrt(2)),get(gca,'YLim'),'Color','k','linewidth',0.5); % ideal Tc 
         end
         
-        function [F] = define_field(n,a,s)
+        function F = demo_nudge_elastic_band()
+            % define central-difference mesh between [0,1) 
+            F = am_field.define([2,2].^8,[1,1],{'cdiff','cdiff'}); 
+            % scale x to [-1.5,1.2) and y to [-0.2,2.0)
+            s = [ -1.5,1.2; -0.2,2.0 ]; F.R = F.R.*(s(:,2)-s(:,1))+s(:,1);
+            % load Mueller potential
+            F = F.load('Mueller');
+            % plot
+            F.plot_field('F')
+        end
+        
+        function [F] = define(n,a,s)
             m = numel(n);
             if numel(s)~=m; error('s dimensions mismatch'); end
             if numel(a)~=m; error('a dimensions mismatch'); end
             F = am_field(); F.a=a; F.n=n; F.s=s; F.d=numel(n); F.R = get_collocation_points(F);
         end
         
-    end 
+    end
     
     methods 
-
+        
+        function [F] = load(F,model)
+            switch model
+                case 'Mueller'
+                    % parameters in Mueller potential
+                    a = [-1 -1 -6.5 0.7]; b = [0 0 11 0.6]; c = [-10 -10 -6.5 0.7]; 
+                    A = [-200 -100 -170 15]; X = [1 0 -0.5 -1]; Y = [0 0.5 1.5 1];
+                    F.F = sum( A(:).*exp(a(:).*(F.R(1,:)-X(:)).^2 + ...
+                                         b(:).*(F.R(1,:)-X(:)).*(F.R(2,:)-Y(:)) + ...
+                                         c(:).*(F.R(2,:)-Y(:)).^2), 1);
+                    F.F = min(F.F,200); 
+                    F.F = reshape(F.F,[1,F.n]);
+                case 'otherwise'
+                    error('unknown model');
+            end
+        end
+        
         function [F] = extract_slice(F,i,j)
             % i = dimension extracting
             % j = position along i
@@ -248,7 +269,7 @@ classdef am_field
         
         function [F] = solve_differential_equation(F,equation,x,algorithm,dt,M)
             % examples
-            % F = am_field.define_field([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
+            % F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
             % F = F.solve_differential_equation('SW76',{0.1,1.0},'implicit',2,500);         % hexagons
             % F = F.solve_differential_equation('SW76',{0.3,0.0},'implicit',2,500);         % finger prints
@@ -258,12 +279,12 @@ classdef am_field
             % F = F.solve_differential_equation('GL50',{@(x)(x^2-1)^2/4,1},'explicit',0.01,5000);
             % 
             % Complex Ginzburg-Landau
-            % F = am_field.define_field([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
+            % F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
             % F = F.solve_differential_equation('GLXX',{1},'explicit',0.2,2000);
             %
             % Cahn-Hilliard Polymer (mean = -0.45: hexagons, mean = 0: lines)
-            % F = am_field.define_field([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+            % F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field, lines    (mean = 0)
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.455; % initialize field, hexagons (mean = -0.455)
             % F = F.solve_differential_equation('QP13',{@(x)(x^2-1)^2/4,0.5,0.1},'explicit',0.05,10000);
@@ -374,7 +395,7 @@ classdef am_field
         
         function [F] = simulate_ising_(F,kT,M,algorithm,boundary)
             % 2D ising model
-            % F = am_field.define_field([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+            % F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
             % F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
             % F = F.simulate_ising_(2,20000,'wolff','pbc')
 
@@ -654,6 +675,27 @@ classdef am_field
             end
         end
         
+        
+        % TO DO: drop particles (nodes) on a converged potential and move MD based on Lagrangian mechanics
+        % evolve each particle using different algorithms, including verlet. 
+        % this is a precursor to the nudge elastic band method for finding minimum energy path.
+        % can also add nose hoover and make the simulation an NVT ensamble instead of NVE
+        
+
+%                 % 6) current temperature
+%                 Tj = 2/3*KE(j)/uc.natoms/k_boltz;
+% 
+%                 % 5) compute Nose-Hoover drag: p_eta = KE - TE
+%                 nosehoover = v(:,:,j)/Q * ( Tj - T ) / uc.natoms;
+% 
+%                 % 6) get acceleration
+%                 acc = f(:,:,j) ./ uc.mass(uc.species);
+% 
+%                 % ***) update md [frac]: x' = x + v * dt; v' = v + a * dt; Nose-Hoover dv/dt becomes a - p_eta / Q * v;
+%                 if j ~= nsteps
+%                     u(:,:,j+1) = u(:,:,j) + dt * v(:,:,j);
+%                     v(:,:,j+1) = v(:,:,j) + dt * (acc - nosehoover);
+%                 end
     end
    
     methods (Access = protected) % internal stuff
@@ -751,7 +793,7 @@ classdef am_field
         function [D,L] = get_flattened_differentiation_matrices(F)
             % checked with this code:
             % % 2D difference matrix
-            % F = am_field.define_field([500,500],[1,1]*2*pi,{'chebyshev','chebyshev'});
+            % F = am_field.define([500,500],[1,1]*2*pi,{'chebyshev','chebyshev'});
             % F.F = sum(sin(F.R),1); F = F.get_derivatives; 
             % [D,L] = get_flattened_differentiation_matrices(F);
             % L = reshape(L*F.F(:),F.n);
@@ -920,7 +962,7 @@ classdef am_field
             w(1:n,1) = 1;
         end        
 
-        function [x,D,w] = pdiff_(n) % evenly spaced  periodic central difference [0,1)
+        function [x,D,w] = pdiff_(n) % evenly spaced periodic central difference [0,1)
             x(1:n,1) = [0:n-1]/n;
             if nargout < 2; return; end
             % get first and second derivative
