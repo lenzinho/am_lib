@@ -895,6 +895,11 @@ classdef am_lib
             C = sqrt(sum(abs(A).^2,1));
         end
         
+        function [C] = norm_(A)
+            % normalize columns
+            C = A./am_lib.normc_(A);
+        end
+        
         
         % matching
         

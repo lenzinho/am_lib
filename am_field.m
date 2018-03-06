@@ -51,14 +51,13 @@ classdef am_field
         function F = demo()
             
             F   = am_field.define([2,2].^[7,8],[2*pi,2*pi],{'cdiff','fourier'});
-            F.R = get_collocation_points(F);
             F.F = cat(1,sin(F.R(1,:,:,:)), sin(F.R(2,:,:,:))); 
             F.F = sum(F.F,1);
-            F.T = get_field_type(F);
-            F.J = get_jacobian(F);
-            F.D = get_divergence(F);
-            F.C = get_curl(F);
-            F.H = get_hessian(F);
+            F.T = F.get_field_type();
+            F.J = F.get_jacobian();
+            F.D = F.get_divergence();
+            F.C = F.get_curl();
+            F.H = F.get_hessian();
             
             figure(1); plot_jacobian(F);
             figure(2); plot_hessian(F);
@@ -188,21 +187,24 @@ classdef am_field
         end
         
         function F = demo_nudge_elastic_band()
+            clear;clc;
             % define central-difference mesh between [0,1) 
             F = am_field.define([2,2].^8,[1,1],{'cdiff','cdiff'}); 
             % scale x to [-1.5,1.2) and y to [-0.2,2.0)
             s = [ -1.5,1.2; -0.2,2.0 ]; F.R = F.R.*(s(:,2)-s(:,1))+s(:,1);
             % load Mueller potential
             F = F.load('Mueller');
-            % plot
-            F.plot_field('F')
+            F = F.get_derivatives();
+            % get minimum energy path using nudge elastic band
+            vi = [-1 ;0.5]; vf = [0.7;0.5]; nnodes = 10; ediff = 1E-3;
+            get_minimum_energy_path(F,vi,vf,nnodes,ediff)
         end
         
-        function [F] = define(n,a,s)
+        function F = define(n,a,s)
             m = numel(n);
             if numel(s)~=m; error('s dimensions mismatch'); end
             if numel(a)~=m; error('a dimensions mismatch'); end
-            F = am_field(); F.a=a; F.n=n; F.s=s; F.d=numel(n); F.R = get_collocation_points(F);
+            F = am_field(); F.a=a; F.n=n; F.s=s; F.d=numel(n); F.R = F.get_collocation_points();
         end
         
     end
@@ -256,14 +258,13 @@ classdef am_field
         end
         
         function [F] = get_derivatives(F)
-            import am_field.*
-            F.T = get_field_type(F);
-            F.J = get_jacobian(F);
-            F.D = get_divergence(F);
-            F.C = get_curl(F);
+            F.T = F.get_field_type();
+            F.J = F.get_jacobian();
+            F.D = F.get_divergence();
+            F.C = F.get_curl();
             if strcmp(F.T,'scalar')
-                F.H = get_hessian(F); 
-                F.L = get_laplacian(F);
+                F.H = F.get_hessian(); 
+                F.L = F.get_laplacian();
             end
         end
         
@@ -391,6 +392,87 @@ classdef am_field
                 otherwise
                     error('unknown solver');
             end
+        end
+        
+        function [F] = get_minimum_energy_path(F,vi,vf,nnodes,ediff)
+            % nudge_elastic_band
+            % nnodes = 10; 
+            % % starting and ending positions
+            % vi = [-1 ;0.5]; vf = [0.7;0.5];
+            % vi = [-.52 ;1.5]; vf = [0.6;0.5];
+            
+            % build nodes
+            r = am_lib.linspacen_(vi, vf, nnodes);
+
+            % define spring constant, time step
+            k = 10000; dt = 0.01;
+
+            % store force (gradient) in memory
+            J = -am_lib.diag_(F.J);
+
+            % initialize
+            if nargout==0; clf; F.plot_field('F'); hold on; end
+            nsteps=1000;  mass(1:nnodes)=1; v=zeros(F.d,nnodes,2); a=zeros(F.d,nnodes,2); PE=Inf(2,1);
+            % loop over md
+            for j = 1:nsteps
+                % find index of closest mesh point to each node
+                i = knnsearch(F.R(:,:).',r(:,:,1).').'; r(1:F.d,:,1) = F.R(:,i);
+                % get gradient
+                G = J(1:F.d,i);
+                % get potential energy
+                PE(2) = sum(F.F(i)-min(F.F(:)));
+
+                % get tangents
+                t = conv2(r(:,:,1),-[-1,0,1],'same'); t=t./am_lib.normc_(t); t(:,[1,end])=0;
+                % get perpendicular forces
+                f_perp = G - sum(G.*t,1).*t; f_perp(:,[1,end]) = 0;
+                % get parallel forces: f_para = sum_i k*x for i nearest neighbors
+                f_para = k*[0,diff(abs(am_lib.normc_(diff(r(:,:,1),1,2))),1,2),0].*t;
+                % get total force
+                f_total= f_para + f_perp;
+                % relax endpoints?
+                relax_ends = true;
+                if relax_ends
+                    f_total(:,[1,nnodes]) = G(1:F.d,[1,nnodes]);
+                end
+                % get force = ma on each point as the negative of the gradient
+                a(:,:,2) = f_total./mass;
+                % integrate
+                integrator = 'sd';
+                switch integrator
+                    case {'vvhs','velocity-verlet-half-step'}
+                        v(:,:,2) = v(:,:,1) + a(:,:,1)/2 .* dt;
+                        r(:,:,2) = r(:,:,1) + v(:,:,2) .* dt;
+                        v(:,:,2) = v(:,:,1) + a(:,:,2)/2 .* dt;
+                    case {'vvd','velocity-verlet-damped'}
+                        r(:,:,2) = r(:,:,1) + v(:,:,1) .* dt + a(:,:,1)/2 .* dt.^2;
+                        v(:,:,2) = v(:,:,1) + (a(:,:,1)+a(:,:,2))/2 .* dt;
+                        ex_=sum(v(:,:,2).*f_total,1)<0; v(:,ex_,2)=0;
+                    case {'vv','velocity-verlet'}
+                        r(:,:,2) = r(:,:,1) + v(:,:,1) .* dt + a(:,:,1)/2 .* dt.^2;
+                        v(:,:,2) = v(:,:,1) + (a(:,:,1)+a(:,:,2))/2 .* dt;
+                    case {'sd','steepest-descent'}
+                        r(:,:,2) = r(:,:,1) + v(:,:,2) .* dt + a(:,:,2)/2 .* dt.^2;
+                        v(:,:,2) = 0;
+                    otherwise
+                        error('unknown integrator');
+                end
+                % update
+                r = circshift(r,-1,3); v = circshift(v,-1,3); PE = circshift(PE,-1,1);
+                % draw
+                if nargout==0
+                    % print 
+                    dPE = abs(PE(2)-PE(1));
+                    if j==1; fprintf('%10s %10s\n','PE','dPE'); 
+                    else;    fprintf('%10.5f %10.5f\n',PE(1),dPE); end
+                    % plot
+                    h=line(r(1,:,1),r(2,:,1),'Marker','o','LineStyle','-','Color','k');
+                    drawnow;  delete(h);
+                end
+                % check energy difference and break if smaller
+                if dPE<ediff; break; end
+            end
+            h=line(r(1,:,1),r(2,:,1),'Marker','o','LineStyle','-','Color','k');
         end
         
         function [F] = simulate_ising_(F,kT,M,algorithm,boundary)
@@ -676,6 +758,7 @@ classdef am_field
         end
         
         
+        
         % TO DO: drop particles (nodes) on a converged potential and move MD based on Lagrangian mechanics
         % evolve each particle using different algorithms, including verlet. 
         % this is a precursor to the nudge elastic band method for finding minimum energy path.
@@ -747,6 +830,10 @@ classdef am_field
                     otherwise; error('unknown field type');
                 end
             end
+            % undefine boundaries
+            if F.d>0 && strcmp(F.s{1},'cdiff'); J(1,1,[1,end],:,:)=0; end
+            if F.d>1 && strcmp(F.s{2},'cdiff'); J(2,2,:,[1,end],:)=0; end
+            if F.d>2 && strcmp(F.s{3},'cdiff'); J(3,3,:,:,[1,end])=0; end
         end
 
         function [H] = get_hessian(F)
@@ -773,6 +860,10 @@ classdef am_field
                     otherwise; error('hessian is only defined for scalar fields');
                 end
             end
+            % undefine boundaries
+            if F.d>0 && strcmp(F.s{1},'cdiff'); H(1,1,[1,end],:,:)=0; end
+            if F.d>1 && strcmp(F.s{2},'cdiff'); H(2,2,:,[1,end],:)=0; end
+            if F.d>2 && strcmp(F.s{3},'cdiff'); H(3,3,:,:,[1,end])=0; end
         end
 
         function [D] = get_divergence(F)
@@ -824,7 +915,7 @@ classdef am_field
         
     end
      
-    methods (Static, Access = protected) % polynomials and spectral methods
+    methods (Static);%, Access = protected) % polynomials and spectral methods
 
         function [x]     = canonicalr_(n) % roots of canonical all-one polynomial
            x(:,1) = zeros(n,1);
