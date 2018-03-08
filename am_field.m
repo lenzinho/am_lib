@@ -44,6 +44,8 @@ classdef am_field
                 %     [ (     dFz/dy    -    dFy/dz    ) 
                 %     [ (     dFx/dz    -    dFz/dx    ) , x , y , z  ]
                 %     [ (     dFy/dx    -    dFx/dy    ) 
+       rACF=[]; % radial autocorrelation function
+      rHHCF=[]; % radial height-height function
     end
 
     methods (Static)
@@ -407,7 +409,7 @@ classdef am_field
             % define spring constant, time step
             k = 10000; dt = 0.01;
 
-            % store force (gradient) in memory
+            % store force (negative gradient) in memory
             J = -am_lib.diag_(F.J);
 
             % initialize
@@ -426,7 +428,7 @@ classdef am_field
                 t = conv2(r(:,:,1),-[-1,0,1],'same'); t=t./am_lib.normc_(t); t(:,[1,end])=0;
                 % get perpendicular forces
                 f_perp = G - sum(G.*t,1).*t; f_perp(:,[1,end]) = 0;
-                % get parallel forces: f_para = sum_i k*x for i nearest neighbors
+                % get parallel (spring) forces: f_para = k ( |r_{i+1}?ri|?|ri?r_{i?1}| ) . t
                 f_para = k*[0,diff(abs(am_lib.normc_(diff(r(:,:,1),1,2))),1,2),0].*t;
                 % get total force
                 f_total= f_para + f_perp;
@@ -654,7 +656,6 @@ classdef am_field
                                 h.EdgeColor= 'none'; h.LineWidth = 1; 
                                 view([0 0 1]); daspect([1 1 1]); axis tight;
                             else
-                                
                                 switch 1
                                     case 1 
                                         cmap  = am_lib.cmap_('spectral',200); n = size(cmap,1); 
@@ -671,12 +672,10 @@ classdef am_field
                                         amp   = log(abs(F.(field))); amp = (amp-min(amp(:)))./(max(amp(:))-min(amp(:))); 
                                         cmap  = reshape( cmap(ceil((n-1)*amp+1),:) , [F.n,3]);
                                 end
-                                
                                 set(gcf,'color','w');
                                 h = surf(sl_('R',1), sl_('R',2), squeeze(abs(F.(field))), cmap); 
                                 h.EdgeColor= 'none'; h.LineWidth = 1; 
                                 view([0 0 1]); daspect([1 1 1]); axis tight;
-                                
                             end
                         case 3 % 3D
                             error('not yet implemented');
@@ -756,6 +755,22 @@ classdef am_field
                     daspect([1 1 1]); axis tight;
             end
         end
+        
+        function       plot_statistical_function(F,varargin)
+            
+            if F.d~=2; error('plot_statistical_function is only implemented for 2d field'); end
+
+            [x,f] = get_statistical_function(F,varargin{:});
+            
+            % plot field as background
+            imagesc(squeeze(F.F)); hold on; pbaspect([1 1 1]); axis off;
+            % overlay statistical function on field
+            axes('position',get(gca,'position')); 
+            loglog(x,f,'-w','linewidth',2); pbaspect([1 1 1]); 
+            set(gca,'color','none'); 
+        end
+        
+        % statistical quantities
         
         
         
@@ -913,9 +928,46 @@ classdef am_field
             L = am_field.get_flattened_divergence(L{:});
         end
         
+        function [x,f] = get_statistical_function(F,flag,scanaxis)
+            % scanaxis = 2; % axis to sum over (usually scanaxis = 1 is the scan direction);
+            % hhcf = F.get_statistical_function('rHHCF',1);
+            % acf  = F.get_statistical_function('rACF',1);
+            % % convert acf to hhcf:
+            % rms = std(F.F(:)).^2; hhcf_from_acf = 2*(rms-acf);
+            % % compare
+            % loglog(([1:F.n(scanaxis)]-1)*(F.a(scanaxis)/F.n(scanaxis)),hhcf,'-',...
+            %     F.R(1,:,1),hhcf_from_acf.','.')
+            
+            if ~all(contains(F.s,'diff')); error('statistical functions are only implemented for finite differences'); end
+
+            % move scan axis to first dimension
+            D = permute(F.F(1,:,:,:),[2:100,1]); D = permute(D,circshift([1,2,3],1-scanaxis));
+            
+            switch flag
+                % "radial" HHCF (as defined in gywddion)
+                case {'rHHCF','height-height correlation'}
+                    x = ([1:F.n(scanaxis)]-1)*(F.a(scanaxis)/F.n(scanaxis));
+                    f = zeros(1,F.n(scanaxis));
+                    for i = 1:F.n(scanaxis)
+                        L = (F.n(scanaxis)-i+1); ex1_=i:F.n(scanaxis); ex2_=1:L;
+                        f(i) = am_lib.sum_( (D(ex1_,:)-D(ex2_,:)).^2 ,[1,2] ) ./ (L.*F.n(scanaxis));
+                    end
+                % "radial" ACF (as defined in gywddion)
+                case {'rACF','autocorrelation'}
+                    x = ([1:F.n(scanaxis)]-1)*(F.a(scanaxis)/F.n(scanaxis));
+                    f = zeros(1,F.n(scanaxis));
+                    for i = 1:F.n(scanaxis)
+                        L = (F.n(scanaxis)-i+1); ex1_=i:F.n(scanaxis); ex2_=1:L;
+                        f(i) = am_lib.sum_( (D(ex1_,:).*D(ex2_,:))   ,[1,2] ) ./ (L.*F.n(scanaxis));
+                    end
+                otherwise
+                    error('method unknown');
+            end
+        end
+            
     end
      
-    methods (Static);%, Access = protected) % polynomials and spectral methods
+    methods (Static, Access = protected) % polynomials and spectral methods
 
         function [x]     = canonicalr_(n) % roots of canonical all-one polynomial
            x(:,1) = zeros(n,1);
