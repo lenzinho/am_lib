@@ -1273,7 +1273,7 @@ classdef am_lib
         
         % functions that should of existed
         
-        function n = gcd_(n)
+        function n   = gcd_(n)
             if any(n==0)
                 n = am_lib.gcd_(n(n~=0));
             else
@@ -1292,12 +1292,16 @@ classdef am_lib
                 end
             end
         end
-        
+         
         function [C] = rndstr_(n)
             set = char(['a':'z','0':'9','_','!','@','#','$','%','^']); nsets = numel(set);
             C = set(ceil(nsets*rand(1,n)));
         end
 
+        function x   = ndims_(A)
+            % number of dimensions after squeezing
+            x = max(sum(size(A)~=1),1);
+        end
         
         % geometric functions
         
@@ -1589,11 +1593,6 @@ classdef am_lib
         
         
         % matrix related
-        
-        function x   = ndims_(A)
-            % number of dimensions after squeezing
-            x = max(sum(size(A)~=1),1);
-        end
         
         function [A,A_inv] = circulant_(v)
             % get the circulant matrix corresponding to vector v and its inverse
@@ -2820,6 +2819,16 @@ classdef am_lib
             g = -imag(fftshift(fft(f)));
         end
 
+        function [a]    = fft_autocorrelation_(x)
+            n = numel(x);
+            %FFT method based on zero padding
+            f = fft([x; zeros(n,1)]); % zero pad and FFT
+            a  = ifft(f.*conj(f)); % abs()^2 and IFFT
+            % circulate to get the peak in the middle and drop one
+            % excess zero to get to 2*n-1 samples
+            a = [a(n+2:end); a(1:n)];
+        end
+        
         function [x,y]  = fftdn_(y) % down-sample y by half, x = [0,1)
             n = numel(y); n = floor(n/2); 
             x = [0:n-1]/n; y = fft(y); 
@@ -2851,15 +2860,26 @@ classdef am_lib
             end
         end
         
-        function [y]    = fft_background_correction(y,nfftcomponents,npasses)
-            % nfftcomponents = 5; npasses = 5;
-            d = numel(y); x = [1:d].';
+        function [y,bg] = fft_background_(y,nfftcomponents,npasses)
+            n = max(am_lib.ndims_(y),2); 
+            if numel(nfftcomponents)==1; nfftcomponents=repmat(nfftcomponents,1,n); end
+            
+            bg = zeros(size(y));
+            
             for i = 1:npasses
-                [f,yf]=am_lib.fft_(x,y,'half');
-                b = real(ifft(yf.*(1:numel(f)<nfftcomponents),d));
-                y = y-b.'; % y = y-mean(y);
-                % plot(x,b./max(abs(b))-i,x,y./max(abs(y))-i)
-            end            
+                yf = fftn(y);
+                yf(1:end>nfftcomponents(1),:,:) = 0;
+                yf(:,1:end>nfftcomponents(2),:) = 0;
+                if n > 2
+                    yf(:,:,1:end>nfftcomponents(3)) = 0; 
+                if n > 3
+                    error('not yet implemented');
+                end
+                end
+                
+                b = real(ifftn(yf));
+                bg = b + bg; y = y - b; 
+            end
         end
         
         function          plot_power_spectrum_(t,y,leg)
