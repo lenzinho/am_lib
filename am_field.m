@@ -240,7 +240,7 @@ classdef am_field
             for f = {'s','n','a'}; if ~isempty(F.(f{:}))
                 F.(f{:})(i) = []; 
             end; end
-            % trim coordinates, field, jacobian, hexxian, divergence, curl
+            % trim coordinates, field, jacobian, hessian, divergence, curl
             for f = {'R','F','J','H','D','C'}; if ~isempty(F.(f{:}))
                 switch f{:}
                     case 'R'; o=1; case 'F'; o=1; case 'J'; o=2;
@@ -258,6 +258,35 @@ classdef am_field
                 end
             end; end
         end
+        
+%         function [F] = crop(F,x,dx)
+%             % x = coordinates to begin croping
+%             % dx= crop size
+%                   
+%             % trim dimension
+%             F.d   = F.d-1;
+%             % trim scheme, grid size, grid spacing
+%             for f = {'s','n','a'}; if ~isempty(F.(f{:}))
+%                 F.(f{:})(i) = []; 
+%             end; end
+%             % trim coordinates, field, jacobian, hessian, divergence, curl
+%             for f = {'R','F','J','H','D','C'}; if ~isempty(F.(f{:}))
+%                 switch f{:}
+%                     case 'R'; o=1; case 'F'; o=1; case 'J'; o=2;
+%                     case 'H'; o=2; case 'D'; o=1; case 'C'; o=1;
+%                 end
+%                 % permute
+%                 p=[1:ndims(F.(f{:}))]; p([1,i+o])=p([i+o,1]);     
+%                 % trim and permute back to orginal
+%                 F.(f{:}) = permute(F.(f{:}),p); F.(f{:}) = permute(F.(f{:})(j,:,:,:,:,:,:,:),p);
+%                 % permute trimmed to end
+%                 p=[1:ndims(F.(f{:}))+1]; p([i+o,end])=p([end,i+o]); F.(f{:}) = permute(F.(f{:}),p);
+%                 switch f{:}
+%                     case 'R'; F.(f{:})(i,:,:,:,:,:) = []; 
+%                     case 'F'; F.(f{:})(i,:,:,:,:,:) = []; 
+%                 end
+%             end; end
+%         end
         
         function [F] = get_derivatives(F)
             F.T = F.get_field_type();
@@ -756,18 +785,14 @@ classdef am_field
             end
         end
         
-        function       plot_statistical_function(F,varargin)
+        function [h] = plot_statistical_function(F,varargin)
             
             if F.d~=2; error('plot_statistical_function is only implemented for 2d field'); end
+            if ~all(contains(F.s,'diff')); error('statistical functions are only implemented for finite differences'); end
 
-            [x,f] = get_statistical_function(F,varargin{:});
+            [x,f] = am_lib.get_statistical_function(squeeze(F.F),varargin{:});
             
-            % plot field as background
-            imagesc(squeeze(F.F)); hold on; pbaspect([1 1 1]); axis off;
-            % overlay statistical function on field
-            axes('position',get(gca,'position')); 
-            loglog(x,f,'-w','linewidth',2); pbaspect([1 1 1]); 
-            set(gca,'color','none'); 
+            h = am_lib.plot_overlay_(squeeze(F.F),x,f);
         end
         
         % statistical quantities
@@ -927,44 +952,7 @@ classdef am_field
             L = cellfun(@(x)sparse(x(:,:,2)),Q,'UniformOutput',false);
             L = am_field.get_flattened_divergence(L{:});
         end
-        
-        function [x,f] = get_statistical_function(F,flag,scanaxis)
-            % scanaxis = 2; % axis to sum over (usually scanaxis = 1 is the scan direction);
-            % hhcf = F.get_statistical_function('rHHCF',1);
-            % acf  = F.get_statistical_function('rACF',1);
-            % % convert acf to hhcf:
-            % rms = std(F.F(:)).^2; hhcf_from_acf = 2*(rms-acf);
-            % % compare
-            % loglog(([1:F.n(scanaxis)]-1)*(F.a(scanaxis)/F.n(scanaxis)),hhcf,'-',...
-            %     F.R(1,:,1),hhcf_from_acf.','.')
-            
-            if ~all(contains(F.s,'diff')); error('statistical functions are only implemented for finite differences'); end
-
-            % move scan axis to first dimension
-            D = permute(F.F(1,:,:,:),[2:100,1]); D = permute(D,circshift([1,2,3],1-scanaxis));
-            
-            switch flag
-                % "radial" HHCF (as defined in gywddion)
-                case {'rHHCF','height-height correlation'}
-                    x = ([1:F.n(scanaxis)]-1)*(F.a(scanaxis)/F.n(scanaxis));
-                    f = zeros(1,F.n(scanaxis));
-                    for i = 1:F.n(scanaxis)
-                        L = (F.n(scanaxis)-i+1); ex1_=i:F.n(scanaxis); ex2_=1:L;
-                        f(i) = am_lib.sum_( (D(ex1_,:)-D(ex2_,:)).^2 ,[1,2] ) ./ (L.*F.n(scanaxis));
-                    end
-                % "radial" ACF (as defined in gywddion)
-                case {'rACF','autocorrelation'}
-                    x = ([1:F.n(scanaxis)]-1)*(F.a(scanaxis)/F.n(scanaxis));
-                    f = zeros(1,F.n(scanaxis));
-                    for i = 1:F.n(scanaxis)
-                        L = (F.n(scanaxis)-i+1); ex1_=i:F.n(scanaxis); ex2_=1:L;
-                        f(i) = am_lib.sum_( (D(ex1_,:).*D(ex2_,:))   ,[1,2] ) ./ (L.*F.n(scanaxis));
-                    end
-                otherwise
-                    error('method unknown');
-            end
-        end
-            
+    
     end
      
     methods (Static, Access = protected) % polynomials and spectral methods

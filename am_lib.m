@@ -64,7 +64,7 @@ classdef am_lib
             
             import am_lib.*
             
-            lambda = get_photon_energy(hv);
+            lambda = get_photon_wavelength(hv);
             
             th2_ = @(kx,kz,lambda) 2.*atan2d(...
                  real(sqrt(    (kx.^2 + kz.^2).*lambda.^2 )),...
@@ -91,17 +91,26 @@ classdef am_lib
             end
         end
         
-        function [kx,kz]     = angle2kxkz(w,th2,hv)
+        function [kx,kz]     = angle2kxkz(w,th2,hv,flag)
             % [kx,kz] = angle2kxkz(w,th2,hv)
             
             import am_lib.*
             
-            lambda = get_photon_energy(hv);
+            lambda = get_photon_wavelength(hv);
             
-            % convert to reciprocal coordinates
-            kx_ = @(w,th2,lambda)  2/(lambda).*sind(th2/2).*sind(th2/2-w);
-            kz_ = @(w,th2,lambda)  2/(lambda).*sind(th2/2).*cosd(th2/2-w);
-            kx  = kx_(w,th2,lambda); kz = kz_(w,th2,lambda);
+            switch flag
+                case 'in/exit'
+                    % in this case
+                    % w = incident angle
+                    % 2th = exit angle
+                    th2 = th2 + w;
+                    [kx,kz]  = angle2kxkz(w,th2,hv,'w2th');
+                case 'w2th'        
+                    % convert to reciprocal coordinates
+                    kx_ = @(w,th2,lambda)  2/(lambda).*sind(th2/2).*sind(th2/2-w);
+                    kz_ = @(w,th2,lambda)  2/(lambda).*sind(th2/2).*cosd(th2/2-w);
+                    kx  = kx_(w,th2,lambda); kz = kz_(w,th2,lambda);
+            end
         end
 
         function [kz]        = get_kz(th,hv)
@@ -900,7 +909,7 @@ classdef am_lib
             C = A./am_lib.normc_(A);
         end
         
-        
+
         % matching
         
         function [C] = maxabs_(A)
@@ -1303,7 +1312,13 @@ classdef am_lib
             x = max(sum(size(A)~=1),1);
         end
         
+        
         % geometric functions
+        
+        function L      = isorthogonal_(v1,v2,tol)
+            if nargin<3;tol=am_lib.tiny;end
+            L = abs(dot(v1,v2)./norm(v1)./norm(v2))<tol;
+        end
         
         function R      = rotzd_(t)
             c = cosd(t); s = sind(t);
@@ -1984,57 +1999,70 @@ classdef am_lib
             end
         end
         
-        function [c,f,l] = fit_peak_(x,y,profile)
+        function [c,f,l] = fit_peak_(x,y,flag)
             import am_lib.*
-            switch profile
-                case 'lorentz'
-                    % define function
-                    func_ = @(c,x) c(1).*lorentz_((x-c(2)).*c(3)) + c(5);
-                    FWHM_ = @(c) sqrt(2*log(2))*c(3); 
-                    % name parameter
-                    label = {'Amp','Center','Width''Background'};
-                    % estimate parameters
-                    [~,j] = max(conv(y,ones(1,20)/20,'same'));
-                    x0    = [ max(y), x(j), 1E-1, 0.5, 0]; 
-                    % define rescaling
-                    fscale_= @(c) [log(c(1)),c(2:4),log(c(5))];
-                    rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
-                case 'gauss'
-                    % define function
-                    func_ = @(c,x) c(1).*gauss_((x-c(2)).*c(3)) + c(5);
-                    FWHM_ = @(c) sqrt(2*log(2))*c(3); 
-                    % name parameter
-                    label = {'Amp','Center','Width''Background'};
-                    % estimate parameters
-                    [~,j] = max(conv(y,ones(1,20)/20,'same'));
-                    x0    = [ max(y), x(j), 1E-1, 0.5, 0]; 
-                    % define rescaling
-                    fscale_= @(c) [log(c(1)),c(2:4),log(c(5))];
-                    rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
-                case 'pvoigt'
-                    % define function
-                    func_ = @(c,x) c(1).*pvoigt_((x-c(2)).*c(3),c(4)) + c(5);
-                    FWHM_ = @(c) 2/c(3); 
-                    % name parameter
-                    label = {'Amp','Center','Width','Lorentzian Fraction','Background'};
-                    % estimate parameters
-                    [~,j] = max(conv(y,ones(1,20)/20,'same'));
-                    x0    = [ max(y), x(j), 1E-1, 0.5, 0]; 
-                    % define rescaling
-                    fscale_= @(c) [log(c(1)),c(2:4),log(c(5))];
-                    rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
+            if contains(flag,'lorentz')
+                % define function
+                func_ = @(c,x) c(1).*lorentz_((x-c(2)).*c(3)) + c(5);
+                FWHM_ = @(c) 2/c(3); 
+                % name parameter
+                label = {'Amp','Center','Width''Background'};
+                % estimate parameters
+                [~,j] = max(conv(y,ones(1,20)/20,'same'));
+                x0    = [ max(y), x(j), 1E-1, 0.5, 0]; 
+                % define rescaling
+                fscale_= @(c) [log(c(1)),c(2:4),log(c(5))];
+                rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
+            elseif contains(flag,'gauss')
+                % define function
+                func_ = @(c,x) c(1).*gauss_((x-c(2)).*c(3)) + c(5);
+                FWHM_ = @(c) sqrt(2*log(2))*c(3); 
+                % name parameter
+                label = {'Amp','Center','Width''Background'};
+                % estimate parameters
+                [~,j] = max(conv(y,ones(1,20)/20,'same'));
+                x0    = [ max(y), x(j), 1E-1, 0.5, 0]; 
+                % define rescaling
+                fscale_= @(c) [log(c(1)),c(2:4),log(c(5))];
+                rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
+            elseif contains(flag,'pvoigt')
+                % define function
+                func_ = @(c,x) c(1).*pvoigt_((x-c(2)).*c(3),c(4)) + c(5);
+                FWHM_ = @(c) 2/c(3); 
+                % name parameter
+                label = {'Amp','Center','Width','Lorentzian Fraction','Background'};
+                % estimate parameters
+                [~,j] = max(conv(y,ones(1,20)/20,'same'));
+                x0    = [ max(y), x(j), 1E-1, 0.5, 0]; 
+                % define rescaling
+                fscale_= @(c) [log(c(1)),c(2:4),log(c(5))];
+                rscale_= @(c) [exp(c(1)),c(2:4),exp(c(5))];
+            else
+                error('unknown profile');
             end
 
             % define cost function
-%             cost_ = @(c) abs(log(func_(rscale_(c),x)) - log(y(:))).*y(:); % weigh top heavy
-            cost_ = @(c) abs(log(func_(rscale_(c),x)) - log(y(:))); % uniform weight
+%             cost_ = @(c) abs(log(func_(rscale_(c),x)) - log(y(:))).*y(:).^5; % weigh very top heavy
+            cost_ = @(c) abs(log(func_(rscale_(c),x)) - log(y(:))).*y(:); % weigh top heavy
+%             cost_ = @(c) abs(log(func_(rscale_(c),x)) - log(y(:))); % uniform weight
 
             % optimization options
             opts_ = optimoptions(@lsqnonlin,'Display','none','MaxIterations',1E10,'StepTolerance',1E-18,'FunctionTolerance',1E-18);
 
+            % optimize
             c = lsqnonlin(cost_,fscale_(x0),[-Inf -Inf -Inf -Inf -Inf],[Inf Inf Inf 1 Inf],opts_); c = rscale_(c); f = func_; l = label;
-            figure(1); set(gcf,'color','w'); plot(x,func_(c,x),'-k',x,y,'.-','linewidth',1); title(sprintf('FWHM = %g',FWHM_(c)));
-            set(gca,'yscale','log');
+            
+            
+            % plot if no output is requested
+            if nargout == 0
+                figure(1); set(gcf,'color','w'); plot(x,func_(c,x),'-k',x,y,'.-','linewidth',1); 
+                title(sprintf('FWHM = %g',FWHM_(c))); % set(gca,'yscale','log');
+            end
+            
+            % only report the FWHM
+            if contains(flag,'FWHM')
+                c = FWHM_(c); 
+            end
 
         end
 
@@ -2391,22 +2419,106 @@ classdef am_lib
         
         % general plotting
         
+        function        set_plot_defaults_()
+            set(groot,'defaultFigureColor','w');
+            set(groot,'defaultLineLineWidth',1.5);
+            set(groot,'defaultAxesLineWidth',1.5);
+            set(groot,'defaultLineMarkerSize',9);
+            set(groot,'defaultAxesFontSize',16);
+            set(groot,'defaultAxesFontName','Helvetica');
+        end
+        
+        function variabilityplot_(x,y,varargin)            
+            % x = randn(400,1);
+            % y1 = nominal(randi(2,400,1),{'little','lots'});
+            % y2 = nominal(randi(3,400,1),{'large','medium','small'});
+            % y3 = nominal(randi(2,400,1),{'aardvark','potato'},[1,2]);
+            % y = [y1,y2,y3];
+            % variabilityplot_(x,y)
+
+            % get sizes
+            n = size(y,2); numgrps = zeros(1,n);
+            for k = 1:n; numgrps(k) = numel(unique(y(:,k))); end
+            numgrps = cumprod(numgrps); N = numgrps(n); y = fliplr(y);
+            % plot 
+            boxplot(x,y,...
+                'plotstyle','compact','labelorientation','horizontal',...
+                'factorseparator',1:n,varargin{:}); % set(findobj(gca,'Type','text'),'FontSize',16)
+            % get handels
+            hbxplt = get(gca,'children'); hall = get(hbxplt,'children'); halltype = get(hall,'type'); hsepln = hall(end-n+1:end);
+            htxt = hall(strcmpi('text',halltype)); set(htxt,'units','data')
+            txtpos = get(htxt,'position'); txtpos = cat(1,txtpos{:}); txtpos(:,2) = flipud(txtpos(:,2));
+
+            % position label text appropriately
+            x = reshape(txtpos(:,1),N,n); 
+            for k = 2:n
+                m = numgrps(k-1);
+                for j = 1:N
+                    ii = floor((j-1)/m);
+                    i1 = 1 + m*ii;
+                    i2 = m*(1+ii);
+                    x(j,k) = mean(x(i1:i2,1));
+                end
+            end
+            txtpos(:,1) = x(:);
+            for k = 1:length(htxt); set(htxt(k),'position',txtpos(k,:)); end
+            % draw label lines 
+            tlcol = 0.5*[1,1,1]; txtpos = get(htxt,'extent'); txtpos = cat(1,txtpos{:});
+            xl = xlim; yl = ylim; y1 = min(yl); y2 = min(txtpos(:,2)); y = linspace(y1,y2,n+1);
+            % draw label box's horizontal lines
+            for k = 2:(n+1)
+                line(xl,[y(k),y(k)],'parent',gca,'clipping','off','color',tlcol);
+            end
+            % draw label box's vertical lines
+            line(xl(1)*[1,1],[y1,y2],'parent',gca,'clipping','off','color',tlcol);
+            line(xl(2)*[1,1],[y1,y2],'parent',gca,'clipping','off','color',tlcol);
+            % draw vertical seperators
+            for j = 1:n
+                newy = get(hsepln(j),'YData');
+                newy(newy==yl(2)) = y(j+1);
+                line(get(hsepln(j),'XData'),newy,'parent',gca,'clipping','off','color',tlcol);
+            end
+            delete(hsepln(1))
+        end
+        
         function [th] = assign_cmap_(V)
             % assigns a number between [0,1] based on how close vectors V
             % in are to identity vectors in that same basis. It essentially
             % reduces the dimensionality of the data
 
-            % set number of points
+            % set number of categories
             n = size(V,1);
+            % get number of points
+            m = size(V,2);
 
-            % define points around circle on complex plane
-            p = exp(2*pi*1i*[1:n]/n);
-
-            % get complex points
-            c = (p*abs(V)).';
-
-            % get linear mapping between [0,1]
-            th = mod( (atan2d(imag(c),real(c))/180+1)/2 + 3/8, 1);
+            if     n == 1
+                c = ones(n,m);
+            elseif n == 2
+                p = [0 1]; 
+                th = (p*abs(V)).';
+            else
+                % define categories around circle on complex plane
+                p = exp(2*pi*1i*[1:n]/n);
+                % get complex points
+                c = (p*abs(V)).'; c = atan2d(imag(c),real(c));
+                % 
+                th = mod(mod(c/360,1)-0.5/n,1);
+            end
+        end
+        
+        function [h]  = plot_overlay_(I,x,y)
+            % plots x,y on top of a background image I 
+            
+            % plot field as background
+            h(1) = imagesc(I); box on; axis tight; view([0 0 1]); daspect([1 1 1]); axis off; hold on; drawnow;
+            % overlay statistical function on field
+            axes('position',get(gca,'position')); 
+            % plot function
+            h(2) = loglog(x,y,'-w'); 
+            % remove white background
+            set(gca,'color','none'); 
+            % make sure it's the correct size
+            ar = size(I); pbaspect([ar(2:-1:1),1]); 
         end
         
         function [h] = plotc_(x,y,c)
@@ -2460,7 +2572,7 @@ classdef am_lib
             daspect([1 1 1])
         end       
 
-        function [cmap] = cmap_(flag,n)
+        function [cmap] = colormap_(flag,n)
             % switch based on N
             switch flag
                 case 'discrete'
@@ -2649,6 +2761,8 @@ classdef am_lib
                 % interpolate and return
                 cmap = map_(n,cmap);
             end
+            
+            if nargout == 0; colormap(cmap); end
         end
         
         function [cmap] = clight_(cmap,alpha)
@@ -2699,6 +2813,42 @@ classdef am_lib
 
         end
         
+        
+        % images
+        
+        function I = laplacian_interpolation_(I,mask)
+            % laplacian interpolation of the masked region
+            mask = mask==1;
+
+            u = find(mask);
+            w = find(~mask);
+
+            M = size(mask,1);
+            u_north = u - 1;
+            u_east = u + M;
+            u_south = u + 1;
+            u_west = u - M;
+
+            v = ones(size(u));
+            ijv_mask = [...
+                u  u         1.00*v
+                u  u_north  -0.25*v
+                u  u_east   -0.25*v
+                u  u_south  -0.25*v
+                u  u_west   -0.25*v ];
+
+            ijv_nonmask = [w  w  1.00*ones(size(w))];
+
+            ijv = [ijv_mask; ijv_nonmask];
+            A = sparse(ijv(:,1),ijv(:,2),ijv(:,3));
+
+            b = I(:);
+            b(mask(:)) = 0;
+
+            x = A\b;
+
+            I = reshape(x,size(I));
+        end
         
         % correlation and polynomial fitting
         
@@ -2860,25 +3010,33 @@ classdef am_lib
             end
         end
         
-        function [y,bg] = fft_background_(y,nfftcomponents,npasses)
-            n = max(am_lib.ndims_(y),2); 
-            if numel(nfftcomponents)==1; nfftcomponents=repmat(nfftcomponents,1,n); end
+        function [y,bg] = fft_filter_(y,m,npasses,flag)
+            % m = # of fft components to keep
+            n = size(y); d = ndims(y); bg = zeros(size(y));
+            if numel(m)==1; m=repmat(m,1,d); end
             
-            bg = zeros(size(y));
-            
-            for i = 1:npasses
-                yf = fftn(y);
-                yf(1:end>nfftcomponents(1),:,:) = 0;
-                yf(:,1:end>nfftcomponents(2),:) = 0;
-                if n > 2
-                    yf(:,:,1:end>nfftcomponents(3)) = 0; 
-                if n > 3
-                    error('not yet implemented');
-                end
-                end
-                
-                b = real(ifftn(yf));
-                bg = b + bg; y = y - b; 
+            switch flag
+                case {'lo','low','low-pass','LP'}            
+                    for i = 1:npasses
+                        yf = fftn(y); % yf = yf(1:max(floor(end/2),1),1:max(floor(end/2),1),1:max(floor(end/2),1));
+                        yf(1:end>m(1),:,:) = 0;
+                        yf(:,1:end>m(2),:) = 0; if d > 2
+                        yf(:,:,1:end>m(3)) = 0; 
+                        if d > 3; error('not yet implemented'); end; end
+                        b = real(ifftn(yf,n)); bg = b + bg; y = y - b; 
+                    end
+                case {'hi','high','high-pass','HP'}            
+                    for i = 1:npasses
+                        yf = fftn(y); % yf = yf(1:max(floor(end/2),1),1:max(floor(end/2),1),1:max(floor(end/2),1));
+                        yf(1:end<=m(1),:,:) = 0;
+                        yf(:,1:end<=m(2),:) = 0; 
+                        if d > 2
+                        yf(:,:,1:end<=m(3)) = 0; 
+                        if d > 3; error('not yet implemented'); end; end
+                        b = real(ifftn(yf,n)); bg = b + bg; y = y - b; 
+                    end
+                otherwise
+                    error('unknown filter type');
             end
         end
         
@@ -2902,6 +3060,36 @@ classdef am_lib
             end
         end
 
+        function [x,f]  = get_statistical_function(D,flag,scanaxis)
+            % [x,hhcf] = get_statistical_function(D,'rHHCF',1);
+            % [~,acf ] = get_statistical_function(D,'rACF',1);
+            % % convert acf to hhcf:
+            % rms = std(F.F(:)).^2; hhcf_from_acf = 2*(rms-acf);
+            % % compare
+            % loglog(x,hhcf,'-',x,hhcf_from_acf.','.')
+            
+            % move scan axis to first dimension
+            D = permute(D,circshift([1,2,3],1-scanaxis)); n = size(D,1);
+            
+            switch flag
+                % "radial" HHCF (as defined in gywddion)
+                case {'rHHCF','height-height correlation'}
+                    x = ([1:n]-1)./n; f = zeros(1,n);
+                    for i = 1:n
+                        L = (n-i+1); ex1_=i:n; ex2_=1:L;
+                        f(i) = am_lib.sum_( (D(ex1_,:)-D(ex2_,:)).^2 ,[1,2] ) ./ (L.*n);
+                    end
+                % "radial" ACF (as defined in gywddion)
+                case {'rACF','autocorrelation'}
+                    x = ([1:n]-1)./n; f = zeros(1,n);
+                    for i = 1:n
+                        L = (n-i+1); ex1_=i:n; ex2_=1:L;
+                        f(i) = am_lib.sum_( (D(ex1_,:).*D(ex2_,:))   ,[1,2] ) ./ (L.*n);
+                    end
+                otherwise
+                    error('method unknown');
+            end
+        end
         
         % image processing
         
