@@ -35,15 +35,6 @@ classdef am_lib
         % constants
         r_0       = 2.81794032E-6; % [nm]       classical electron radius
         N_A       = 6.022141E23;   % [mol]      Avogadro's number
-        
-        % mex compiler parameters
-        usemex    = false;
-        FC        = 'ifort'; 
-        FFLAGS    = '-O3 -parallel -fpp -fPIC -lmx -lmex -lmat -nofor_main -bundle -implicitnone -assume realloc_lhs';
-        MPATH     = '/Applications/MATLAB_R2017a.app';
-        LIBS      = ['-L',am_lib.MPATH,'/bin/maci64 -I',am_lib.MPATH,'/extern/include'];
-        EXT       = '.mexmaci64';
-        DEBUG     = '-debug'
     end
     
     % unit conversion
@@ -389,6 +380,7 @@ classdef am_lib
             [~,IA,IC] = unique(am_lib.rnd_(X,tol),varargin{:}); C = X(:,IA);
         end
         
+        
         % data-type conversion
         
         function [B] = str2num_(A)
@@ -402,6 +394,7 @@ classdef am_lib
                 B = str2num(A);
             end
         end
+        
         
         % symbolic
         
@@ -1072,6 +1065,29 @@ classdef am_lib
             i2p = round(findrow_(A)).'; p2i = round(([1:size(A,1)]*A));
         end
         
+        function [x] = sort4_(x) % ultra-fast sorting of four numbers 
+            % ultra-fast sorting of four numbers
+            if x(1)>y(2); x([1,2]) = x([2,1]); end
+            if x(3)>y(4); x([3,4]) = x([4,3]); end
+            if x(1)>y(3); x([1,3]) = x([3,1]); end
+            if x(2)>y(4); x([2,4]) = x([4,2]); end
+            if x(2)>y(3); x([2,3]) = x([3,2]); end
+        end
+        
+        function [a] = rank4_(x) % ultra-fast ranking of four numbers 
+            % ultra-fast ranking of four numbers
+            a = zeros(1,8);
+            if x(1) <= x(2);  a(1) = 1; a(2) = 2; 
+            else;             a(1) = 2; a(2) = 1; end
+            if x(3) <= x(4);  a(3) = 3; a(4) = 4; 
+            else;             a(3) = 4; a(4) = 3; end
+            if x(a(1)) <= x(a(3)); a(6) = a(1); a(7) = a(3); 
+            else;                  a(6) = a(3); a(7) = a(1); end
+            if x(a(2)) >= x(a(4)); a(5) = a(2); a(8) = a(4); 
+            else;                  a(5) = a(4); a(8) = a(2); end
+            if x(a(7)) < x(a(8));  a=[a(6),a(7),a(8),a(5)]; 
+            else;                  a=[a(6),a(8),a(7),a(5)]; end
+        end
         
         % file parsing
         
@@ -2428,7 +2444,7 @@ classdef am_lib
             set(groot,'defaultAxesFontName','Helvetica');
         end
         
-        function variabilityplot_(x,y,varargin)            
+        function variabilityplot_(x,y,varargin) 
             % x = randn(400,1);
             % y1 = nominal(randi(2,400,1),{'little','lots'});
             % y2 = nominal(randi(3,400,1),{'large','medium','small'});
@@ -2481,7 +2497,7 @@ classdef am_lib
             delete(hsepln(1))
         end
         
-        function [th] = assign_cmap_(V)
+        function [th]= assign_cmap_(V)
             % assigns a number between [0,1] based on how close vectors V
             % in are to identity vectors in that same basis. It essentially
             % reduces the dimensionality of the data
@@ -2506,7 +2522,7 @@ classdef am_lib
             end
         end
         
-        function [h]  = plot_overlay_(I,x,y)
+        function [h] = plot_overlay_(I,x,y) % overlay curve y(x) ontop of image I 
             % plots x,y on top of a background image I 
             
             % plot field as background
@@ -2521,10 +2537,86 @@ classdef am_lib
             ar = size(I); pbaspect([ar(2:-1:1),1]); 
         end
         
-        function [h] = plotc_(x,y,c)
-            x = x(:).'; y=y(:).'; c=c(:).'; z=zeros(size(x));
-            % col = x;  % This is the color, vary with x in this case.
-            h = surface([x;x],[y;y],[z;z],[c;c],'facecol','no','edgecol','interp','linew',1);
+        function [h] = plot_isosurface_(X,dX,V,Vp,C,w,m,flag) 
+            %  X = [(x,y,z),1:n(1),1:n(2),1:n(3)] coordinates
+            % dX = translations for periodic boundary conditions (if X is defined from [0,1) then dX is probably 1)
+            %  V = [(1:m)  ,1:n(1),1:n(2),1:n(3)] volumetric data
+            % Vp = [1:q] list of points to sample V at
+            %  w = number of times to extend the boundary
+            %  m = number of times to refine the mesh
+            % flag = 'cubic/linear, center, extend, color'
+
+            % extend weights?
+            if ~isempty(w); flag=[flag,',extend']; end
+            
+            % add color to plot?
+            if isempty(C); C = [1:size(V,1)].'.*ones(1,size(V,2),size(V,3),size(V,4)); end
+            
+            % loop over bands, removing ones that don't matter. (speeds things up >10000x)
+            ex_ = false(size(V,1),1);
+            for i = 1:size(V,1); for j = 1:numel(Vp)
+                if max(V(i,:))>Vp(j) && min(V(i,:))<Vp(j)
+                    ex_(i) = true;
+                end
+            end; end
+            V = V(ex_,:,:,:); C = C(ex_,:,:,:);
+    
+            % up-sample?
+            if     contains(flag,'cubic');  upflag = 'cubic';
+            elseif contains(flag,'linear'); upflag = 'linear'; 
+            else;  m = 1; upflag = 'none'; end 
+            switch upflag
+                case 'none'
+                    % do nothing
+                case {'linear','cubic'}
+                    % apply p.b.c to E and C
+                    w = [1,1,1]; 
+                    X = cat(2,X,X(:,1:w(1),:,:)+dX(:,1)); V = cat(2,V,V(:,1:w(1),:,:)); C = cat(2,C,C(:,1:w(1),:,:)); 
+                    X = cat(3,X,X(:,:,1:w(2),:)+dX(:,2)); V = cat(3,V,V(:,:,1:w(2),:)); C = cat(3,C,C(:,:,1:w(2),:)); 
+                    X = cat(4,X,X(:,:,:,1:w(3))+dX(:,3)); V = cat(4,V,V(:,:,:,1:w(3))); C = cat(4,C,C(:,:,:,1:w(3)));
+                    % upscale
+                    n = [size(V,2),size(V,3),size(V,4)]-1; 
+                    Kup = zeros([size(X,1),n*2^(m-1)+1]); Eup = zeros([size(V,1),n*2^(m-1)+1]); Cup = zeros([size(C,1),n*2^(m-1)+1]);
+                    for i = 1:size(X,1); Kup(i,:,:,:) = interpn(permute(X(i,:,:,:),[2,3,4,1]),m-1,upflag); end; X = Kup;
+                    for i = 1:size(V,1); Eup(i,:,:,:) = interpn(permute(V(i,:,:,:),[2,3,4,1]),m-1,upflag); end; V = Eup;
+                    for i = 1:size(C,1); Cup(i,:,:,:) = interpn(permute(C(i,:,:,:),[2,3,4,1]),m-1,upflag); end; C = Cup;
+                otherwise
+                    error('unknown interpolation method');
+            end
+
+            % move gamma to center?
+            if contains(flag,'center')
+                V = circshift(V,floor(size(V)/2)); 
+            end
+
+            % extend on both sides?
+            if contains(flag,'extend')
+                w = w*m;
+                V = cat(2,cat(2,V(:,end-w(1):end,:,:),V),V(:,1:w(1),:,:)); C = cat(2,cat(2,C(:,end-w(1):end,:,:),C),C(:,1:w(1),:,:)); X = cat(2,cat(2,X(:,end-w(1):end,:,:)-dX(:,1),X),X(:,1:w(1),:,:)+dX(:,1)); 
+                V = cat(3,cat(3,V(:,:,end-w(2):end,:),V),V(:,:,1:w(2),:)); C = cat(3,cat(3,C(:,:,end-w(2):end,:),C),C(:,:,1:w(2),:)); X = cat(3,cat(3,X(:,:,end-w(2):end,:)-dX(:,2),X),X(:,:,1:w(2),:)+dX(:,2)); 
+                V = cat(4,cat(4,V(:,:,:,end-w(3):end),V),V(:,:,:,1:w(3))); C = cat(4,cat(4,C(:,:,:,end-w(3):end),C),C(:,:,:,1:w(3))); X = cat(4,cat(4,X(:,:,:,end-w(3):end)-dX(:,3),X),X(:,:,:,1:w(3))+dX(:,3)); 
+            end
+
+            % convert ndgrid to meshgrid [meshgrid([1:2],[3:5],[6:10]) - permute(ndgrid([1:2],[3:5],[6:10]),[2,1,3])]
+            X = permute(X,[1,3,2,4]);
+
+            % plot isosurface
+            figure(1); clf; set(gcf,'color','w'); delete(findall(gcf,'Type','light')); hold on; b=0;
+            for j = 1:numel(Vp); for i = 1:size(V,1); if max(V(i,:))>Vp(j) && min(V(i,:))<Vp(j); b=b+1;
+                h(b) = patch(isosurface(squeeze(X(1,:,:,:)),squeeze(X(2,:,:,:)),squeeze(X(3,:,:,:)),squeeze(V(i,:,:,:)),Vp(j), squeeze(C(i,:,:,:))                   ));
+                set(h(b),'FaceColor','interp','EdgeColor','none','AmbientStrength',0.3,'DiffuseStrength',1,'SpecularStrengt',0.4,'SpecularExponent',30);
+            end; end; end
+
+        end
+        
+        function [h] = plotc_(x,y,c,w) %  line plot which changes color (and width)
+            if nargin<4
+                x = x(:).'; y=y(:).'; c=c(:).'; z=zeros(size(x));
+                h = surface([x;x],[y;y],[z;z],[c;c],'facecol','no','edgecol','interp','linew',1);
+            else
+                x = x(:).'; y=y(:).'; c=c(:).'; w=w(:).'/2; z=zeros(size(x));
+                h = surface([x;x],[y-w;y+w],[z;z],[c;c],'facecol','no','edgecol','interp','linew',1);
+            end
         end
         
         function [h] = plot3_(A,varargin)
@@ -3355,7 +3447,10 @@ classdef am_lib
         
         % interpolation
         
-        function [fq] = fftinterp_(f,q,n,algo)
+        function [fq,S,iS,c] = fftinterp_(f,q,n,algo,R)
+            % R is only required for algo = 'star'
+            % R must be input in real space!
+            %
             % fourier interpolate f(k) at points q; f must be periodic over [0,1)
             %
             % generate f using like this:
@@ -3376,7 +3471,7 @@ classdef am_lib
             m = size(f);
             switch numel(m)
                 case 2
-                    if nargin ~= 3
+                    if nargin < 3
                         error('fbz dimensions n are required');
                     else
                         n = [n,m(1)];
@@ -3422,50 +3517,42 @@ classdef am_lib
                     % generate direct and reciprocal meshes r and k
                     m_ = @(i) [0:(n(i)-1)]-floor(n(i)/2); [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); r = [Y{1}(:),Y{2}(:),Y{3}(:)].';
                     m_ = @(i) [0:(n(i)-1)]./n(i);         [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); k = [Y{1}(:),Y{2}(:),Y{3}(:)].';
-                    % get dft expansion coefficients: c [ nrs, n ]
-                    c = cos_kernel_(k,r,n) * f.';
-                    % interpolate f on q
-                    fq = ( icos_kernel_(q,r,n) * c ).';
-                case 'star'
-                    % testing star function: DOES NOT WORK.
-                    % DOES NOT WORK. DOES NOT WORK. DOES NOT WORK. 
-                    % DOES NOT WORK. DOES NOT WORK. DOES NOT WORK. 
-                    % DOES NOT WORK. DOES NOT WORK. DOES NOT WORK. 
-                    % DOES NOT WORK. DOES NOT WORK. DOES NOT WORK. 
-                    x=1;
-                    % define function to get kernel
-                     fft_kernel_ = @(k,r,n) exp(-2i*pi*matmul_(reshape(r,1,3,[],1),reshape(k,3,1,1,[])))./sqrt(prod(x*n(1:3)));
-                    ifft_kernel_ = @(k,r,n) exp(+2i*pi*matmul_(reshape(k,1,3,[],1),reshape(r,3,1,1,[])))./sqrt(prod(x*n(1:3)));
-                    % generate direct and reciprocal meshes r and k
-                    m_ = @(i) [0:(x*n(i)-1)]-floor(x*n(i)/2); [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); r = [Y{1}(:),Y{2}(:),Y{3}(:)].';
-                    m_ = @(i) [0:(n(i)-1)]./n(i);             [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); k = [Y{1}(:),Y{2}(:),Y{3}(:)].';
-                    % conver to [cart]  
-                    r = uc.bas*r;     r = uc2ws( r, diag(n(1:3))*uc.bas     );
-                    k = fbz.recbas*k; k = uc2ws( k, diag(n(1:3))*fbz.recbas );
-                    q = fbz.recbas*q; q = uc2ws( q, diag(n(1:3))*fbz.recbas );
-                    % get symmetrically equivalent r-points (stars)
-                    r4sym = uc2ws( uc.bas*r, diag(n(1:3))*uc.bas     );
-                    [~,~,~,R] = get_symmetries(pc); R=matmul_(pc.bas,matmul_(R,inv(pc.bas))); nRs=size(R,3);
-                    PM = member_(uc2ws(matmul_(R,r4sym),diag(n(1:3))*uc.bas),r4sym); A = get_connectivity(PM);
-                    i2f = round(findrow_(A)).'; f2i = [1:numel(i2f)]*A; nstars=numel(i2f); 
-            %         % get star function kernel
-                    K=fft_kernel_(k,r,n); Ki=ifft_kernel_(q,r,n); Z = [f2i==[1:max(f2i)].']; K = Z*K; Ki=Ki/Z;
-
-
-                    K = sum(exp(+2i*pi*matmul_(reshape(                  k, 1, 3, 1,[]    ), ....
-                                               reshape(matmul_(R,r(:,i2f)), 3, 1,[], 1,nRs))) ,3)./nRs./sqrt(prod(x*n(1:3))) .* sum(f2i==[1:numel(i2f)].',2);
-
-                    Ki= sum(exp(-2i*pi*matmul_(reshape(                  q, 1, 3,[], 1    ), ...
-                                               reshape(matmul_(R,r(:,i2f)), 3, 1, 1,[],nRs))),3)./nRs./sqrt(prod(x*n(1:3)));% .* sqrt(sum(f2i==[1:numel(i2f)].',2)).';
-            % r = matmul_(R,r(:,i2f(3)));
-            %         % get factorization matrix (to accumlate rows of matrix)
-            %         K=fft_kernel_(k,r,n); Ki=ifft_kernel_(q,r,n); %Z = [f2i==[1:max(f2i)].']; K = Z*K; Ki=Ki/Z;
+                    % evaluate kernels
+                    K = cos_kernel_(k,r,n); iK = icos_kernel_(q,r,n);
                     % get dft expansion coefficients: c [ nrs, n ]
                     c = K * f.';
                     % interpolate f on q
-                    fq = ( Ki * c ).';
+                    fq = ( iK * c ).';
+                case 'star'
+                    % get the correct orientation
+                    if size(f,1)~=prod(n(1:3)); f = f.'; end
+
+                    % define function to get kernel
+                     fft_kernel_ = @(r,k,n) exp(-2i*pi*am_lib.matmul_(reshape(r,1,3,[],1),reshape(k,3,1,1,[])))./sqrt(prod(n(1:3)));
+                    ifft_kernel_ = @(k,r,n) exp(+2i*pi*am_lib.matmul_(reshape(k,1,3,[],1),reshape(r,3,1,1,[])))./sqrt(prod(n(1:3)));
+
+                    % generate direct and reciprocal meshes r and k
+                    m_ = @(i) [0:(n(i)-1)]-floor(n(i)/2); [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); r = [Y{1}(:),Y{2}(:),Y{3}(:)].';
+                    m_ = @(i) [0:(n(i)-1)]./n(i);         [Y{1:3}]=ndgrid(m_(1),m_(2),m_(3)); k = [Y{1}(:),Y{2}(:),Y{3}(:)].';
+
+                    % get irreducible maps in direct and reciprocal space (must do k and r space explicitly!)
+                    %     (cannot just use f2i from fbz/ibz because R ~= R.' in fractional coordinates)
+                    Rk = permute(R,[2,1,3]);
+                    PM = am_lib.member_(am_lib.matmul_(R ,r),r);              A = am_lib.get_connectivity(PM); r_w=sum(A,2).'; r_i2f = round(am_lib.findrow_(A)).'; r_f2i = round(([1:size(A,1)]*A)); 
+                    PM = am_lib.member_(am_lib.mod_(am_lib.matmul_(Rk,k)),k); A = am_lib.get_connectivity(PM); k_w=sum(A,2).'; k_i2f = round(am_lib.findrow_(A)).'; k_f2i = round(([1:size(A,1)]*A));
+
+                    % get star function (reciprocal to real) and inverse start function (real to reciprocal space)
+                    a = max(r_f2i); b = max(k_f2i); S = zeros(a,b); iS = zeros(size(q,2),a);
+                    for j = 1:b;  S(:,j) = sum( fft_kernel_(r(:,r_i2f),k(:,k_f2i==j),n),2);  end
+                    for i = 1:a; iS(:,i) = sum(ifft_kernel_(q,r(:,r_f2i==i),n),2);           end
+
+                    % get expansion coefficients: c [ nrs, n ]
+                    c = S * f(k_i2f,:);
+                    % interpolate
+                    fq = real(iS*c).';
                     
-                    [~,a,b]=unique(rnd_(c),'rows','stable'); a=a.'; b=b.';
+                otherwise
+                    error('unknown algorithm');
             end
             
         end          
