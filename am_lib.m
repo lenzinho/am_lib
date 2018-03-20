@@ -1167,7 +1167,7 @@ classdef am_lib
         function [p] = arg_(cmplx) % argument (phase) of complex number 
             p = atan2(imag(cmplx),real(cmplx));
         end 
-        
+
         function [y] = sinc_(x) % sinc function 
             y = sin(x)./x; y(x==0) = 1;
         end
@@ -1181,11 +1181,89 @@ classdef am_lib
         end
         
         function [y] = heaviside_(x) % heaviside function
-            y = logical(x>0);
+            % A. V. Podolskiy and P. Vogl, Phys. Rev. B 69, 233101 (2004). Eq 15
+            y = logical(x>=0);
         end
-                
+        
+        function [y] = fermi_dirac_(x) % fermi-dirac funcrtion 
+            y = 1.0./(1.0 + exp(-x)); 
+        end
+        
+        function [y] = methfessel_paxton_(x,n) % theta function PRB 40, 3616 (1989).
+            maxarg = 200;
+            % Methfessel-Paxton
+            y = gauss_freq(x .* sqrt(2.0));
+            if n==0; return; end
+            hd = 0; arg = min(maxarg, x.^2); hp = exp(-arg);
+            ni = 0; a = 1.0./sqrt(pi); 
+            for i=1:n
+                hd = 2.0.*x.*hp-2.0.*ni.*hd; 
+                ni = ni+1; a = -a./(i.*4.0); y = y-a.*hd;
+                hp = 2.0.*x.*hd-2.0.*ni.*hp; ni = ni+1;
+            end
+            function g = gauss_freq(x)
+                %     gauss_freq(x) = (1+erf(x./sqrt(2)))./2 = erfc(-x./sqrt(2))./2
+                g = 0.5 .* am_lib.erfc_(-x.*0.7071067811865475);
+                %
+            end
+        end
+        
+        function [y] = marzari_vanderbilt_(x) % Marzari-Vanderbilt theta-function PRL 82, 3296 (1999)
+            % theta function: PRL 82, 3296 (1999)
+            % 1/2*erf(x-1/sqrt(2)) + 1/sqrt(2*pi)*exp(-(x-1/sqrt(2))**2) + 1/2
+            %, xp
+            maxarg = 200;
+            % Cold smearing
+             xp = x - 1.0./sqrt(2.0); arg = min(maxarg, xp.^2);
+             y = 0.5.*am_lib.erf_(xp) + 1.0./sqrt(2.0.*pi).*exp(-arg) + 0.5d0;
+        end
+        
+        function [y] = erf_(x) % error function 
+            y = arrayfun(@erf_engine_,x);
+            function y = erf_engine_(x)
+                p1 = [2.426679552305318E2, 2.197926161829415E1, 6.996383488619136,  -3.560984370181538E-2];
+                q1 = [2.150588758698612E2, 9.116490540451490E1, 1.508279763040779E1, 1.000000000000000];
+                %
+                if abs(x)>6.0
+                    y = sign(x);
+                else
+                    if abs(x)<0.47
+                        x2 = x.^2;
+                        y = x.*(p1(1)+x2.*(p1(2)+x2.*(p1(3)+x2.*p1(4))))/(q1(1)+x2.*(q1(2)+x2.*(q1(3)+x2.*q1(4))));
+                    else
+                        y = 1.0 - am_lib.erfc_(x);
+                    end
+                end
+            end
+        end
+
+        function [y] = erfc_(x) % complementary error function 
+            
+            y = arrayfun(@erfc_engine_,x);
+            
+            function y = erfc_engine_(x)
+                p2 = [ 3.004592610201616E2,  4.519189537118719E2,  3.393208167343437E2,  1.529892850469404E2,  4.316222722205674E1,  7.211758250883094,    5.641955174789740E-1,-1.368648573827167E-7];
+                q2 = [ 3.004592609569833E2,  7.909509253278980E2,  9.313540948506096E2,  6.389802644656312E2,  2.775854447439876E2,  7.700015293522947E1,  1.278272731962942E1,  1.000000000000000];
+                p3 = [-2.996107077035422E-3,-4.947309106232507E-2, -2.269565935396869E-1,-2.786613086096478E-1,  -2.231924597341847E-2];
+                q3 = [ 1.062092305284679E-2, 1.913089261078298E-1,  1.051675107067932,    1.987332018171353,     1.000000000000000];
+                pim1 = 0.56418958354775629; % sqrt(1./pi)
+                ax = abs(x);
+                if ax > 26.0
+                    y = 0.0;
+                elseif ax >4.0
+                    x2=x.^2; xm2=(1.0/ax).^2;
+                    y=(1.0/ax)*exp(-x2)*(pim1+xm2*(p3(1)+xm2*(p3(2)+xm2*(p3(3)+xm2*(p3(4)+xm2*p3(5)))))/(q3(1)+xm2*(q3(2)+xm2*(q3(3)+xm2*(q3(4)+xm2*q3(5))))));
+                elseif ax>0.47
+                    y = exp(-x.^2).*(p2(1)+ax.*(p2(2)+ax.*(p2(3)+ax.*(p2(4)+ax.*(p2(5)+ax.*(p2(6)+ax.*(p2(7)+ax.*p2(8))))))))./(q2(1)+ax.*(q2(2)+ax.*(q2(3)+ax.*(q2(4)+ax.*(q2(5)+ax.*(q2(6)+ax.*(q2(7)+ax.*q2(8))))))));
+                else
+                    y = 1.0-am_lib.erf_(ax);
+                end
+                if x < 0.0;  y = 2.0 - y; end
+            end
+        end
+        
         function [y] = lorentz_(x) % lorentz peak function
-            y = 1./(pi*(x.^2+1)); 
+            y = 1./(pi.*(x.^2+1)); 
         end
 
         function [y] = gauss_(x) % gaussian normal distribution peak function
@@ -1196,6 +1274,33 @@ classdef am_lib
             y = logical(abs(x)<am_lib.tiny); 
         end
 
+        function [y] = fermi_dirac_dydx_(x) % derivative of fermi dirac function
+            % derivative of Fermi-Dirac function: 0.5./(1.0+cosh(x))
+            y = zeros(size(x)); ex_ = abs(x)<36.0; y(ex_) = 1.0./(2.0+exp(-x(ex_))+exp(+x(ex_)));
+        end
+        
+        function [y] = marzari_vanderbilt_dydx_(x) % derivative of Marzari-Vanderbilt theta-function 
+            % 1./sqrt(pi).*exp(-(x-1./sqrt(2)).^2).*(2-sqrt(2).*x)
+            %
+            sqrtpm1 = 0.564189583547756; % 1./sqrt(pi)
+            arg = min(200,(x-1.0./sqrt(2.0)).^2);
+            y = sqrtpm1.*exp(-arg).*(2.0-sqrt(2.0).*x);
+        end
+        
+        function [y] = methfessel_paxton_dydx_(x,n) % derivative of Methfessel-Paxton 
+            sqrtpm1 = 0.564189583547756; % 1./sqrt(pi)
+            arg = min(200, x.^2);
+            y = exp(-arg).*sqrtpm1;
+            if n==0 return; end
+            hd = 0; hp = exp(-arg); ni = 0; a = sqrtpm1;
+            for i = 1:n
+                hd = 2.0.*x.*hp-2.0.*ni.*hd;
+                ni = ni+1; a = -a./(i.*4.0);
+                hp = 2.0.*x.*hd-2.0.*ni.*hp;
+                ni = ni+1; y = y+a.*hp;
+            end
+        end
+        
         function [y] = pvoigt_(x,f) % pseudovoigt peak function
             y = sqrt(pi) .* (1-f) .* am_lib.gauss_(x./sqrt(2*log(2))) + f .* am_lib.lorentz_(x) .* pi;
         end
@@ -2570,10 +2675,10 @@ classdef am_lib
                     % do nothing
                 case {'linear','cubic'}
                     % apply p.b.c to E and C
-                    w = [1,1,1]; 
-                    X = cat(2,X,X(:,1:w(1),:,:)+dX(:,1)); V = cat(2,V,V(:,1:w(1),:,:)); C = cat(2,C,C(:,1:w(1),:,:)); 
-                    X = cat(3,X,X(:,:,1:w(2),:)+dX(:,2)); V = cat(3,V,V(:,:,1:w(2),:)); C = cat(3,C,C(:,:,1:w(2),:)); 
-                    X = cat(4,X,X(:,:,:,1:w(3))+dX(:,3)); V = cat(4,V,V(:,:,:,1:w(3))); C = cat(4,C,C(:,:,:,1:w(3)));
+                    ww = [1,1,1]; 
+                    X = cat(2,X,X(:,1:ww(1),:,:)+dX(:,1)); V = cat(2,V,V(:,1:ww(1),:,:)); C = cat(2,C,C(:,1:ww(1),:,:)); 
+                    X = cat(3,X,X(:,:,1:ww(2),:)+dX(:,2)); V = cat(3,V,V(:,:,1:ww(2),:)); C = cat(3,C,C(:,:,1:ww(2),:)); 
+                    X = cat(4,X,X(:,:,:,1:ww(3))+dX(:,3)); V = cat(4,V,V(:,:,:,1:ww(3))); C = cat(4,C,C(:,:,:,1:ww(3)));
                     % upscale
                     n = [size(V,2),size(V,3),size(V,4)]-1; 
                     Kup = zeros([size(X,1),n*2^(m-1)+1]); Eup = zeros([size(V,1),n*2^(m-1)+1]); Cup = zeros([size(C,1),n*2^(m-1)+1]);
