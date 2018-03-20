@@ -2615,7 +2615,7 @@ classdef am_lib
                 h = surface([x;x],[y;y],[z;z],[c;c],'facecol','no','edgecol','interp','linew',1);
             else
                 x = x(:).'; y=y(:).'; c=c(:).'; w=w(:).'/2; z=zeros(size(x));
-                h = surface([x;x],[y-w;y+w],[z;z],[c;c],'facecol','no','edgecol','interp','linew',1);
+                h = surface([x;x],[y-w;y+w],[z;z],[c;c],'edgecol','interp','linew',1);
             end
         end
         
