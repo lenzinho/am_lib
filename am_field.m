@@ -293,7 +293,7 @@ classdef am_field
             F.J = F.get_jacobian();
             F.D = F.get_divergence();
             F.C = F.get_curl();
-            if strcmp(F.T,'scalar')
+            if contains(F.T,'scalar')
                 F.H = F.get_hessian(); 
                 F.L = F.get_laplacian();
             end
@@ -840,6 +840,7 @@ classdef am_field
         end
 
         function [T] = get_field_type(F)
+            if ~isempty(F.T); T = F.T; return; end
             switch size(F.F,1)
                 case {1}  ; T = 'scalar';
                 case {2,3}; T = 'vector';
@@ -877,7 +878,7 @@ classdef am_field
         end
 
         function [H] = get_hessian(F)
-            if ~strcmp(F.T,'scalar'); error('hessian is only defined for scalar fields'); end
+            if ~contains(F.T,'scalar'); error('hessian is only defined for scalar fields'); end
             % define matmul which supports sparse matrices
             matmul_ = @(A,B) reshape(A*reshape(B,size(B,1),[]),size(A,1),size(B,2),size(B,3),size(B,4),size(B,5));
             % allocate space
@@ -895,8 +896,8 @@ classdef am_field
                 if strcmp(F.s{i},'cdiff'); D=sparse(D); end % speed up finite difference with sparse matrices
                 p = [1:F.d+1]; p([1,i+1])=p([i+1,1]); % evaluate hessian from jacobian
                 switch F.T % evaluate derivatives
-                    case 'scalar'; Ji = am_lib.diag_(F.J);
-                        H(i,:,:,:,:) = permute(matmul_(D,permute(Ji,p)),p);
+                    case 'scalar'
+                        Ji = am_lib.diag_(F.J); H(i,:,:,:,:) = permute(matmul_(D,permute(Ji,p)),p);
                     otherwise; error('hessian is only defined for scalar fields');
                 end
             end
@@ -1104,7 +1105,7 @@ classdef am_field
             end
             if nargout < 3; return; end
             w(1:n,1) = 1;
-        end        
+        end
     
         function [D]     = get_flattened_divergence(Dx,Dy,Dz) 
             switch nargin
