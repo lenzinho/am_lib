@@ -1268,9 +1268,14 @@ classdef am_field
     methods (Static) % TEM analysis
         
         function [E,W,Ar_g,Pr_g,dPr_g] = gpa(Ir,flag,th,ex_r_,ex_g_)
-            % Geometric phase analysis. Masks ex_r_ and ex_g_ are optional. If not provided, the function runs interactively. 
-            % Flag options are 'rot:image/rot:field, interactive, activate'. Outputs E and W are strain and rotational fields. 
-            % Outputs Ar_g, Pr_g, and dPr_g are real-space amplitude, phase, and phase gradient maps.
+            %
+            % Geometric phase analysis. 
+            %
+            % Required inputs: Ir is the real-space image. Flag options are 'rot:image/rot:field, interactive, activate'.
+            % Optional inputs: ex_r_ and ex_g_ are real-space mask of reference region and reciprocal-space mask of bragg reflections. 
+            %                  If not provided, the function runs interactively. 
+            % Outputs:         E and W are strain and rotational fields. 
+            %                  Ar_g, Pr_g, and dPr_g are real-space amplitude, phase, and phase gradient maps.
             %
             % Antonio Mei April 2018
             %
