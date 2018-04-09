@@ -300,14 +300,26 @@ classdef am_lib
 
         
         % numerical precision
-        
-        function [C] = mod_(A,tol)
 
+        function [L] = iseven_(A,tol)
             % set default numerical tolernece
             if nargin < 2; tol = am_lib.tiny; end
-            
+            % evaluate
+            L = abs(mod(A+tol,2)-tol)<tol;
+        end
+        
+        function [L] = isodd_(A,tol)
+            % set default numerical tolernece
+            if nargin < 2; tol = am_lib.tiny; end
+            % evaluate
+            L = abs(mod(A+tol,2)-tol-1)<tol;
+        end
+        
+        function [C] = mod_(A,tol)
+            % set default numerical tolernece
+            if nargin < 2; tol = am_lib.tiny; end
+            % evaluate
             C = mod(A+tol,1)-tol;
-            
         end
 
         function [C] = rnd_(A,tol)
@@ -905,6 +917,16 @@ classdef am_lib
 
         % matching
         
+        function [i,j] = max2_(A)
+            [~,ind] = max(A(:)); 
+            [i,j]=ind2sub(size(A),ind);
+        end
+        
+        function [i,j] = min2_(A)
+            [~,ind] = max(A(:)); 
+            [i,j]=ind2sub(size(A),ind);
+        end
+        
         function [C] = maxabs_(A)
             C = max(abs(A(:)));
         end
@@ -1089,6 +1111,7 @@ classdef am_lib
             else;                  a=[a(6),a(8),a(7),a(5)]; end
         end
         
+
         % file parsing
         
         function t   = extract_token_(str,token,numeric)
@@ -1321,13 +1344,13 @@ classdef am_lib
             N = n-1; n = (0:N)'-N/2; w = exp(-(1/2)*(r*n/(N/2)).^2);
         end
         
-        function [y] = rect_(x,dx)
+        function [y] = rect_(x,dx) % rectangular function 
 
           y = mod(floor(x/dx),2);
 
         end
 
-        function y = saw_(x,dx,a,b)
+        function y = saw_(x,dx,a,b) % saw function 
 
         %y = sawfct(x,dx,a,b)
         % saw tooth function on R with period dx onto [a,b]
@@ -1337,7 +1360,7 @@ classdef am_lib
 
         end
         
-        function y = step_(x,nmax)
+        function y = step_(x,nmax) % step function 
 
             %y = stepfct(x,nmax)
             % integer step function of x with period 1 such that [0,1] --> [1,nmax]
@@ -1875,6 +1898,14 @@ classdef am_lib
         
         
         % matrix properties
+        
+        function [L] = isvector_(A)
+            L = any(numel(A)==size(A));
+        end
+        
+        function [L] = ismatrix_(A)
+            [n,m]=size(A); L = any(numel(A)==n*m);
+        end
         
         function [L] = isdiagdom_(A)
             L = all((2*abs(diag(A))) >= sum(abs(A),2));
@@ -2537,6 +2568,61 @@ classdef am_lib
             end
         end
         
+        % image processing
+        
+        function [Ir,th]   = imhorizonlevel_(Ir,flag)
+            % rotate image?
+            switch flag
+                case 'interactively'
+                    am_lib.imagesc_(Ir); title('Select two points to level horizon'); p = ginput(2); 
+                    if isempty(p); th=0; else; dp = diff(p.',1,2); th = atan2d(dp(2),dp(1))+90; end
+                case 'fft';   th = -fft_(Ir,0.1);
+                case 'hough'; th = -hough_(Ir,0.1);
+                otherwise; error('unknown flag');
+            end
+            Ir = imrotate(Ir,th,'bicubic');
+            if nargout==0; am_lib.imagesc_(Ir); title(['th = ', num2str(th)]); end
+
+            function th = fft_(image, precision)
+                % FFT.
+                maxsize = max(size(image));
+                T = fftshift(fft2(image, maxsize, maxsize)); % create rectangular transform
+                T = log(abs(T)+1);                           % get magnitude in <0..inf)  
+
+                % Combine two FFT quadrants together (another two quadrants are symetric).
+                center = ceil((maxsize+1)/2); evenS = mod(maxsize+1, 2);
+                T = (rot90(T(center:end, 1+evenS:center), 1) + T(center:end, center:end)); 
+                T = T(2:end, 2:end); T(1,:)=0; T(:,1)=0;
+                
+                % Find the dominant orientation
+                angles = floor(90/precision); score = zeros(angles, 1); maxDist = maxsize/2-1;
+                for th = 0:angles-1
+                    [y,x] = pol2cart(deg2rad(th*precision), 0:maxDist-1); % all [x,y]
+                    for i = 1:maxDist
+                        score(th+1) = score(th+1) + T(round(y(i)+1), round(x(i)+1));
+                    end
+                end
+
+                % Return the most dominant direction.
+                [~, position] = max(score); th = (position-1)*precision;
+            end
+
+            function th = hough_(image, precision)
+                % Detect edges.
+                BW = edge(image,'prewitt');
+
+                % Perform the Hough transform.
+                [H, T, ~] = hough(BW,'Theta',-90:precision:90-precision);  
+
+                % Find the most dominant line direction.
+                data=var(H);                      % measure variance at each angle 
+                fold=floor(90/precision);         % assume right angles & fold data
+                data=data(1:fold) + data(end-fold+1:end);
+                [~, column] = max(data);          % the column with the crispiest peaks
+                th = -T(column);               % column to degrees 
+            end
+        end
+        
         
         % general plotting
         
@@ -2627,20 +2713,40 @@ classdef am_lib
             end
         end
         
-        function [h] = plot_overlay_(I,x,y) % overlay curve y(x) ontop of image I 
+        function [h,ax] = overlay_(I,varargin) % overlay_(I,x,y): plot y(x) ontop of image I; overlay_(I,C,V): plot V contours of C ontop of image I 
             % plots x,y on top of a background image I 
             
-            % plot field as background
-            h(1) = imagesc(I); box on; axis tight; view([0 0 1]); daspect([1 1 1]); axis off; hold on; drawnow;
-            % overlay statistical function on field
-            axes('position',get(gca,'position')); 
-            % plot function
-            h(2) = loglog(x,y,'-w'); 
-            % remove white background
-            set(gca,'color','none'); 
-            % make sure it's the correct size
-            ar = size(I); pbaspect([ar(2:-1:1),1]); 
-        end
+            if     am_lib.isvector_(varargin{1})
+                [x,y]=deal(varargin{:});
+                % plot field as background
+                h(1) = am_lib.imagesc_(flipud(I.')); hold on; drawnow;
+                % overlay statistical function on field
+                ax(1) = gca; ax(2) = axes('position',get(gca,'position'));
+                % plot function
+                h(2) = loglog(x,y,'-w'); 
+                % remove white background
+                set(gca,'color','none'); 
+                % make sure it's the correct size
+                ar = size(I); pbaspect([ar(2:-1:1),1]); 
+            elseif am_lib.ismatrix_(varargin{1}) && am_lib.isvector_(varargin{2})
+                switch numel(varargin)
+                    case 2; [C,V]=deal(varargin{:});
+                    case 1; [C]=deal(varargin{:}); V=[];
+                    otherwise; error('invalid input');
+                end
+                % over lay the strain on the image
+                h(1) = am_lib.imagesc_(flipud(I.')); hold on; drawnow; 
+                % overlay statistical function on field
+                ax(1) = gca; ax(2) = axes('position',get(gca,'position')); linkaxes(ax); colormap(ax(1),colormap('gray'));
+                % plot isostrain
+                if isempty(V); [~,h(2)]=am_lib.imcontour_(flipud(C.')); else; [~,h(2)]=am_lib.imcontour_(flipud(C.'),V); end
+                % remove white background
+                set(gca,'color','none'); set(h(2),'linewidth',1); colormap(ax(2),flipud(am_lib.colormap_('red2blue'))); 
+            else
+                error('invalid input');
+            end
+            
+        end  
         
         function [h] = plot_isosurface_(X,dX,V,Vp,C,w,m,flag) 
             %  X = [(x,y,z),1:n(1),1:n(2),1:n(3)] coordinates
@@ -2649,7 +2755,7 @@ classdef am_lib
             % Vp = [1:q] list of points to sample V at
             %  w = number of times to extend the boundary
             %  m = number of times to refine the mesh
-            % flag = 'cubic/linear, center, extend, color'
+            % flag = 'cspline/lspline, center, extend, color'
 
             % extend weights?
             if ~isempty(w); flag=[flag,',extend']; end
@@ -2667,13 +2773,13 @@ classdef am_lib
             V = V(ex_,:,:,:); C = C(ex_,:,:,:);
     
             % up-sample?
-            if     contains(flag,'cubic');  upflag = 'cubic';
-            elseif contains(flag,'linear'); upflag = 'linear'; 
+            if     contains(flag,'cspline'); upflag = 'cspline';
+            elseif contains(flag,'lspline'); upflag = 'lspline'; 
             else;  m = 1; upflag = 'none'; end 
             switch upflag
                 case 'none'
                     % do nothing
-                case {'linear','cubic'}
+                case {'lspline','cspline'}
                     % apply p.b.c to E and C
                     ww = [1,1,1]; 
                     X = cat(2,X,X(:,1:ww(1),:,:)+dX(:,1)); V = cat(2,V,V(:,1:ww(1),:,:)); C = cat(2,C,C(:,1:ww(1),:,:)); 
@@ -2703,10 +2809,10 @@ classdef am_lib
             end
 
             % convert ndgrid to meshgrid [meshgrid([1:2],[3:5],[6:10]) - permute(ndgrid([1:2],[3:5],[6:10]),[2,1,3])]
-            X = permute(X,[1,3,2,4]);
+            X = permute(X,[1,3,2,4]); V = permute(V,[1,3,2,4]); C = permute(C,[1,3,2,4]);
 
             % plot isosurface
-            figure(1); clf; set(gcf,'color','w'); delete(findall(gcf,'Type','light')); hold on; b=0;
+            figure(1); clf; set(gcf,'color','w'); delete(findall(gcf,'Type','light')); hold on; b=0; h=[];
             for j = 1:numel(Vp); for i = 1:size(V,1); if max(V(i,:))>Vp(j) && min(V(i,:))<Vp(j); b=b+1;
                 h(b) = patch(isosurface(squeeze(X(1,:,:,:)),squeeze(X(2,:,:,:)),squeeze(X(3,:,:,:)),squeeze(V(i,:,:,:)),Vp(j), squeeze(C(i,:,:,:))                   ));
                 set(h(b),'FaceColor','interp','EdgeColor','none','AmbientStrength',0.3,'DiffuseStrength',1,'SpecularStrengt',0.4,'SpecularExponent',30);
@@ -2767,8 +2873,16 @@ classdef am_lib
             ylim([0 size(A,1)+1]); xlim([0 size(A,2)+1]); 
             set(gca,'XTick',[]); set(gca,'YTick',[]);
             daspect([1 1 1])
-        end       
+        end
+        
+        function [h] = imagesc_(A)
+            h=imagesc(A); axis tight; daspect([1 1 1]); axis off; box on; view([0 0 1]); daspect([1 1 1]);
+        end
 
+        function [varargout] = imcontour_(A,varargin)
+            [varargout{1:2}]=imcontour(A,varargin{:}); axis tight; daspect([1 1 1]); axis off; 
+        end
+        
         function [cmap] = colormap_(flag,n)
             % switch based on N
             switch flag
@@ -3047,6 +3161,7 @@ classdef am_lib
             I = reshape(x,size(I));
         end
         
+        
         % correlation and polynomial fitting
         
         function       plotcorr_(x,y)
@@ -3093,10 +3208,10 @@ classdef am_lib
             y = peval_(x(:),pfit_(x0(:),y0(:),n));
         end
 
-        
+
         % integral transforms related
-        
-        function [h]    = hilbert_(f) % hilbert transform
+
+        function [h]    = hilbert_(f) % hilbert transform (Kramers-Kronig transform)
             % Hilbert Transform is a 90 degree phase shift. Time domain to time domain.
             % t = [0:(N-1)]'/N; dt = t(2)-t(1); % time signal
             if any(abs(imag(f))>1E-8); error('hilbert only works on real-valued signals'); end
@@ -3287,7 +3402,8 @@ classdef am_lib
                     error('method unknown');
             end
         end
-        
+
+
         % image processing
         
         function [cluster,neighbor] = floodfill_(F,G,P,i,maxclustersize)
@@ -3355,7 +3471,7 @@ classdef am_lib
             cluster = cluster(1:ic); neighbor = queue(am_lib.setdiffi_(queue(1:iq),cluster)); 
         end
 
-        function [D R] = DT(img)
+        function [D,R] = DT(img)
             % Two-dimensional generalized distance transform
             %
             % Input: f - the sampled function
@@ -3757,6 +3873,7 @@ classdef am_lib
         end
         
     end
+
 
     % unix functions and scripts
     

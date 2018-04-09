@@ -8,17 +8,17 @@ classdef am_field
     properties
         T = []; % type (scalar/vector)
         d = []; % dimensions (2 or 3)
-        s = []; % scheme{1:d} ('fourier/chebyshev/legendre/cdiff') for each dimension
-        n = []; % grid points / dimension          3D: [n(1),n(2),n(3)]     2D: [n(1),n(2)] 
+        s = []; % scheme{1:d} ('fourier/chebyshev/legendre/cdiff/discrete') for each dimension
+        n = []; % grid points / cart. dimension    3D: [n(1),n(2),n(3)]     2D: [n(1),n(2)] 
         a = []; % lattice/grid spacing             3D: [a(1),a(2),a(3)]     2D: [n(1),n(2)] 
         R = []; % cartesian coordinates                [   x , y , z  ]
         F = []; % field
                 % vector field
-                %     [ (             F(x)             )              ]
-                %     [ (             F(y)             ) , x , y , z  ]
-                %     [ (             F(z)             )              ]
+                %     [ (             F(x)             )                 ]
+                %     [ (             F(y)             ) , x , y , z , t ]
+                %     [ (             F(z)             )                 ]
                 % scalar field
-                %     [ (               1              ) , x , y , z  ]
+                %     [ (               1              ) , x , y , z , t ]
         J = []; % jacobian
                 % J = jacobian (for vector field) [3,3,n(1),n(2),n(3)]
                 %     [ ( dF(x)/dx  dF(x)/dy  dF(x)/dz )              ]
@@ -44,13 +44,20 @@ classdef am_field
                 %     [ (     dFz/dy    -    dFy/dz    ) 
                 %     [ (     dFx/dz    -    dFz/dx    ) , x , y , z  ]
                 %     [ (     dFy/dx    -    dFx/dy    ) 
+        % AFM
        rACF=[]; % radial autocorrelation function
       rHHCF=[]; % radial height-height function
+        % TEM
+        E    = []; % (GPA) strain field
+        W    = []; % (GPA) rotation field
+        Ar_g = []; % (GPA) amplitude
+        Pr_g = []; % (GPA) phase
+        dPr_g= []; % (GPA) phase derivative
     end
-
+ 
     methods (Static)
         
-        function F = demo()
+        function [F] = demo()
             
             F   = am_field.define([2,2].^[7,8],[2*pi,2*pi],{'cdiff','fourier'});
             F.F = cat(1,sin(F.R(1,:,:,:)), sin(F.R(2,:,:,:))); 
@@ -66,7 +73,7 @@ classdef am_field
             
         end
         
-        function F = demo_biot_savart()
+        function [F] = demo_biot_savart()
             
             F   = am_field.define([2,2,2].^[5,5,5],[1,1,1],{'chebyshev','chebyshev','chebyshev'});
             F.R = get_collocation_points(F);
@@ -92,14 +99,14 @@ classdef am_field
             
         end
 
-        function F = demo_hilliard_cahn()
+        function [F] = demo_hilliard_cahn()
 
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
             F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000); % solve
         end
         
-        function F = demo_ising_metropolis_periodic_bc()
+        function [F] = demo_ising_metropolis_periodic_bc()
             F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
             % F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
             F.F = ones([1,F.n]); % initialize the field
@@ -145,7 +152,7 @@ classdef am_field
             
         end
         
-        function F = demo_ising_metropolis_helical_bc()
+        function [F] = demo_ising_metropolis_helical_bc()
             %isng model with helical boundary conditions
             clear;clc;
 
@@ -188,32 +195,69 @@ classdef am_field
             line([1 1]*2/log(1+sqrt(2)),get(gca,'YLim'),'Color','k','linewidth',0.5); % ideal Tc 
         end
         
-        function F = demo_nudge_elastic_band()
+        function [F] = demo_nudge_elastic_band()
             clear;clc;
             % define central-difference mesh between [0,1) 
             F = am_field.define([2,2].^8,[1,1],{'cdiff','cdiff'}); 
             % scale x to [-1.5,1.2) and y to [-0.2,2.0)
             s = [ -1.5,1.2; -0.2,2.0 ]; F.R = F.R.*(s(:,2)-s(:,1))+s(:,1);
             % load Mueller potential
-            F = F.load('Mueller');
+            F = F.load_model('Mueller');
             F = F.get_derivatives();
             % get minimum energy path using nudge elastic band
             vi = [-1 ;0.5]; vf = [0.7;0.5]; nnodes = 10; ediff = 1E-3;
             get_minimum_energy_path(F,vi,vf,nnodes,ediff)
         end
         
-        function F = define(n,a,s)
-            m = numel(n);
-            if numel(s)~=m; error('s dimensions mismatch'); end
-            if numel(a)~=m; error('a dimensions mismatch'); end
-            F = am_field(); F.a=a; F.n=n; F.s=s; F.d=numel(n); F.R = F.get_collocation_points();
+        function [F] = demo_gpa()
+            fname = '11_SnO_FS20nm_ADF_lowI30mrad_stack.dm3'; % good
+            % fname = '10_SnO_FS10nm_ADF_lowI30mrad_stack.dm3'; % defect
+            % fname = '08_SnO_FS10nm_ADF_lowI30mrad_stack.dm3'; % defect
+            [d] = DM3Import(fname); % high mag
+            d=d.image_data;
+            % correct drift and average over stack
+            [d,~] = am_field.correct_stack_drift(d);
+            % 
+            [~,th] = am_lib.imhorizonlevel_(d,'hough');
+            am_lib.imagesc_(flipud(dd));colormap('gray');
+            [E,W,Ar_g,Pr_g,dPr_g] = am_field.gpa(d,'rot:field',th);
+            [h,ax] = am_lib.overlay_(d, squeeze(E(2,2,:,:)), 5);%[-0.4:0.05:0.4]+0.025)
+            % am_lib.imagesc_(squeeze(Pr_g{1})) 
+        end
+        
+        function [F] = define(n,a,s) 
+            % F = define(n,a,s)
+            ndims = sum(n~=1); ndiscretes=sum(strcmp(s,'discrete'));
+            if numel(s)~=ndims; error('s dimensions mismatch'); end
+            if numel(a)~=ndims; error('a dimensions mismatch'); end
+            if ndiscretes>1; error('only one discrete dimension is supported at this time'); end
+            F = am_field(); F.a=a; F.n=n; F.s=s; F.d=ndims-ndiscretes; F.R = F.get_collocation_points();
+        end
+
+        function [F] = load_tem(A,dx,dy)
+            % load TEM image 
+            if nargin == 1; dx=1;dy=1; end
+            switch ndims(A)
+                case 3 % stack
+                    F = am_field.define(size(A),[dx,dy,1],{'fourier','fourier'});
+                case 2 % image
+                    F = am_field.define(size(A),[dx,dy],{'fourier','fourier'});
+            end
+            F.F = permute(A,[9,1:8]);
         end
         
     end
     
     methods 
         
-        function [F] = load(F,model)
+        function [F] = set(F,varargin) % set field properties 
+            % parse remaining input
+            nvs = numel(varargin);
+            if ~am_lib.iseven_(nvs); error('{key, value} inputs required'); end; i=1; 
+            while true; F.(varargin{i}) = varargin{i+1}; i=i+2; if i>nvs; break; end; end
+        end
+        
+        function [F] = load_model(F,model)
             switch model
                 case 'Mueller'
                     % parameters in Mueller potential
@@ -287,6 +331,8 @@ classdef am_field
 %                 end
 %             end; end
 %         end
+
+        % differentiation
         
         function [F] = get_derivatives(F)
             F.T = F.get_field_type();
@@ -728,6 +774,8 @@ classdef am_field
                             set(gca,'DataAspectRatio',[1,1,1],'CameraPosition',[2,1,1],'Box','on');
                         otherwise; error('invalid field dimension');
                     end
+                otherwise
+                    error('field is not scalar or vector');
             end
 
         end
@@ -825,7 +873,7 @@ classdef am_field
         
         function [R] = get_collocation_points(F)
             for i = 1:F.d % loop over dimensions
-                n = F.n;
+                n = F.n(1:F.d);
                 switch F.s{i}
                     case 'chebyshev'; R{i} = am_field.chebyshevUr_(n(i),'edge');
                     case 'legendre';  R{i} = am_field.legendrer_(n(i));
@@ -834,7 +882,7 @@ classdef am_field
                     case 'pdiff';     R{i} = am_field.pdiff_(n(i));
                     otherwise; error('unknown s');
                 end
-                n(i) = 1; R{i} = repmat(permute(F.a(i)*R{i},circshift([1,2,3],i-1)),n);
+                n(i) = 1; R{i} = repmat(permute(F.a(i)*R{i},circshift([1,2,3],i-1)),n(1:F.d));
             end
             R = permute(cat(4,R{:}),[4,1,2,3]);
         end
@@ -1280,11 +1328,12 @@ classdef am_field
             % Antonio Mei April 2018
             %
 
-            if nargin>=2; flag=[flag,'interactive']; end
+            if nargin==1; flag=''; end
+            if nargin>=2 || isempty(flag); flag=[flag,'interactive']; end
 
             % rotate image?
             if contains(flag,{'rot:image','rot:field'})
-                if contains(flag,'interactive') || isempty(th)
+                if contains(flag,'interactive') && isempty(th)
                     imagesc_(Ir); title('Select two points to level horizon'); p = ginput(2); 
                     if isempty(p); th=0; else; dp = diff(p.',1,2); th = atan2d(dp(2),dp(1))+90; end
                 end
@@ -1318,13 +1367,13 @@ classdef am_field
                 Ik_g = Ik.*ex_g_{q}; Ik_g = circshift(circshift(Ik_g,1-i,1),1-j,2); % moves bragg reference: Ik_g(i,j) -> Ik_g(1,1) % gives the passive strain
 
                 % get amplitude, phase, and phase gradient images
-                Ir_g = ifftn(fftshift(Ik_g)); Ar_g = abs(Ir_g); Pr_g = angle(Ir_g); 
+                Ir_g = ifftn(fftshift(Ik_g)); Ar_g{q} = abs(Ir_g); Pr_g{q} = angle(Ir_g); 
                 % Pr_g = Pr_g - 2*pi*(r{1}*k{1}(i,j)+r{2}*k{2}(i,j)); %% add shift?
-                [T{2:-1:1}] = gradient(exp(1i.*Pr_g)); dPr_g = cat(3,T{:}); dPr_g = imag(exp(-1i.*Pr_g).*dPr_g);
+                [T{2:-1:1}] = gradient(exp(1i.*Pr_g{q})); dPr_g{q} = cat(3,T{:}); dPr_g{q} = imag(exp(-1i.*Pr_g{q}).*dPr_g{q});
 
                 % save referenece recirpocal lattice point and gradients
                 K(:,q)     = [k{1}(i,j);k{2}(i,j)];
-                G(:,q,:,:) = permute(dPr_g,[3,4,1,2]);
+                G(:,q,:,:) = permute(dPr_g{q},[3,4,1,2]);
             end  
 
             % get direct lattice vectors [ Eq 36  M.J. Hytch et al. Ultramicroscopy 74 (1998) 131?146 ]
@@ -1349,8 +1398,72 @@ classdef am_field
             if contains(flag,'activate'); activate_ = @(E) 1./(E+1)-1; else; activate_ = @(E) E; end
             E = activate_(E); W = activate_(W);
 
+            function h=imagesc_(A)
+                h=imagesc(A); axis tight; daspect([1 1 1]); axis off; 
+            end
         end
         
+        function [s_averaged, s_shifted, xs, ys] = correct_stack_drift(stack) % correct drift 
+            %  CORRECT_DRIFT aligns stack to first image in stack, by cross-correlation
+            % passes out cropped image and aligned stack (not cropped)
+            % correlation to first image of the stack
+            % stack should be a 3 dimensional matrix, [x, y, images]
+            % Megan Holtz 2015 based off off correct_adf_drift by
+            % David Muller 2003
+            %  Added bandpass filter, 2/21/2005   DM
+
+            [xsize,ysize,numIm] = size(stack);
+
+            s_shifted=stack;
+
+            if numIm == 1
+                xs=0; ys=0; s_averaged = stack;
+            else
+                xs=zeros(1,numIm); ys=xs;
+                for j=2:size(stack,3)
+                    [s_shifted(:,:,j), xs(j), ys(j)] = correct_adf_drift(stack(:,:,j),stack(:,:,1));
+                end
+                s_averaged = sum(s_shifted,3);
+                % crop the resulting image
+                xdw = [1, xs(xs<=xsize/2)];
+                ydw = [1, ys(ys<=ysize/2)];
+                xup = [xsize, xs(xs>xsize/2)];
+                yup = [ysize, ys(ys>ysize/2)];
+                yup = min(yup); ydw = max(ydw);  
+                xdw = max(xdw); xup = min(xup);
+                s_averaged = s_averaged(xdw+2:xup, ydw+2:yup);
+            end
+
+            function [shifted_adf1,xshf,yshf] = correct_adf_drift(adf1,adf2)
+                %  CORRECT_DRIFT aligns array adf1 to adf2, by cross-correlation 
+                %  2015 edits ESP and MEH
+                %  David Muller 2003
+                %  Added bandpass filter, 2/21/2005   DM
+
+                n=4;  % number of pixels to average over
+                adf1=double(adf1); adf2=double(adf2);
+
+                [xr,xc] = size(adf1);
+
+                ix=1:xr; iy=1:xc; [ry,rx]=meshgrid(iy,ix); % initialize grid
+                k   = sqrt( ((rx-xr/2-0.5)/xr).^2+((ry-xc/2-0.5)/xc).^2 ); % k space mesh
+                hpk = fftshift( (k<1/2/n).*sin( 2*n*pi*k).^2 );  % bandpass filter for the images
+                % remove discontinuities at the edges of the images
+                fil = (sin( pi*rx/xr ) .* sin(pi*ry/xc) ).^2;  %damp edges out to 0
+                ref1=( adf1-mean(mean(adf1)) ).*fil;  
+                ref2=( adf2-mean(mean(adf2)) ).*fil;
+                % cross correlate
+                crrd = abs(ifft2( hpk.*fft2(ref2) .* conj(fft2(ref1)) ));
+                %find peak of cross correlation
+                mm=max(max(crrd));
+                [xshf,yshf] = find(crrd==mm);  % amount to shift by
+                xshf=xshf(1); yshf=yshf(1);
+                xshf = xshf - 1; yshf = yshf - 1;
+                w=-exp( -(2*pi*1i)*(xshf*rx ./xr + yshf * ry ./xc ));
+                shifted_adf1=abs(ifft2( fft2( adf1 ) .* w )); % shift IF ADF
+            end
+        end
+
     end
 
 end
