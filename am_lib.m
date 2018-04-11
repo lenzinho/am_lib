@@ -931,8 +931,16 @@ classdef am_lib
             C = max(abs(A(:)));
         end
         
-        function [C] = minmax_(A)
-            C = [min(A(:)),max(A(:))];
+        function [varargout] = minmax_(A)
+            switch nargout
+                case 1
+                    varargout{1} = [min(A(:)),max(A(:))];
+                case 2
+                    varargout{1} = min(A(:));
+                    varargout{2} = max(A(:));
+                otherwise
+                    error('invalid number of outputs');
+            end
         end
         
         function [I] = match_(A,B)
@@ -2570,7 +2578,7 @@ classdef am_lib
         
         % image processing
         
-        function [Ir,th]   = imhorizonlevel_(Ir,flag)
+        function [Ir,th]   = level_horizon_(Ir,flag)
             % rotate image?
             switch flag
                 case 'interactively'
@@ -2623,6 +2631,12 @@ classdef am_lib
             end
         end
         
+        function [I]   = low_pass_fourier_filter(I,wn,wm)
+            % [wn, wm]=deal(21,19);
+%             w = am_lib.hannw_(wn).*am_lib.hannw_(wm).';
+            w = am_lib.gaussw_(size(I,1),wn).*am_lib.gaussw_(size(I,2),wm).';
+            I = real(ifftn(fftn(I) .* fftshift(w))); % low pass filter
+        end
         
         % general plotting
         
@@ -2688,31 +2702,6 @@ classdef am_lib
             delete(hsepln(1))
         end
         
-        function [th]= assign_cmap_(V)
-            % assigns a number between [0,1] based on how close vectors V
-            % in are to identity vectors in that same basis. It essentially
-            % reduces the dimensionality of the data
-
-            % set number of categories
-            n = size(V,1);
-            % get number of points
-            m = size(V,2);
-
-            if     n == 1
-                c = ones(n,m);
-            elseif n == 2
-                p = [0 1]; 
-                th = (p*abs(V)).';
-            else
-                % define categories around circle on complex plane
-                p = exp(2*pi*1i*[1:n]/n);
-                % get complex points
-                c = (p*abs(V)).'; c = atan2d(imag(c),real(c));
-                % 
-                th = mod(mod(c/360,1)-0.5/n,1);
-            end
-        end
-        
         function [h,ax] = overlay_(I,varargin) % overlay_(I,x,y): plot y(x) ontop of image I; overlay_(I,C,V): plot V contours of C ontop of image I 
             % plots x,y on top of a background image I 
             
@@ -2739,7 +2728,9 @@ classdef am_lib
                 % overlay statistical function on field
                 ax(1) = gca; ax(2) = axes('position',get(gca,'position')); linkaxes(ax); colormap(ax(1),colormap('gray'));
                 % plot isostrain
-                if isempty(V); [~,h(2)]=am_lib.imcontour_(flipud(C.')); else; [~,h(2)]=am_lib.imcontour_(flipud(C.'),V); end
+%                 if isempty(V); [~,h(2)]=am_lib.imcontour_(flipud(C.')); else; [~,h(2)]=am_lib.imcontour_(flipud(C.'),V); end
+%                 if isempty(V); [~,h(2)]=contourf(flipud(C.')); else; [~,h(2)]=contourf(flipud(C.'),V); end
+                am_lib.imagesc(flipud(C.'),'alphadata',rescale(I));
                 % remove white background
                 set(gca,'color','none'); set(h(2),'linewidth',1); colormap(ax(2),flipud(am_lib.colormap_('red2blue'))); 
             else
@@ -2875,12 +2866,99 @@ classdef am_lib
             daspect([1 1 1])
         end
         
-        function [h] = imagesc_(A)
-            h=imagesc(A); axis tight; daspect([1 1 1]); axis off; box on; view([0 0 1]); daspect([1 1 1]);
+        function [h] = imagesc_(A,varargin)
+            h=imagesc(A,varargin{:}); axis tight; daspect([1 1 1]); axis off; box on; view([0 0 1]); daspect([1 1 1]);
         end
 
+        function [h] = contour_(A,V,threshold,varargin) % contour_(matrix,levels,threshold,varargin)
+            % histogram(c(3,:));set(gca,'yscale','log');
+
+            [a] = contourc(A,V); axis tight; daspect([1 1 1]); axis off; box on; view([0 0 1]); daspect([1 1 1]);
+            
+            c = get_contour_line_properties(a);
+            
+            for n = 1:size(c,2); if c(3,n)>threshold
+                sl_ = c(4,n)+1:c(5,n); h(n) = patch(a(1,sl_),a(2,sl_),c(1,n));
+            end; end
+
+            function c = get_contour_line_properties(a)
+                % quick pass to get number of contours
+                i=1; j=0; while i < size(a,2); j=j+1; i=i+a(2,i)+1; end; ncontours=j;
+                % c(level,nnodes,length,start,end)
+                i=1; j=0; c = zeros( 5, ncontours ); 
+                while i < size(a,2) 
+                    j=j+1; c(1,j)=a(1,i); c(2,j)=a(2,i); c(4,j)=i; c(5,j)=i+c(2,j);
+                    c(3,j)=sum(am_lib.normc_(diff(a(:,i+[1:c(2,j)]),1,2)));
+                    i=c(5,j)+1;
+                end
+                [~,inds]=sort(-c(3,:)); c=c(:,inds);
+            end
+        end
+        
         function [varargout] = imcontour_(A,varargin)
             [varargout{1:2}]=imcontour(A,varargin{:}); axis tight; daspect([1 1 1]); axis off; 
+        end
+        
+        function [h] = hist2_(x,y)
+            [v,e] = hist3([x(:) y(:)],[1,1]*200); [e{:}]=meshgrid(e{1:2});
+            h = contourf(e{1},e{2},log(v.'),100,'edgecolor','none');
+        end
+
+        function [h] = surfdc_(X,Y,Z,flag,varargin)
+            
+            cmap = am_lib.cmap_([],'hsv');
+
+            if contains(flag,'abs')
+                black = sawfct(log(abs(f)),2*pi/phaseres,0.7,1);
+            else
+                black = 1;
+            end
+            
+            rgb(:,:,1) =  black.*reshape(cmap(nphase,1),m,n);
+            rgb(:,:,2) =  black.*reshape(cmap(nphase,2),m,n);
+            rgb(:,:,3) =  black.*reshape(cmap(nphase,3),m,n);
+
+            % version 1
+            logf   = log(abs(f));  
+            alpha  = (logf>=0).*((1-(1./(1+logf))).^2)-(logf<0).*(1-(1./(1-logf))).^2;
+            
+
+            % version 2
+            %bright = (3.2/pi)*atan(abs(f))-0.8;
+
+            rgb = brightenRGB(rgb,alpha);
+
+            % set unknowns
+            rgb(isnan(rgb))=0.8;
+            rgb(:,:,1) = rgb(:,:,1).*(abs(f)>0)+(1-rgb(:,:,1)).*(f==Inf);
+            rgb(:,:,2) = rgb(:,:,2).*(abs(f)>0)+(1-rgb(:,:,2)).*(f==Inf);
+            rgb(:,:,3) = rgb(:,:,3).*(abs(f)>0)+(1-rgb(:,:,3)).*(f==Inf);
+
+            % reduce pure white and black to avoid printing problems
+            rgb = 0.001 + 0.998*rgb;
+
+        end
+
+        % colors
+        
+        function hsl = hsv2hsl(hsv)
+            hsl = hsv;
+            hsl(:,3) = 0.5 .* hsv(:,3) .* (2 - hsv(:,2));
+            hsl(:,2) = hsv(:,3) .* hsv(:,2) ./ (1 - abs(2*hsl(:,3)-1));
+        end
+
+        function hsv = hsl2hsv(hsl)
+            hsv = hsl; 
+            hsv(:,3) = (2*hsl(:,3) + hsv(:,2).*(1-abs(2*hsl(:,3)-1)))/2;
+            hsv(:,2) = 2*(hsv(:,3)-hsl(:,3))/hsv(:,3);
+        end
+        
+        function hsl = rgb2hsl(rgb)
+            hsl = am_lib.hsv2hsl(rgb2hsv(rgb));
+        end
+        
+        function rgb = hsl2rgb(hsl)
+            rgb = hsv2rgb(am_lib.hsl2hsv(hsl));
         end
         
         function [cmap] = colormap_(flag,n)
@@ -3084,44 +3162,29 @@ classdef am_lib
             ex_ = alpha(:)< 0; cmap(ex_) =      dim_(cmap(ex_),abs(alpha(ex_)));
         end
         
-        function [h] = hist2_(x,y)
-            [v,e] = hist3([x(:) y(:)],[1,1]*200); [e{:}]=meshgrid(e{1:2});
-            h = contourf(e{1},e{2},log(v.'),100,'edgecolor','none');
-        end
+        function [th] = assign_cmap_(V)
+            % assigns a number between [0,1] based on how close vectors V
+            % in are to identity vectors in that same basis. It essentially
+            % reduces the dimensionality of the data
 
-        function [h] = surfdc_(X,Y,Z,flag,varargin)
-            
-            cmap = am_lib.cmap_([],'hsv');
+            % set number of categories
+            n = size(V,1);
+            % get number of points
+            m = size(V,2);
 
-            if contains(flag,'abs')
-                black = sawfct(log(abs(f)),2*pi/phaseres,0.7,1);
+            if     n == 1
+                c = ones(n,m);
+            elseif n == 2
+                p = [0 1]; 
+                th = (p*abs(V)).';
             else
-                black = 1;
+                % define categories around circle on complex plane
+                p = exp(2*pi*1i*[1:n]/n);
+                % get complex points
+                c = (p*abs(V)).'; c = atan2d(imag(c),real(c));
+                % 
+                th = mod(mod(c/360,1)-0.5/n,1);
             end
-            
-            rgb(:,:,1) =  black.*reshape(cmap(nphase,1),m,n);
-            rgb(:,:,2) =  black.*reshape(cmap(nphase,2),m,n);
-            rgb(:,:,3) =  black.*reshape(cmap(nphase,3),m,n);
-
-            % version 1
-            logf   = log(abs(f));  
-            alpha  = (logf>=0).*((1-(1./(1+logf))).^2)-(logf<0).*(1-(1./(1-logf))).^2;
-            
-
-            % version 2
-            %bright = (3.2/pi)*atan(abs(f))-0.8;
-
-            rgb = brightenRGB(rgb,alpha);
-
-            % set unknowns
-            rgb(isnan(rgb))=0.8;
-            rgb(:,:,1) = rgb(:,:,1).*(abs(f)>0)+(1-rgb(:,:,1)).*(f==Inf);
-            rgb(:,:,2) = rgb(:,:,2).*(abs(f)>0)+(1-rgb(:,:,2)).*(f==Inf);
-            rgb(:,:,3) = rgb(:,:,3).*(abs(f)>0)+(1-rgb(:,:,3)).*(f==Inf);
-
-            % reduce pure white and black to avoid printing problems
-            rgb = 0.001 + 0.998*rgb;
-
         end
         
         
@@ -3232,6 +3295,26 @@ classdef am_lib
             % y = chirp(t,100,1,400)+chirp(t,-100,1,200); % define signal
             % w = 0.03; w_ = @(x) am_lib.gauss_(x./w)*w; % define window
             % am_lib.stft_(t,y,w);
+            
+% TO DO: ADD stft for 2D
+% TO DO: ADD stft for 2D
+% TO DO: ADD stft for 2D
+%
+% [wn,wm]=deal(21,19);
+% w = am_lib.hannw_(wn).*am_lib.hannw_(wm).';
+% 
+% %%
+% [n,m]=size(d); A = zeros(wn,wm,n-wn,m-wm,'single');
+% for in = 1:(n-wn)
+% for im = 1:(m-wm)
+%     A(:,:,in,im) = fftshift(fftn(d([1:wn]+in-1,[1:wm]+im-1).*w));
+% end
+% end
+% %%
+% idx = kmeans(reshape(abs(A).^2,wn*wm,in*im).',2);
+% %%
+% am_lib.imagesc_(reshape(idx,in,im))
+
             if nargin<4; flag=''; end
             if nargout==0
                 if contains(flag,'detail')
