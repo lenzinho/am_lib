@@ -2941,24 +2941,24 @@ classdef am_lib
 
         % colors
         
-        function hsl = hsv2hsl(hsv)
+        function hsl = hsv2hsl_(hsv)
             hsl = hsv;
             hsl(:,3) = 0.5 .* hsv(:,3) .* (2 - hsv(:,2));
-            hsl(:,2) = hsv(:,3) .* hsv(:,2) ./ (1 - abs(2*hsl(:,3)-1));
+            hsl(:,2) = hsv(:,3) .* hsv(:,2) ./ (1 - abs(2.*hsl(:,3)-1));
         end
 
-        function hsv = hsl2hsv(hsl)
+        function hsv = hsl2hsv_(hsl)
             hsv = hsl; 
-            hsv(:,3) = (2*hsl(:,3) + hsv(:,2).*(1-abs(2*hsl(:,3)-1)))/2;
-            hsv(:,2) = 2*(hsv(:,3)-hsl(:,3))/hsv(:,3);
+            hsv(:,3) = (2.*hsl(:,3) + hsv(:,2).*(1-abs(2.*hsl(:,3)-1)))/2;
+            hsv(:,2) = 2.*(hsv(:,3) - hsl(:,3))./hsv(:,3);
         end
         
-        function hsl = rgb2hsl(rgb)
-            hsl = am_lib.hsv2hsl(rgb2hsv(rgb));
+        function hsl = rgb2hsl_(rgb)
+            hsl = am_lib.hsv2hsl_(rgb2hsv(rgb));
         end
         
-        function rgb = hsl2rgb(hsl)
-            rgb = hsv2rgb(am_lib.hsl2hsv(hsl));
+        function rgb = hsl2rgb_(hsl)
+            rgb = hsv2rgb(am_lib.hsl2hsv_(hsl));
         end
         
         function [cmap] = colormap_(flag,n)
