@@ -234,11 +234,12 @@ classdef am_field
             F = am_field(); F.a=a; F.n=n; F.s=s; F.d=ndims-ndiscretes; F.R = F.get_collocation_points();
         end
 
-        function [F] = load_tem(A,dx,dy)
-            % load TEM image 
+        function [F] = load_image(A,dx,dy)
+            % load image as scalar field
             if nargin == 1; dx=1;dy=1; end
             switch ndims(A)
                 case 3 % stack
+                    error('not yet implemented');
                     F = am_field.define(size(A),[dx,dy,1],{'fourier','fourier'});
                 case 2 % image
                     F = am_field.define(size(A),[dx,dy],{'fourier','fourier'});
@@ -344,7 +345,7 @@ classdef am_field
                 F.L = F.get_laplacian();
             end
         end
-        
+
         function [F] = solve_differential_equation(F,equation,x,algorithm,dt,M)
             % examples
             % F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
@@ -470,7 +471,7 @@ classdef am_field
                     error('unknown solver');
             end
         end
-        
+
         function [F] = get_minimum_energy_path(F,vi,vf,nnodes,ediff)
             % nudge_elastic_band
             % nnodes = 10; 
@@ -485,19 +486,35 @@ classdef am_field
             k = 10000; dt = 0.01;
 
             % store force (negative gradient) in memory
-            J = -am_lib.diag_(F.J);
+            J = -am_lib.diag_(F.J); 
+            
+            % get local effective mass
+            if contains(flag,'effectivemass'); M = 1./am_lib.normc_(am_lib.diag_(F.H)); M = max(M./max(M(:)),0.1); end
 
             % initialize
             if nargout==0; clf; F.plot_field('F'); hold on; end
             nsteps=1000;  mass(1:nnodes)=1; v=zeros(F.d,nnodes,2); a=zeros(F.d,nnodes,2); PE=Inf(2,1);
             % loop over md
             for j = 1:nsteps
+                if contains(flag,'dropedge') % drop points outside boundary?
+                    ex_ = true(1,nnodes);
+                    ex_(ex_) = (min(F.R(1,:))<r(1,ex_) & max(F.R(1,:))>r(1,ex_));
+                    ex_(ex_) = (min(F.R(2,:))<r(2,ex_) & max(F.R(2,:))>r(2,ex_));
+                    nnodes=sum(ex_); r = r(:,ex_); mass=mass(ex_); v = v(:,ex_,:); a=a(:,ex_,:);
+                end
+                if contains(flag,'droptop') % drop points ontop of each other?
+                    ex_ = false(1,nnodes); [~,i]=am_lib.uniquec_(r); ex_(i) = true;
+                    nnodes=sum(ex_); r = r(:,ex_); mass=mass(ex_); v = v(:,ex_,:); a=a(:,ex_,:);
+                end
                 % find index of closest mesh point to each node
                 i = knnsearch(F.R(:,:).',r(:,:,1).').'; r(1:F.d,:,1) = F.R(:,i);
                 % get gradient
                 G = J(1:F.d,i);
-                % get potential energy
-                PE(2) = sum(F.F(i)-min(F.F(:)));
+                % update mass based on local curvature?
+                if contains(flag,'effectivemass'); mass(1:nnodes) = M(i); end
+                % get potential and kinetic energies per node
+                PE(2) = sum(F.F(i)-min(F.F(:)))./nnodes;
+                KE(2) = am_lib.sum_(mass.*v(:,:,2).^2,[1,2])/2./nnodes;
 
                 % get tangents
                 t = conv2(r(:,:,1),-[-1,0,1],'same'); t=t./am_lib.normc_(t); t(:,[1,end])=0;
@@ -535,23 +552,24 @@ classdef am_field
                         error('unknown integrator');
                 end
                 % update
-                r = circshift(r,-1,3); v = circshift(v,-1,3); PE = circshift(PE,-1,1);
+                r = circshift(r,-1,3); v = circshift(v,-1,3); PE = circshift(PE,-1,1); KE = circshift(KE,-1,1);
                 % draw
                 if nargout==0
                     % print 
-                    dPE = abs(PE(2)-PE(1));
-                    if j==1; fprintf('%10s %10s\n','PE','dPE'); 
-                    else;    fprintf('%10.5f %10.5f\n',PE(1),dPE); end
+                    dPE = abs(PE(2)-PE(1)); dKE = abs(KE(2)-KE(1));
+                    if j==1; fprintf('%10s %10s %10s %10s %10s\n','TE','PE','dPE','KE','dKE'); 
+                    else;    fprintf('%10.5g%10.5g %10.5g %10.5g %10.5g\n',PE(1)+KE(1),PE(1),dPE,KE(1),dKE); end
                     % plot
                     h=line(r(1,:,1),r(2,:,1),'Marker','o','LineStyle','-','Color','k');
+                    % h=plot3(r(1,:,1),r(2,:,1),ones(size(r(2,:,1)))*100,'.','Color','r');
                     drawnow;  delete(h);
                 end
                 % check energy difference and break if smaller
-                if dPE<ediff; break; end
+                if j>2; if dPE<ediff; break; end; end
             end
             h=line(r(1,:,1),r(2,:,1),'Marker','o','LineStyle','-','Color','k');
         end
-        
+
         function [F] = simulate_ising_(F,kT,M,algorithm,boundary)
             % 2D ising model
             % F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
@@ -716,7 +734,7 @@ classdef am_field
             end
            
         end
-        
+
         function [h] = plot_field(F,field)
             
             sl_ = @(field,i)   squeeze(F.(field)(i,:,:,:,:,:));
@@ -1402,7 +1420,7 @@ classdef am_field
                 h=imagesc(A); axis tight; daspect([1 1 1]); axis off; 
             end
         end
-        
+
         function [s_averaged, s_shifted, xs, ys] = correct_stack_drift(stack) % correct drift 
             %  CORRECT_DRIFT aligns stack to first image in stack, by cross-correlation
             % passes out cropped image and aligned stack (not cropped)
