@@ -1136,6 +1136,22 @@ classdef am_lib
                 t = '';
             end
         end
+        
+        function t   = extract_token_below(str,token,numeric)
+            import am_lib.*
+            l = find(contains(str,token),1);
+            if ~isempty(l)
+                b = strsplit(str{l},' ');
+                w = find(strcmp(b,token))-1;
+                b = strsplit(str{l+1},' ');
+                t = b(w);
+                if nargin>2 && numeric
+                    t = sscanf(t,'%f');
+                end
+            else
+                t = '';
+            end
+        end
 
         function [str,nlines] = load_file_(fname)
             import am_lib.count_lines_
@@ -2811,7 +2827,7 @@ classdef am_lib
 
         end
         
-        function [h] = plotc_(x,y,c,w) %  line plot which changes color (and width)
+        function [h] = plotc_(x,y,c,w) % line plot which changes color (and width)
             if nargin<4
                 x = x(:).'; y=y(:).'; c=c(:).'; z=zeros(size(x));
                 h = surface([x;x],[y;y],[z;z],[c;c],'facecol','no','edgecol','interp','linew',1);
@@ -2904,42 +2920,8 @@ classdef am_lib
             h = contourf(e{1},e{2},log(v.'),100,'edgecolor','none');
         end
 
-        function [h] = surfdc_(X,Y,Z,flag,varargin)
-            
-            cmap = am_lib.cmap_([],'hsv');
-
-            if contains(flag,'abs')
-                black = sawfct(log(abs(f)),2*pi/phaseres,0.7,1);
-            else
-                black = 1;
-            end
-            
-            rgb(:,:,1) =  black.*reshape(cmap(nphase,1),m,n);
-            rgb(:,:,2) =  black.*reshape(cmap(nphase,2),m,n);
-            rgb(:,:,3) =  black.*reshape(cmap(nphase,3),m,n);
-
-            % version 1
-            logf   = log(abs(f));  
-            alpha  = (logf>=0).*((1-(1./(1+logf))).^2)-(logf<0).*(1-(1./(1-logf))).^2;
-            
-
-            % version 2
-            %bright = (3.2/pi)*atan(abs(f))-0.8;
-
-            rgb = brightenRGB(rgb,alpha);
-
-            % set unknowns
-            rgb(isnan(rgb))=0.8;
-            rgb(:,:,1) = rgb(:,:,1).*(abs(f)>0)+(1-rgb(:,:,1)).*(f==Inf);
-            rgb(:,:,2) = rgb(:,:,2).*(abs(f)>0)+(1-rgb(:,:,2)).*(f==Inf);
-            rgb(:,:,3) = rgb(:,:,3).*(abs(f)>0)+(1-rgb(:,:,3)).*(f==Inf);
-
-            % reduce pure white and black to avoid printing problems
-            rgb = 0.001 + 0.998*rgb;
-
-        end
-
-        % colors
+        
+        % coloring
         
         function hsl = hsv2hsl_(hsv)
             hsl = hsv;
@@ -3161,6 +3143,46 @@ classdef am_lib
             ex_ = alpha(:)>=0; cmap(ex_) = brighten_(cmap(ex_),    alpha(ex_));
             ex_ = alpha(:)< 0; cmap(ex_) =      dim_(cmap(ex_),abs(alpha(ex_)));
         end
+        
+        function rgb = cmplx_color_(f,palette) % maps abs -> intensity, phase -> hue (palette)
+            % [x,y]=meshgrid(linspace(-2,2,1000),linspace(-2,2,1000).*1i); z = x+y;
+            % clist = am_lib.colormap_('red2blue',5);
+            % clist = am_lib.rgb2hsl_(clist); clist(:,3) = 0.5; clist=am_lib.hsl2rgb_(clist);
+            % C = am_lib.cmplx_color_(z,clist);
+            % PP = surf(real(z),imag(z),abs(z),C,'edgecolor','none'); view([0 0 1]);
+
+            % parse input
+            if nargin<2; palette = am_lib.colormap('hsv',600); end
+            % number of colors in palette encoding phase
+            [m,n]=size(f); p = size(palette); p = p(1);
+            % encode phase
+            nphase = stepfct((angle(-f)+pi)/(2*pi),p);
+            rgb(:,:,1) =reshape(palette(nphase,1),m,n);
+            rgb(:,:,2) =reshape(palette(nphase,2),m,n);
+            rgb(:,:,3) =reshape(palette(nphase,3),m,n);
+            % encode modulous
+%             bright = (log(abs(f))>=0).*((1-(1./(1+log(abs(f))))).^2)-(log(abs(f))<0).*(1-(1./(1-log(abs(f))))).^2;
+%             bright = -((3.2/pi)*atan(abs(f))-0.2);
+            bright = (3.2/pi)*atan(abs(f))-0.8;
+            rgb = brightenRGB(rgb,bright);
+            % deal with singularities
+            rgb(isnan(rgb))=0.8;
+            rgb(:,:,1) = rgb(:,:,1).*(abs(f)>0)+(1-rgb(:,:,1)).*(f==Inf);
+            rgb(:,:,2) = rgb(:,:,2).*(abs(f)>0)+(1-rgb(:,:,2)).*(f==Inf);
+            rgb(:,:,3) = rgb(:,:,3).*(abs(f)>0)+(1-rgb(:,:,3)).*(f==Inf);
+            % reduce pure white and black to avoid printing problems
+            rgb = 0.001 + 0.998*rgb;
+            function y = stepfct(x,nmax)
+                x = x-floor(x); y = floor(nmax*x)+1; y = int16(y); y = y+int16(y==0);
+            end
+            function RGB = brightenRGB(RGB,bright)
+                if size(size(bright))==1; bright = bright * ones(size(RGB(:,:,1))); end
+                RGB(:,:,1) = (bright>=0).* ((1-bright).*RGB(:,:,1) + bright.*ones(size(RGB(:,:,1)))) + (bright<0).*((1+bright).*RGB(:,:,1));
+                RGB(:,:,2) = (bright>=0).* ((1-bright).*RGB(:,:,2) + bright.*ones(size(RGB(:,:,2)))) + (bright<0).*((1+bright).*RGB(:,:,2));
+                RGB(:,:,3) = (bright>=0).* ((1-bright).*RGB(:,:,3) + bright.*ones(size(RGB(:,:,3)))) + (bright<0).*((1+bright).*RGB(:,:,3));
+            end
+        end
+
         
         function [th] = assign_cmap_(V)
             % assigns a number between [0,1] based on how close vectors V

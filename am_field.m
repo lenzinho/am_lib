@@ -851,14 +851,14 @@ classdef am_field
             end
         end
         
-        function [h] = plot_statistical_function(F,varargin)
+        function [h,f] = plot_statistical_function(F,varargin)
             
             if F.d~=2; error('plot_statistical_function is only implemented for 2d field'); end
             if ~all(contains(F.s,'diff')); error('statistical functions are only implemented for finite differences'); end
 
             [x,f] = am_lib.get_statistical_function(squeeze(F.F),varargin{:});
             
-            h = am_lib.plot_overlay_(squeeze(F.F),x,f);
+            h = am_lib.overlay_(squeeze(F.F),x,f);
         end
         
         % statistical quantities
