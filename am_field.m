@@ -374,7 +374,7 @@ classdef am_field
             %
             import am_field.*
             
-            [~,L] = F.get_flattened_differentiation_matrices(); % Get laplacian.
+            [D,L] = F.get_flattened_differentiation_matrices(); % Get laplacian.
             
             N=prod(F.n); % Simplify notation: get total number of grid points.
 
@@ -398,6 +398,9 @@ classdef am_field
                         case 'QP13' % Qin-Pablo (Soft Matter, 2013, 9, 11467)
                             syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
                             LHSe_ = @(U,x) L*( x{1}(U(:)) - x{2}*L*U(:) ) - x{3}*(U(:) - mean(U(:))); nargs=3;
+                        case 'LS91' % Lai-das Sarma (PRL 1991)
+                            % NEED TO TEST
+                            LHSe_ = @(U,x) -x{1}*L^2*U(:) + x{2}*L*(D*U(:))^2 + x{3}*randn(size(U)); nargs=2;
                         case 'poisson' % Poisson equation
                             LHSe_ = @(U,x) L * U(:) - x{1}(:); nargs=1;
                         case 'laplace' % Laplace equation
@@ -1347,7 +1350,8 @@ classdef am_field
             %
 
             if nargin==1; flag=''; end
-            if nargin>=2 || isempty(flag); flag=[flag,'interactive']; end
+            if nargin>=2 || isempty(flag); flag=[flag,',interactive']; end
+            if nargin<3; th=[]; end
 
             % rotate image?
             if contains(flag,{'rot:image','rot:field'})

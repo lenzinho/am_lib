@@ -2175,7 +2175,7 @@ classdef am_lib
             end
         end
         
-        function [c,f,l] = fit_peak_(x,y,flag)
+        function [c,f,l] = fit_(x,y,flag)
             import am_lib.*
             if contains(flag,'lorentz')
                 % define function
@@ -2757,7 +2757,7 @@ classdef am_lib
         
         function [h] = plot_isosurface_(X,dX,V,Vp,C,w,m,flag) 
             %  X = [(x,y,z),1:n(1),1:n(2),1:n(3)] coordinates
-            % dX = translations for periodic boundary conditions (if X is defined from [0,1) then dX is probably 1)
+            % dX = translations for periodic boundary conditions (if X is defined from [0,1) then dX is probably eye(3))
             %  V = [(1:m)  ,1:n(1),1:n(2),1:n(3)] volumetric data
             % Vp = [1:q] list of points to sample V at
             %  w = number of times to extend the boundary
@@ -2824,7 +2824,6 @@ classdef am_lib
                 h(b) = patch(isosurface(squeeze(X(1,:,:,:)),squeeze(X(2,:,:,:)),squeeze(X(3,:,:,:)),squeeze(V(i,:,:,:)),Vp(j), squeeze(C(i,:,:,:))                   ));
                 set(h(b),'FaceColor','interp','EdgeColor','none','AmbientStrength',0.3,'DiffuseStrength',1,'SpecularStrengt',0.4,'SpecularExponent',30);
             end; end; end
-
         end
         
         function [h] = plotc_(x,y,c,w) % line plot which changes color (and width)
@@ -3182,7 +3181,6 @@ classdef am_lib
                 RGB(:,:,3) = (bright>=0).* ((1-bright).*RGB(:,:,3) + bright.*ones(size(RGB(:,:,3)))) + (bright<0).*((1+bright).*RGB(:,:,3));
             end
         end
-
         
         function [th] = assign_cmap_(V)
             % assigns a number between [0,1] based on how close vectors V
@@ -3247,6 +3245,7 @@ classdef am_lib
         end
         
         
+        
         % correlation and polynomial fitting
         
         function       plotcorr_(x,y)
@@ -3293,7 +3292,30 @@ classdef am_lib
             y = peval_(x(:),pfit_(x0(:),y0(:),n));
         end
 
+        function [C] = planefit_(varargin)
+            % fit a plane to th date
+            if     nargin == 3
+                xx = x(:); yy = y(:); zz = z(:);
+            elseif nargin == 1
+                xx = varargin{1}(1,:); yy = varargin{1}(2,:);  zz = varargin{1}(3,:);
+            end
+            N = length(xx); O = ones(1,N); C = [xx;yy;O].'\zz.';
+        end
 
+        function Z = plane_(X,Y,varargin)
+            if numel(varargin) == 1
+                C = varargin{1}(1:3);
+            elseif numel(varargin) == 3
+                [C(1),C(2),C(3)]=deal(varargin{:});
+            else
+                error('invalid input');
+            end
+            Z = X * C(1) + Y*C(2) + C(3);
+%             normal = cross(p1 - p2, p1 - p3);
+%             d = p1(1)*normal(1) + p1(2)*normal(2) + p1(3)*normal(3); d = -d;
+%             Z = (-d - (normal(1)*x) - (normal(2)*y))/normal(3);
+        end
+        
         % integral transforms related
 
         function [h]    = hilbert_(f) % hilbert transform (Kramers-Kronig transform)
