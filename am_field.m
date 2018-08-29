@@ -4,7 +4,7 @@ classdef am_field
         tiny = 1E-8; 
         mu0  = 1; % vacuum permeability
     end
-    
+
     properties
         T = []; % type (scalar/vector)
         d = []; % dimensions (2 or 3)
@@ -44,6 +44,8 @@ classdef am_field
                 %     [ (     dFz/dy    -    dFy/dz    ) 
                 %     [ (     dFx/dz    -    dFz/dx    ) , x , y , z  ]
                 %     [ (     dFy/dx    -    dFx/dy    ) 
+        Q = []; % topological charge
+                %     [ (               1              ) , x , y , z  ]
         % AFM
        rACF=[]; % radial autocorrelation function
       rHHCF=[]; % radial height-height function
@@ -54,9 +56,9 @@ classdef am_field
         Pr_g = []; % (GPA) phase
         dPr_g= []; % (GPA) phase derivative
     end
- 
+
     methods (Static)
-        
+
         function [F] = demo()
             
             F   = am_field.define([2,2].^[7,8],[2*pi,2*pi],{'cdiff','fourier'});
@@ -72,7 +74,7 @@ classdef am_field
             figure(2); plot_hessian(F);
             
         end
-        
+
         function [F] = demo_biot_savart()
             
             F   = am_field.define([2,2,2].^[5,5,5],[1,1,1],{'chebyshev','chebyshev','chebyshev'});
@@ -100,10 +102,85 @@ classdef am_field
         end
 
         function [F] = demo_hilliard_cahn()
-
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
             F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000); % solve
+        end
+        
+        function [F] = demo_qin_pablo()
+            % Cahn-Hilliard Polymer (mean = -0.45: hexagons, mean = 0: lines)
+            F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+            F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field, lines    (mean = 0)
+            F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.455; % initialize field, hexagons (mean = -0.455)
+            F = F.solve_differential_equation('QP13',{@(x)(x^2-1)^2/4,0.5,0.1},'explicit',0.05,10000);
+            %
+        end
+        
+        function [F] = demo_complex_ginzburg_landau()
+            F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
+            F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
+            F = F.solve_differential_equation('GLXX',{1},'explicit',0.1,1000);
+        end
+
+        function [F] = demo_poisson_equation()
+            F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
+            F.F = zeros([1,F.n]);
+            rho = am_lib.gauss_(am_lib.normc_(F.R-[30;30])); % put a charge at (30,30)
+            F = F.solve_differential_equation('poisson',{-rho},'explicit',0.05,5000);
+        end
+        
+        function [F] = demo_vortex_unbinding()
+            % make animation of vortex pair separation
+            % m = winding number
+            % n = phase offset
+            % s = separation
+            
+            clear;clc;
+            F = am_field.define([2,2].^[5,6],[2,2].^[5,6],{'cdiff','cdiff'});
+            F.R = F.R - [2;2].^[5;6]/2;
+            
+            for i = 1:200
+
+                m = +1; n = pi/2; s = (i-1)/10;
+                th_ = @(s) atan2(F.R(2,:,:)-s+0.5,F.R(1,:,:)+0.5);
+                F.F = cat(1,sin(m*th_(s)-m*th_(-s)+n),cos(m*th_(s)-m*th_(-s)+n));
+                F = F.get_topological_charge();
+
+                % plot
+                u = squeeze(F.F(1,:,:)); x = squeeze(F.R(1,:,:));
+                v = squeeze(F.F(2,:,:)); y = squeeze(F.R(2,:,:));
+                q = squeeze(F.Q); w = am_lib.gaussw_(91,5)*am_lib.gaussw_(91,5).';
+                q = conv2( q, w, 'same');
+
+                if i == 1
+                    am_lib.set_plot_defaults_(); hold on; offset_ = 100;
+                    hs = surf(x,y,q-offset_,'edgecolor','none');
+                    hq = quiver(x-u/2,y-v/2,u,v,0.5,'color','k');
+                    shading interp; box on; axis tight; view([0 0 1]); daspect([1 1 1]);
+                    yticks([]); xticks([]); axis([-F.n(1)/2 F.n(1)/2 -F.n(2)/2 F.n(2)/2]);
+                    caxis([-1,1]*3-offset_); colormap(am_lib.clight_(am_lib.colormap_('red2blue',1000),0.5));
+                    set(gca, 'XLimMode', 'manual', 'YLimMode', 'manual');
+                else
+                    hq.XData = x-u/2; % centers arrow (factor of 1/2 from 0.5 scaling)
+                    hq.YData = y-v/2;
+                    hq.UData = u;
+                    hq.VData = v;
+                    hs.CData = q-offset_;
+                end
+                drawnow();
+
+                % get frame
+                f(i) = getframe();
+
+            end
+
+            % save movie going backwards and forwards
+            mov=f([1:200,199:-1:1]);
+            
+            % write movie
+            h = VideoWriter('vortex.mp4','MPEG-4'); h.FrameRate=60; h.Quality=100; 
+            open(h); for i = 1:numel(mov); writeVideo(h,mov(i)); end; close(h);
+ 
         end
         
         function [F] = demo_ising_metropolis_periodic_bc()
@@ -114,35 +191,38 @@ classdef am_field
             M = 50000; % monte carlo samples
             
             % compute energy difference of flipping ith spin
-            en_ = @(F,x) 2 * F.F(1,x(1),x(2)) * ( ...
-                             F.F(1,mod(x(1)+1,F.n(1))+1,x(2)) + ... %  0, 1, 0
-                             F.F(1,mod(x(1)-1,F.n(1))+1,x(2)) + ... %  1, 0, 1
-                             F.F(1,x(1),mod(x(2)+1,F.n(2))+1) + ... %  0, 1, 0
-                             F.F(1,x(1),mod(x(2)-1,F.n(2))+1) );
+            % first neighbor
+            en1_ = @(F,x)  2 * F.F(1,x(1),x(2)) .* ( ...
+                              F.F(1,mod(x(1)-1-1,F.n(1))+1,x(2)) + ...
+                              F.F(1,mod(x(1)+1-1,F.n(1))+1,x(2)) + ...
+                              F.F(1,x(1),mod(x(2)-1-1,F.n(2))+1) + ...
+                              F.F(1,x(1),mod(x(2)+1-1,F.n(2))+1) );
+            % second neighbor
+            en2_ = @(F,x) 2 * F.F(1,x(1),x(2)) .* ( ...
+                              F.F(1,mod(x(1)-1-1,F.n(1))+1,mod(x(2)-1-1,F.n(2))+1) + ...
+                              F.F(1,mod(x(1)+1-1,F.n(1))+1,mod(x(2)-1-1,F.n(2))+1) + ...
+                              F.F(1,mod(x(1)-1-1,F.n(1))+1,mod(x(2)+1-1,F.n(2))+1) + ...
+                              F.F(1,mod(x(1)+1-1,F.n(1))+1,mod(x(2)+1-1,F.n(2))+1) );
 
+            J1 = 1;
+            J2 = 0;
+            
             kT_list = [1.3:0.1:3.5]; % meV
             for k = 1:numel(kT_list)
                 kT = kT_list(k);
-                
             % monte carlo samples
             for j = 1:M
-
                 % pick a random coordinate to flip
                 for i = 1:F.d; x(i) = randi(F.n(i)); end
-
                 % calculate energy of flipping
-                E = en_(F,x);
-
+                E = J1*en1_(F,x) + J2*en2_(F,x);
                 % flip?
                 if E <= 0 || rand(1) <= exp(-E/kT)
                     F.F(1,x(1),x(2)) = - F.F(1,x(1),x(2));
                 end
-
                 % plot?
                 if mod(j,2000)==0; F.plot_field('F'); drawnow; end
-
             end
-            
                 m(k) = mean(F.F(:));
                 s(k) = std(F.F(:));
             end
@@ -151,7 +231,7 @@ classdef am_field
             line([1 1]*2/log(1+sqrt(2)),get(gca,'YLim'),'Color','k','linewidth',0.5); % ideal Tc
             
         end
-        
+
         function [F] = demo_ising_metropolis_helical_bc()
             %isng model with helical boundary conditions
             clear;clc;
@@ -194,7 +274,7 @@ classdef am_field
             clf; h = semilogx(kT_list,s,'s-',kT_list,m,'o-'); 
             line([1 1]*2/log(1+sqrt(2)),get(gca,'YLim'),'Color','k','linewidth',0.5); % ideal Tc 
         end
-        
+
         function [F] = demo_nudge_elastic_band()
             clear;clc;
             % define central-difference mesh between [0,1) 
@@ -205,10 +285,10 @@ classdef am_field
             F = F.load_model('Mueller');
             F = F.get_derivatives();
             % get minimum energy path using nudge elastic band
-            vi = [-1 ;0.5]; vf = [0.7;0.5]; nnodes = 10; ediff = 1E-3;
-            get_minimum_energy_path(F,vi,vf,nnodes,ediff)
+            vi = [-1 ;0.5]; vf = [0.7;0.5]; nnodes = 10; ediff = 1E-3; flag = '';
+            get_minimum_energy_path(F,vi,vf,nnodes,ediff,flag)
         end
-        
+
         function [F] = demo_gpa()
             fname = '11_SnO_FS20nm_ADF_lowI30mrad_stack.dm3'; % good
             % fname = '10_SnO_FS10nm_ADF_lowI30mrad_stack.dm3'; % defect
@@ -224,7 +304,7 @@ classdef am_field
             [h,ax] = am_lib.overlay_(d, squeeze(E(2,2,:,:)), 5);%[-0.4:0.05:0.4]+0.025)
             % am_lib.imagesc_(squeeze(Pr_g{1})) 
         end
-        
+
         function [F] = define(n,a,s) 
             % F = define(n,a,s)
             ndims = sum(n~=1); ndiscretes=sum(strcmp(s,'discrete'));
@@ -246,18 +326,18 @@ classdef am_field
             end
             F.F = permute(A,[9,1:8]);
         end
-        
+
     end
-    
+
     methods 
-        
+
         function [F] = set(F,varargin) % set field properties 
             % parse remaining input
             nvs = numel(varargin);
             if ~am_lib.iseven_(nvs); error('{key, value} inputs required'); end; i=1; 
             while true; F.(varargin{i}) = varargin{i+1}; i=i+2; if i>nvs; break; end; end
         end
-        
+
         function [F] = load_model(F,model)
             switch model
                 case 'Mueller'
@@ -346,6 +426,26 @@ classdef am_field
             end
         end
 
+        function [F] = get_topological_charge(F)
+            % copy
+            N = F;
+            % normalize field
+            N.F = N.F./am_lib.normc_(N.F);
+            % recompute derivatives
+            N = N.get_derivatives();
+            % compute charge
+            switch F.d
+                case 3
+                    Q   =   cross(F.J(:,1,:,:),F.J(:,2,:,:),1); 
+                    F.Q =   dot( F.F, permute(Q,[1,3,4,2]), 1);
+                case 2
+                    Q   =   cross(N.J(:,1,:,:),N.J(:,2,:,:),1); 
+                    F.Q =   permute(Q(3,:,:,:),[1,3,4,2]);
+                otherwise
+                    error('ERROR [get_topological_charge]: invalid dimension.');
+            end
+        end
+        
         function [F] = solve_differential_equation(F,equation,x,algorithm,dt,M)
             % examples
             % F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
@@ -356,22 +456,8 @@ classdef am_field
             % F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000);
             % F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'implicit',1,1000);
             % F = F.solve_differential_equation('GL50',{@(x)(x^2-1)^2/4,1},'explicit',0.01,5000);
-            % 
-            % Complex Ginzburg-Landau
-            % F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
-            % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-            % F = F.solve_differential_equation('GLXX',{1},'explicit',0.2,2000);
             %
-            % Cahn-Hilliard Polymer (mean = -0.45: hexagons, mean = 0: lines)
-            % F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
-            % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field, lines    (mean = 0)
-            % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.455; % initialize field, hexagons (mean = -0.455)
-            % F = F.solve_differential_equation('QP13',{@(x)(x^2-1)^2/4,0.5,0.1},'explicit',0.05,10000);
-            %
-            % Poisson 
-            % rho = am_lib.gauss_(am_lib.normc_(F.R-[30;30]));                              
-            % F = F.solve_differential_equation('poisson',{-rho},'explicit',0.01,5000);
-            %
+            
             import am_field.*
             
             [D,L] = F.get_flattened_differentiation_matrices(); % Get laplacian.
@@ -475,7 +561,7 @@ classdef am_field
             end
         end
 
-        function [F] = get_minimum_energy_path(F,vi,vf,nnodes,ediff)
+        function [F] = get_minimum_energy_path(F,vi,vf,nnodes,ediff,flag)
             % nudge_elastic_band
             % nnodes = 10; 
             % % starting and ending positions
@@ -486,7 +572,7 @@ classdef am_field
             r = am_lib.linspacen_(vi, vf, nnodes);
 
             % define spring constant, time step
-            k = 10000; dt = 0.01;
+            k = 10; dt = 0.01;
 
             % store force (negative gradient) in memory
             J = -am_lib.diag_(F.J); 
@@ -495,7 +581,7 @@ classdef am_field
             if contains(flag,'effectivemass'); M = 1./am_lib.normc_(am_lib.diag_(F.H)); M = max(M./max(M(:)),0.1); end
 
             % initialize
-            if nargout==0; clf; F.plot_field('F'); hold on; end
+            if nargout==0 || contains(flag,'draw'); clf; F.plot_field('F'); hold on; end
             nsteps=1000;  mass(1:nnodes)=1; v=zeros(F.d,nnodes,2); a=zeros(F.d,nnodes,2); PE=Inf(2,1);
             % loop over md
             for j = 1:nsteps
@@ -528,8 +614,7 @@ classdef am_field
                 % get total force
                 f_total= f_para + f_perp;
                 % relax endpoints?
-                relax_ends = true;
-                if relax_ends
+                if contains(flag,'relax_ends')
                     f_total(:,[1,nnodes]) = G(1:F.d,[1,nnodes]);
                 end
                 % get force = ma on each point as the negative of the gradient
@@ -557,27 +642,110 @@ classdef am_field
                 % update
                 r = circshift(r,-1,3); v = circshift(v,-1,3); PE = circshift(PE,-1,1); KE = circshift(KE,-1,1);
                 % draw
-                if nargout==0
+                if nargout==0 || contains(flag,'draw')
                     % print 
                     dPE = abs(PE(2)-PE(1)); dKE = abs(KE(2)-KE(1));
                     if j==1; fprintf('%10s %10s %10s %10s %10s\n','TE','PE','dPE','KE','dKE'); 
                     else;    fprintf('%10.5g%10.5g %10.5g %10.5g %10.5g\n',PE(1)+KE(1),PE(1),dPE,KE(1),dKE); end
                     % plot
-                    h=line(r(1,:,1),r(2,:,1),'Marker','o','LineStyle','-','Color','k');
+                    hold on; h = plot3(r(1,:,1),r(2,:,1),ones(size(r(2,:,1)))*1E10,'Marker','o','Color','k');
                     % h=plot3(r(1,:,1),r(2,:,1),ones(size(r(2,:,1)))*100,'.','Color','r');
-                    drawnow;  delete(h);
+                    drawnow; delete(h);
                 end
                 % check energy difference and break if smaller
                 if j>2; if dPE<ediff; break; end; end
             end
-            h=line(r(1,:,1),r(2,:,1),'Marker','o','LineStyle','-','Color','k');
+            hold on; h = plot3(r(1,:,1),r(2,:,1),ones(size(r(2,:,1)))*1E10,'Marker','o','Color','k');
         end
 
+        function [r] = relax_points(F,r,ediff,flag)
+            % relax the coordinates of r [(x,y),n] points
+            
+            % get number of nodes
+            nnodes = size(r,2);
+            
+            % define time step
+            dt = 0.01;
+
+            % store force (negative gradient) in memory
+            J = -am_lib.diag_(F.J); 
+            
+            % get local effective mass
+            if contains(flag,'effectivemass'); M = 1./am_lib.normc_(am_lib.diag_(F.H)); M = max(M./max(M(:)),0.1); end
+
+            % initialize
+            if nargout==0 || contains(flag,'draw'); clf; F.plot_field('F'); hold on; end
+            nsteps=1000;  mass(1:nnodes)=1; v=zeros(F.d,nnodes,2); a=zeros(F.d,nnodes,2); PE=Inf(2,1);
+            % loop over md
+            for j = 1:nsteps
+                if contains(flag,'dropedge') % drop points outside boundary?
+                    ex_ = true(1,nnodes);
+                    ex_(ex_) = (min(F.R(1,:))<r(1,ex_) & max(F.R(1,:))>r(1,ex_));
+                    ex_(ex_) = (min(F.R(2,:))<r(2,ex_) & max(F.R(2,:))>r(2,ex_));
+                    nnodes=sum(ex_); r = r(:,ex_); mass=mass(ex_); v = v(:,ex_,:); a=a(:,ex_,:);
+                end
+                if contains(flag,'droptop') % drop points ontop of each other?
+                    ex_ = false(1,nnodes); [~,i]=am_lib.uniquec_(r); ex_(i) = true;
+                    nnodes=sum(ex_); r = r(:,ex_); mass=mass(ex_); v = v(:,ex_,:); a=a(:,ex_,:);
+                end
+                % find index of closest mesh point to each node
+                i = knnsearch(F.R(:,:).',r(:,:,1).').'; r(1:F.d,:,1) = F.R(:,i);
+                % get gradient
+                G = J(1:F.d,i);
+                % update mass based on local curvature?
+                if contains(flag,'effectivemass'); mass(1:nnodes) = M(i); end
+                % get potential and kinetic energies per node
+                PE(2) = sum(F.F(i)-min(F.F(:)))./nnodes;
+                KE(2) = am_lib.sum_(mass.*v(:,:,2).^2,[1,2])/2./nnodes;
+
+                % get total force
+                f_total= G;
+                
+                % get force = ma on each point as the negative of the gradient
+                a(:,:,2) = f_total./mass;
+                % integrate
+                integrator = 'sd';
+                switch integrator
+                    case {'vvhs','velocity-verlet-half-step'}
+                        v(:,:,2) = v(:,:,1) + a(:,:,1)/2 .* dt;
+                        r(:,:,2) = r(:,:,1) + v(:,:,2) .* dt;
+                        v(:,:,2) = v(:,:,1) + a(:,:,2)/2 .* dt;
+                    case {'vvd','velocity-verlet-damped'}
+                        r(:,:,2) = r(:,:,1) + v(:,:,1) .* dt + a(:,:,1)/2 .* dt.^2;
+                        v(:,:,2) = v(:,:,1) + (a(:,:,1)+a(:,:,2))/2 .* dt;
+                        ex_=sum(v(:,:,2).*f_total,1)<0; v(:,ex_,2)=0;
+                    case {'vv','velocity-verlet'}
+                        r(:,:,2) = r(:,:,1) + v(:,:,1) .* dt + a(:,:,1)/2 .* dt.^2;
+                        v(:,:,2) = v(:,:,1) + (a(:,:,1)+a(:,:,2))/2 .* dt;
+                    case {'sd','steepest-descent'}
+                        r(:,:,2) = r(:,:,1) + v(:,:,2) .* dt + a(:,:,2)/2 .* dt.^2;
+                        v(:,:,2) = 0;
+                    otherwise
+                        error('unknown integrator');
+                end
+                % update
+                r = circshift(r,-1,3); v = circshift(v,-1,3); PE = circshift(PE,-1,1); KE = circshift(KE,-1,1);
+                dPE = abs(PE(2)-PE(1)); dKE = abs(KE(2)-KE(1));
+                % draw
+                if nargout==0 || contains(flag,'draw')
+                    % print 
+                    if j==1; fprintf('%10s %10s %10s %10s %10s\n','TE','PE','dPE','KE','dKE'); 
+                    else;    fprintf('%10.5g%10.5g %10.5g %10.5g %10.5g\n',PE(1)+KE(1),PE(1),dPE,KE(1),dKE); end
+                    % plot
+                    hold on; h = plot3(r(1,:,1),r(2,:,1),ones(size(r(2,:,1)))*1E10,'Marker','o','LineStyle','-','Color','k');
+                    drawnow; delete(h);
+                end
+                % check energy difference and break if smaller
+                if j>2; if dPE<ediff; break; end; end
+            end
+            hold on; h = plot3(r(1,:,1),r(2,:,1),ones(size(r(2,:,1)))*1E10,'Marker','o','LineStyle','-','Color','k');
+        end
+        
         function [F] = simulate_ising_(F,kT,M,algorithm,boundary)
             % 2D ising model
             % F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
             % F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
-            % F = F.simulate_ising_(2,20000,'wolff','pbc')
+            % F = F.simulate_ising_(2,20000,'MT53','pbc')
 
             % multiplication is faster than division
             beta = 1./kT;
@@ -748,29 +916,29 @@ classdef am_field
                         case 2 % 2D
                             if isreal(F.(field))
                                 set(gcf,'color','w');
-                                h = surf(sl_('R',1), sl_('R',2), squeeze(F.(field))); 
-                                h.EdgeColor= 'none'; h.LineWidth = 1; 
+%                                 imagesc(flipud(squeeze(F.(field)).'));
+                                h = surf(sl_('R',1), sl_('R',2), squeeze(F.(field)));  
+                                h.EdgeColor = 'none'; h.LineWidth = 1; 
                                 view([0 0 1]); daspect([1 1 1]); axis tight;
                             else
                                 switch 1
                                     case 1 
-                                        cmap  = am_lib.cmap_('spectral',200); n = size(cmap,1); 
+                                        cmap  = am_lib.colormap_('spectral',200); n = size(cmap,1); 
                                         phase = angle(F.(field))/(2*pi)+1/2; % [0,1]
                                         phase = 2*(phase-1/2); % [-1,1]
                                         amp   = log(abs(F.(field))); amp = (amp-min(amp(:)))./(max(amp(:))-min(amp(:)));
                                         cmap  = reshape( am_lib.clight_(cmap(ceil((n-1)*amp+1),:),phase) , [F.n,3]);
                                     case 2 % phase
-                                        cmap  = am_lib.cmap_('jet',200); n = size(cmap,1); 
+                                        cmap  = am_lib.colormap_('jet',200); n = size(cmap,1); 
                                         phase = angle(F.(field))/(2*pi)+1/2; % [0,1]
                                         cmap  = reshape( cmap(ceil(n*phase),:) , [F.n,3]);
                                     case 3 % amplitude
-                                        cmap  = am_lib.cmap_('jet',200); n = size(cmap,1); 
+                                        cmap  = am_lib.colormap_('jet',200); n = size(cmap,1); 
                                         amp   = log(abs(F.(field))); amp = (amp-min(amp(:)))./(max(amp(:))-min(amp(:))); 
                                         cmap  = reshape( cmap(ceil((n-1)*amp+1),:) , [F.n,3]);
                                 end
                                 set(gcf,'color','w');
-                                h = surf(sl_('R',1), sl_('R',2), squeeze(abs(F.(field))), cmap); 
-                                h.EdgeColor= 'none'; h.LineWidth = 1; 
+                                h = surf(sl_('R',1), sl_('R',2), squeeze(abs(F.(field))), cmap); h.EdgeColor= 'none'; h.LineWidth = 1; 
                                 view([0 0 1]); daspect([1 1 1]); axis tight;
                             end
                         case 3 % 3D
@@ -936,7 +1104,8 @@ classdef am_field
                 p = [1:F.d+1]; p([1,i+1])=p([i+1,1]);
                 switch F.T % evaluate derivatives
                     case 'scalar'; J(i,i,:,:,:)     = permute(matmul_(D,permute(F.F,p)),p);
-                    case 'vector'; J(i,1:F.d,:,:,:) = permute(matmul_(D,permute(F.F,p)),p);
+                    case 'vector'; T = permute(matmul_(D,permute(F.F,p)),p);
+                                   J(i,1:F.d,:,:,:) = reshape(T(1:F.d,:),size(J(i,1:F.d,:,:,:)));
                     otherwise; error('unknown field type');
                 end
             end
