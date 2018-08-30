@@ -4769,7 +4769,8 @@ classdef am_lib
         end
         
         function [g]    = lopass_(y,w) % low pass filter
-            g = real(ifft(fft(y) .* fftshift(am_lib.gaussw_(numel(y),w))));
+            
+            g = real(ifft(fft(y) .* reshape(fftshift(am_lib.gaussw_(numel(y),w)),size(y)) ));
         end
         
         function [y,bg] = fft_filter_(y,m,npasses,flag)
