@@ -129,6 +129,38 @@ classdef am_field
             F = F.solve_differential_equation('poisson',{-rho},'explicit',0.05,5000);
         end
         
+        function [F] = demo_parallel_plate_capacitor()
+            clear;clc;
+            
+            F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'cdiff','cdiff'});
+            F.F = zeros([1,F.n]);
+            % create boundary conditions
+            dirichlet = [];
+            bc = find(F.R(1,:,:)==54  & F.R(2,:,:)<100 & F.R(2,:,:)>20 ) ; dirichlet = [dirichlet;[bc,-ones(size(bc))]];
+            bc = find(F.R(1,:,:)==74  & F.R(2,:,:)<100 & F.R(2,:,:)>20 ) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
+            dirichlet = dirichlet.';
+            % find steadys tate field
+            F = F.evolve_scalar_field('laplace',{},'steadystate',0,0,'dirichlet',dirichlet);
+        end
+        
+        function [F] = demo_heat_diffusion()
+
+            clear;clc
+            
+            F = am_field.define([2].^[9],1,{'chebyshev'});
+            F.F = zeros([1,F.n]);
+            % create boundary conditions
+            dirichlet = [];
+            dirichlet = [dirichlet;[1,10]];
+            dirichlet = dirichlet.';
+            neumann   = [];
+            neumann   = [neumann;[F.n,0]];
+            neumann   = neumann.';
+
+            F = F.evolve_scalar_field('dissipative_diffusion',{8,5},'steadystate',0,0,'dirichlet',dirichlet,'neumann',neumann);
+
+        end
+        
         function [F] = demo_vortex_unbinding()
             % make animation of vortex pair separation
             % m = winding number
@@ -136,10 +168,17 @@ classdef am_field
             % s = separation
             
             clear;clc;
-            F = am_field.define([2,2].^[5,6],[2,2].^[5,6],{'cdiff','cdiff'});
-            F.R = F.R - [2;2].^[5;6]/2;
-            
-            for i = 1:200
+
+            coneplot2_ = @(x,y,u,v,c) ...
+                coneplot(cat(3,x,x),cat(3,y,y),3*cat(3,-ones(size(x)),ones(size(x))), ...
+                         cat(3,u,u),cat(3,v,v),3*cat(3,-ones(size(x)),ones(size(x))), ...
+                         (x-u/2)*0.90,(y-v/2)*0.90,rescale(c,-1,1)*0.5, cat(3,c,c) );
+
+            n = 4;
+            F = am_field.define([2,2].^[n,n+1],[2,2].^[n,n+1],{'cdiff','cdiff'});
+            F.R = F.R - [2;2].^[n-1;n];
+
+            for i = [1:200]
 
                 m = +1; n = pi/2; s = (i-1)/10;
                 th_ = @(s) atan2(F.R(2,:,:)-s+0.5,F.R(1,:,:)+0.5);
@@ -147,26 +186,41 @@ classdef am_field
                 F = F.get_topological_charge();
 
                 % plot
+                clist = am_lib.clight_(am_lib.colormap_('hsv',256),-0.2);
                 u = squeeze(F.F(1,:,:)); x = squeeze(F.R(1,:,:));
                 v = squeeze(F.F(2,:,:)); y = squeeze(F.R(2,:,:));
-                q = squeeze(F.Q); w = am_lib.gaussw_(91,5)*am_lib.gaussw_(91,5).';
-                q = conv2( q, w, 'same');
+                q = squeeze(F.Q); w = am_lib.gaussw_(21,5)*am_lib.gaussw_(21,5).';
+                q = conv2( q, w, 'same'); th = mod(atan2(u,v)+pi/2,2*pi); th(1) = 0; th(end)=2*pi;
 
-                if i == 1
-                    am_lib.set_plot_defaults_(); hold on; offset_ = 100;
-                    hs = surf(x,y,q-offset_,'edgecolor','none');
-                    hq = quiver(x-u/2,y-v/2,u,v,0.5,'color','k');
-                    shading interp; box on; axis tight; view([0 0 1]); daspect([1 1 1]);
-                    yticks([]); xticks([]); axis([-F.n(1)/2 F.n(1)/2 -F.n(2)/2 F.n(2)/2]);
-                    caxis([-1,1]*3-offset_); colormap(am_lib.clight_(am_lib.colormap_('red2blue',1000),0.5));
-                    set(gca, 'XLimMode', 'manual', 'YLimMode', 'manual');
-                else
-                    hq.XData = x-u/2; % centers arrow (factor of 1/2 from 0.5 scaling)
-                    hq.YData = y-v/2;
-                    hq.UData = u;
-                    hq.VData = v;
-                    hs.CData = q-offset_;
+                switch 'fancy'
+                    case 'simple'
+                        if i == 1
+                            am_lib.set_plot_defaults_(); hold on; offset_ = 100;
+                            hs = surf(x,y,q-offset_,'edgecolor','none');
+                            hq = am_lib.quiverc_(x-u/2,y-v/2,u,v,th,clist);
+                            hq.AutoScaleFactor=0.5; hq.LineWidth = 0.8;
+                            shading interp; box on; axis tight; view([0 0 1]); daspect([1 1 1]);
+                            yticks([]); xticks([]); axis([-F.n(1)/2 F.n(1)/2 -F.n(2)/2 F.n(2)/2]-1/2);
+                            caxis([-1,1]*3-offset_); colormap(am_lib.clight_(flipud(am_lib.colormap_('red2blue',100)),0.5));
+                            set(gca, 'XLimMode', 'manual', 'YLimMode', 'manual');
+                        else
+                            am_lib.quiverc_(hq,th,clist);
+                            hq.XData = x-u/2; hq.UData = u;
+                            hq.YData = y-v/2; hq.VData = v;
+                            hs.CData = q-offset_;
+                        end
+                case 'fancy'
+                        cla;
+                        am_lib.set_plot_defaults_(); offset_ = 100;
+                        hc = coneplot2_(x.',y.',u.',v.',q.');
+                        hc.EdgeColor='none'; hc.DiffuseStrength = 0.1; hc.AmbientStrength=0.6;
+                        shading interp; box on; axis tight; view([0 0 1]); daspect([1 1 1]);
+                        yticks([]); xticks([]); axis([-F.n(1)/2 F.n(1)/2 -F.n(2)/2 F.n(2)/2]*0.92-1/2);
+                        camlight(45,-5); lighting gouraud;
+                        caxis([-2 2]/2); colormap(flipud(am_lib.colormap_('red2blue',100)));
+                        box on; % set(gcf,'renderer','painters');
                 end
+                
                 drawnow();
 
                 % get frame
@@ -178,7 +232,7 @@ classdef am_field
             mov=f([1:200,199:-1:1]);
             
             % write movie
-            h = VideoWriter('vortex.mp4','MPEG-4'); h.FrameRate=60; h.Quality=100; 
+            h = VideoWriter('vortex_fancy.mp4','MPEG-4'); h.FrameRate=60; h.Quality=100; 
             open(h); for i = 1:numel(mov); writeVideo(h,mov(i)); end; close(h);
  
         end
@@ -446,35 +500,46 @@ classdef am_field
             end
         end
         
-        function [F] = solve_differential_equation(F,equation,x,algorithm,dt,M)
+        function [F] = evolve_scalar_field(F,equation,x,algorithm,dt,M,varargin)
             % examples
             % F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-            % F = F.solve_differential_equation('SW76',{0.1,1.0},'implicit',2,500);         % hexagons
-            % F = F.solve_differential_equation('SW76',{0.3,0.0},'implicit',2,500);         % finger prints
-            % F = F.solve_differential_equation('SW76',{0.8,1.85},'explicit',0.03,5000);    % maze
-            % F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000);
-            % F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'implicit',1,1000);
-            % F = F.solve_differential_equation('GL50',{@(x)(x^2-1)^2/4,1},'explicit',0.01,5000);
+            % F = F.evolve_scalar_field('SW76',{0.1,1.0},'implicit',2,500);         % hexagons
+            % F = F.evolve_scalar_field('SW76',{0.3,0.0},'implicit',2,500);         % finger prints
+            % F = F.evolve_scalar_field('SW76',{0.8,1.85},'explicit',0.03,5000);    % maze
+            % F = F.evolve_scalar_field('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000);
+            % F = F.evolve_scalar_field('CH58',{@(x)(x^2-1)^2/4,1},'implicit',1,1000);
+            % F = F.evolve_scalar_field('GL50',{@(x)(x^2-1)^2/4,1},'explicit',0.01,5000);
             %
             
             import am_field.*
             
-            [D,L] = F.get_flattened_differentiation_matrices(); % Get laplacian.
+            % parse boundary conditions if present
+                p = inputParser; 
+                checkdbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == 2); 
+                checknbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == F.d+1);
+                addParameter(p,'dirichlet',[],checkdbc_);
+                addParameter(p,'neumann'  ,[],checknbc_);
+                parse(p,varargin{:});
+                dirichlet = p.Results.dirichlet; % dirichlet( (index, value), n)
+                neumann   = p.Results.neumann;   %   neumann( (index, value), n)
             
             N=prod(F.n); % Simplify notation: get total number of grid points.
 
+            [D,L,G] = F.get_flattened_differentiation_matrices(); I = speye(N); % Get flattened divergence, laplacian, gradient operators
+            
 			switch algorithm
-            case {'explicit','implicit','crank-nicolson','jacobi','gauss-seidel'}
+            case {'explicit','implicit','steadystate','crank-nicolson','jacobi','gauss-seidel'}
             	if any(strcmp(algorithm,{'explicit','crank-nicolson'}))
 	                % equations of the form F(n+1) = F(n) + dt * LHS
+                    %                       LHS = ( F(n+1) - F(n)) / dt = dF/dt
                     switch equation
                         case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
-                            LHSe_ = @(U,x) x{1}*U(:) - (L+speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=2;
+                            LHSe_ = @(U,x) x{1}*U(:) - (L+I)^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=2;
                         case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
-                            LHSe_ = @(U,x) x{1}*U(:) - (L+speye(N))^2*(L+x{3}.^2*speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=3;
-                        case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002)
-                            LHSe_ = @(U,x) ( speye(N)*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) )*U(:); nargs=1;
+                            LHSe_ = @(U,x) x{1}*U(:) - (L+I)^2*(L+x{3}.^2*speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=3;
+                        case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002; Arason & Tang PRL 1998)
+                            LHSe_ = @(U,x) ( I*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) )*U(:); nargs=1;
                         case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
                             syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
                             LHSe_ = @(U,x)   ( x{1}(U(:)) + x{2}*L*U(:) ); nargs=2;
@@ -487,24 +552,28 @@ classdef am_field
                         case 'LS91' % Lai-das Sarma (PRL 1991)
                             % NEED TO TEST
                             LHSe_ = @(U,x) -x{1}*L^2*U(:) + x{2}*L*(D*U(:))^2 + x{3}*randn(size(U)); nargs=2;
-                        case 'poisson' % Poisson equation
+                        case 'poisson' % Poisson equation, x = { charge density }
                             LHSe_ = @(U,x) L * U(:) - x{1}(:); nargs=1;
+                        case 'dissipative_diffusion' % Diffusion equation with dissipation, x = {diffusivity, dissipation}
+                            LHSe_ = @(U,x) ( x{1}*L - x{2}*I )*U(:); nargs=2;
                         case 'laplace' % Laplace equation
                             LHSe_ = @(U,x) L * U(:); nargs=0;
-                        case 'test'
-                            syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
-                            LHSe_ = @(U,x)   ( x{1}(U(:)) + x{2}*L*U(:) ); nargs=2;
                         otherwise
-                            error('unknown propagator');
+                            % Ingredients available for designing custom equations:
+                            % U (field), L (laplacian), D (divergence), G{i} (gradient along i), I (identity)
+                            % example: F = F.evolve_scalar_field('8*L-5*eye(N)',{},'steadystate',0,0,'dirichlet',dirichlet,'neumann',neumann);
+                            eval(['LHSe_ = @(U,x) ',equation,';']); nargs=0;
                     end
                 end
-                if any(strcmp(algorithm,{'implicit','crank-nicolson'}))
-                % equations of the form F(n+1) = (1 - dt*LHS)\F(n)
+                if any(strcmp(algorithm,{'implicit','crank-nicolson','steadystate'}))
+                    % equations of the form F(n+1) = (1 - dt*LHS)\F(n)
+                    %                       LHS * F(n+1) = ( F(n+1) - F(n) ) / dt
+                    %                       i.e., LHS has a factor of F(n+1) removed
                     switch equation
                         case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
-                            LHSi_ = @(U,x) x{1}*speye(N) - (L+speye(N))^2 + x{2}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N); nargs=2;
+                            LHSi_ = @(U,x) x{1}*I - (L+I)^2 + x{2}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N); nargs=2;
                         case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
-                            LHSi_ = @(U,x) x{1}*speye(N) - (L+speye(N))^2*(L+x{3}.^2*speye(N))^2 + x{2}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N); nargs=3;
+                            LHSi_ = @(U,x) x{1}*I - (L+I)^2*(L+x{3}.^2*speye(N))^2 + x{2}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N); nargs=3;
                         case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002)
                             LHSe_ = @(U,x) ( speye(N)*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) ); nargs=1;
                         case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
@@ -515,17 +584,25 @@ classdef am_field
                             LHSi_ = @(U,x) L*( spdiags(x{1}(U(:)),0,N,N) - x{2}*L ); nargs=2;
                         case 'QP13' % Qin-Pablo (Soft Matter, 2013, 9, 11467)
                             % Something is wrong about this implicit implementation; results do no match explicit version. Compare:
-                            % F = F.solve_differential_equation('QP13',{@(x)(x^2-1)^2/4,1,0.05},'implicit',1,100);
-                            % F = F.solve_differential_equation('QP13',{@(x)(x^2-1)^2/4,1,0.05},'explicit',0.01,10000);
+                            % F = F.evolve_scalar_field('QP13',{@(x)(x^2-1)^2/4,1,0.05},'implicit',1,100);
+                            % F = F.evolve_scalar_field('QP13',{@(x)(x^2-1)^2/4,1,0.05},'explicit',0.01,10000);
                             error('something is wrong with this implementation');
                             syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
                             LHSi_ = @(U,x) L*( spdiags(x{1}(U(:)),0,N,N) - x{2}*L ) - x{3}*spdiags(U(:) - mean(U(:)),0,N,N); nargs=3;
-                        case 'poisson' % Poisson equation
-                            LHSi_ = @(U,x) L - spdiags(x{1}(:),0,N,N); nargs=1;
+                        case 'poisson' % Poisson equation, x = { charge density }
+                            error('The Poisson equation cannot be relaxed using an implicit method.');
+                            % The Poisson equation cannot be relaxed using an implicit method because
+                            % the field needs to be factored out from the charge.
+                            LHSi_ = @(U,x) L - spdiags(x{1}(:)./U(:),0,N,N); nargs=1;
+                        case 'dissipative_diffusion' % x = {diffusivity, dissipation}
+                            LHSi_ = @(U,x) x{1}*L - x{2}*speye(N); nargs=2;
                         case 'laplace'
                             LHSi_ = @(U,x) L; nargs=0;
                         otherwise
-                            error('unknown propagator');
+                            % Ingredients available for designing custom equations:
+                            % U (field), L (laplacian), D (divergence), G{i} (gradient along i), I (identity)
+                            % example: F = F.evolve_scalar_field('8*L-5*eye(N)',{},'steadystate',0,0,'dirichlet',dirichlet,'neumann',neumann);
+                            eval(['LHSi_ = @(U,x) ',equation,';']); nargs = 0;
                     end
                 end
             otherwise
@@ -538,23 +615,51 @@ classdef am_field
 
             % Propagate in time 
             switch algorithm
+                case 'steadystate' % dF/dt = 0
+                    % initialize system of equations
+                    n = prod(F.n); V = zeros(n,1); O = LHSi_(F.F,x);
+                    % add dirichlet boundary conditions
+                    if ~isempty(dirichlet)
+                        Op = eye(n);
+                        Op = Op(dirichlet(1,:),:);
+                        Vp = dirichlet(2,:).';
+                        % augment
+                        O = [O;Op]; V = [V;Vp];
+                    end
+                    % add neuamnn boundary conditions for each dimension
+                    if ~isempty(neumann); for j = 1:F.d
+                        Op = G{j}(neumann(1,:),:);
+                        Vp = neumann(j+1,:).';
+                        % augment
+                        O = [O;Op]; V = [V;Vp];
+                    end; end
+                    % evaluate
+                    F.F(1:N) = O\V;
+                    % plot
+                    F.plot_field('F');
                 case 'explicit' % unstable for large steps
                     for i = [1:M]
                         F.F(1:N) = F.F(:) + dt*LHSe_(F.F,x);
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
+                        % b.c.
+                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
                     end
                 case 'implicit' % more stable
                     for i = [1:M]
                         F.F(1:N) = (speye(N) - dt*LHSi_(F.F,x))\F.F(:);
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
+                        % b.c.
+                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
                     end
                 case 'crank-nicolson'
                     for i = [1:M]
                         F.F(1:N) = ( (speye(N)-dt*LHSi_(F.F,x))\F.F(:) + F.F(:)+dt*LHSe_(F.F,x) )/2;
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
+                        % b.c.
+                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
                     end
                 otherwise
                     error('unknown solver');
@@ -913,6 +1018,8 @@ classdef am_field
             switch size(F.(field),1)
                 case {1} % scalar
                     switch F.d
+                        case 1 % 1D
+                            plot(F.R,F.(field));
                         case 2 % 2D
                             if isreal(F.(field))
                                 set(gcf,'color','w');
@@ -970,6 +1077,8 @@ classdef am_field
         end
 
         function [ax]= plot_jacobian(F)
+            
+            if isempty(F.J); F.J = F.get_jacobian(); end
             
             sl_ = @(R,i)   squeeze(R(i,:,:,:,:,:));
             sl2_= @(R,i,j) squeeze(R(i,j,:,:,:,:));
@@ -1086,6 +1195,7 @@ classdef am_field
         end
 
         function [J] = get_jacobian(F)
+            if isempty(F.T); F.T = get_field_type(F); end
             % define matmul which supports sparse matrices
             matmul_ = @(A,B) reshape(A*reshape(B,size(B,1),[]),size(A,1),size(B,2),size(B,3),size(B,4),size(B,5));
             % allocate space
@@ -1160,7 +1270,7 @@ classdef am_field
             C = permute(C,[1,3,4,5,6,7,8,2]);
         end
         
-        function [D,L] = get_flattened_differentiation_matrices(F)
+        function [D,L,G] = get_flattened_differentiation_matrices(F)
             % checked with this code:
             % % 2D difference matrix
             % F = am_field.define([500,500],[1,1]*2*pi,{'chebyshev','chebyshev'});
@@ -1188,8 +1298,14 @@ classdef am_field
             D = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
             D = am_field.get_flattened_divergence(D{:});
             % laplacian
+            if nargout < 2; return; end
             L = cellfun(@(x)sparse(x(:,:,2)),Q,'UniformOutput',false);
             L = am_field.get_flattened_divergence(L{:});
+            % gradient
+            if nargout < 3; return; end
+            G = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
+            G = am_field.get_flattened_gradients(G{:});
+            
         end
     
     end
@@ -1345,7 +1461,25 @@ classdef am_field
             w(1:n,1) = 1;
         end
     
-        function [D]     = get_flattened_divergence(Dx,Dy,Dz) 
+        function [D]     = get_flattened_gradients(Dx,Dy,Dz) 
+            switch nargin
+                case 1
+                    D{1} = Dx;
+                case 2
+                    n(1) = size(Dx,1); n(2) = size(Dy,1); 
+                    D{1} = kron(eye(n(2)),Dx);
+                    D{2} = kron(Dy,eye(n(1)));
+                case 3
+                    n(1) = size(Dx,1); n(2) = size(Dy,1); n(3) = size(Dz,1);
+                    D{1} = kron(eye(n(3)),kron(eye(n(2)),Dx));
+                    D{2} = kron(eye(n(3)),kron(Dy,eye(n(1))));
+                    D{3} = kron(Dz,kron(eye(n(2)),eye(n(1))));
+                otherwise
+                    error('not yet implemented');
+            end
+        end
+        
+        function [D]     = get_flattened_divergence(Dx,Dy,Dz)
             switch nargin
                 case 1
                     D = Dx;
