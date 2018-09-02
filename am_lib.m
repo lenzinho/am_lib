@@ -526,6 +526,7 @@ classdef am_lib
         end
         
         function [d] = diag_(A)
+            % get diagonal elements:  diag(i,:,:,...) = A(i,i,:,:,...)
             n = size(A); m = min(n(1),n(2));
             d = zeros(m,prod(n(3:end)));
             for i = 1:m; d(i,:) = A(i,i,:); end
@@ -533,6 +534,7 @@ classdef am_lib
         end
         
         function [T] = trace_(A)
+            % sum over diagonal elements: tr(1,:,:,...) = sum_i A(i,i,:,:,...) 
             T = sum(am_lib.diag_(A),1);
         end
         
@@ -844,7 +846,7 @@ classdef am_lib
             T = sparse( A(:), B(:), ones(1,pd), pd, pd );
         end
 
-        function [Dq]= hist_(varargin) % hist_(x,D,xq), hist_(x,y,D,xq,yq)
+        function Dq  = hist_(varargin) % hist_(x,D,xq), hist_(x,y,D,xq,yq)
             switch nargin
                 case 3 % hist_(x,D,xq)
                     x = varargin{1}(:); 
@@ -862,12 +864,17 @@ classdef am_lib
                     error('invalid input');
             end
             % find index of closest xq point for each x
-            i = knnsearch(xq.',x.');
+            i = knnsearch(xq.',x.'); 
+            % integrate
             Dq = accumarray(i(:),D,[],@sum).';
-            nvalues = sum(i(:)==[1:max(i(:))],1);
-            Dq = Dq./nvalues;
-            Dq(numel(Dq)+1:m*n) = NaN;
+            % normalize
+            nvalues = sum(i(:)==[1:max(i(:))],1); Dq = Dq./nvalues; 
+            % ????
+            Dq(numel(Dq)+1:m*n) = NaN; 
+            % reshape
             Dq = reshape(Dq,[m,n]);
+            % laplacian interpolation on nan values with Dirichlet b.c.
+            Dq = regionfill(Dq,isnan(Dq));
         end
         
         
@@ -1774,9 +1781,18 @@ classdef am_lib
             x = r.*cosd(th);
             y = r.*sind(th);
         end
+
+        function [x,y]  = pol2cart_(th,r)
+            x = r.*cos(th);
+            y = r.*sin(th);
+        end
         
         function [th,r] = cart2pold_(x,y)
             th = atan2d(y,x); r = hypot(x,y);
+        end
+        
+        function [th,r] = cart2pol_(x,y)
+            th = atan2(y,x); r = hypot(x,y);
         end
         
         function [phi,chi,r] = cart2sphd_(x,y,z)
@@ -2887,6 +2903,44 @@ classdef am_lib
            h = plot3(A(1,:),A(2,:),A(3,:),varargin{:});
         end
 
+        function [h] = quiverc_(varargin)
+            
+            if     nargin == 8
+                [X,Y,Z,U,V,W,C,clist]=deal(varargin{:});
+                h = quiver3(X, Y, Z, U, V, W);
+            elseif nargin == 5
+                [U,V,W,C,clist]=deal(varargin{:});
+                h = quiver3(U, V, W);
+            elseif nargin == 6
+                [X,Y,U,V,C,clist]=deal(varargin{:});
+                h = quiver(X, Y, U, V);
+            elseif nargin == 4
+                [U,V,C,clist]=deal(varargin{:});
+                h = quiver(U, V);
+            elseif nargin == 3
+                % just update the color
+                [h,C,clist]=deal(varargin{:});
+            end
+
+            %// Now determine the color to make each arrow using a colormap
+            [~, ~, ind] = histcounts(C, size(clist, 1));
+
+            %// Now map this to a colormap to get RGB
+            cmap = uint8(ind2rgb(ind(:), clist) * 255);
+            cmap(:,:,4) = 255;
+            cmap = permute(repmat(cmap, [1 3 1]), [2 1 3]);
+
+            %// We repeat each color 3 times (using 1:3 below) because each arrow has 3 vertices
+            set(h.Head, ...
+                'ColorBinding', 'interpolated', ...
+                'ColorData', reshape(cmap(1:3,:,:), [], 4).');   %'
+
+            %// We repeat each color 2 times (using 1:2 below) because each tail has 2 vertices
+            set(h.Tail, ...
+                'ColorBinding', 'interpolated', ...
+                'ColorData', reshape(cmap(1:2,:,:), [], 4).');
+        end
+        
         function [h] = spyc_(A)
             [x,y] = find(A);
             h = scatter(y,x,200,A(A~=0),'.');
