@@ -143,6 +143,27 @@ classdef am_field
             F = F.evolve_scalar_field('laplace',{},'steadystate',0,0,'dirichlet',dirichlet);
         end
         
+        function [F] = demo_metal_inside_field()
+            clear;clc
+            % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
+            F = am_field.define([2,2].^[7,7],[2 2].^7,{'cdiff','cdiff'});
+            F.F = zeros([1,F.n]);
+            % create capactior plates
+            dirichlet = [];
+            bc = find(F.R(1,:,:)==min(F.R(1,:))) ; dirichlet = [dirichlet;[bc,-ones(size(bc))]];
+            bc = find(F.R(1,:,:)==max(F.R(1,:))) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
+            dirichlet = dirichlet.'; plates = dirichlet;
+            % find steady state field
+            F = F.evolve_scalar_field('laplace',{},'steadystate',0,0,'dirichlet',plates);
+            % create conductor [inside conductor: 1) equipotential, 2) electric field, 3) no charge]
+            ex_=F.define_mask('square',F.n/2,F.n/8);
+            dirichlet = []; mean_ = @(f,ex_) repmat(mean(f(ex_(:))), sum(ex_(:)), 1);
+            bc = find(ex_); dirichlet = [dirichlet;[bc,mean_(F.F,ex_)]]; 
+            dirichlet = dirichlet.'; metal = dirichlet;
+            % find steady state field with the metal
+            F = F.evolve_scalar_field('laplace',{},'steadystate',0,0,'dirichlet',[plates,metal]);
+        end
+        
         function [F] = demo_heat_diffusion()
 
             clear;clc
@@ -437,6 +458,19 @@ classdef am_field
                 end
             end; end
         end
+
+        function ex_ = define_mask(F,shape,varargin)
+            switch shape
+                case 'square'
+                    % (center, width)
+                    [c,w]=deal(varargin{:});
+                    ex_ = true(F.n);
+                    for i = 1:F.d
+                        ex_(ex_) = F.R(i,ex_)<(c(i)+w(i)) & F.R(i,ex_)>(c(i)-w(i));
+                    end
+            end
+        end
+
         
 %         function [F] = crop(F,x,dx)
 %             % x = coordinates to begin croping
@@ -620,6 +654,10 @@ classdef am_field
                     n = prod(F.n); V = zeros(n,1); O = LHSi_(F.F,x);
                     % add dirichlet boundary conditions
                     if ~isempty(dirichlet)
+                        % make the b.c. robust by removing coupling to everything else
+                        O(dirichlet(1,:),:) = [];
+                        V(dirichlet(1,:),:) = [];
+                        % add boundary conditions
                         Op = eye(n);
                         Op = Op(dirichlet(1,:),:);
                         Vp = dirichlet(2,:).';
@@ -644,6 +682,7 @@ classdef am_field
                         if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
                         % b.c.
                         if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                        if ~isempty(neumann); error('not yet implemented'); end
                     end
                 case 'implicit' % more stable
                     for i = [1:M]
@@ -652,6 +691,7 @@ classdef am_field
                         if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
                         % b.c.
                         if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                        if ~isempty(neumann); error('not yet implemented'); end
                     end
                 case 'crank-nicolson'
                     for i = [1:M]
@@ -660,6 +700,7 @@ classdef am_field
                         if mod(i,round(M/100))==0; F.plot_field('F'); title(num2str(i)); drawnow; end
                         % b.c.
                         if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                        if ~isempty(neumann); error('not yet implemented'); end
                     end
                 otherwise
                     error('unknown solver');
@@ -1142,9 +1183,8 @@ classdef am_field
         end
         
         % statistical quantities
-        
-        
-        
+
+
         % TO DO: drop particles (nodes) on a converged potential and move MD based on Lagrangian mechanics
         % evolve each particle using different algorithms, including verlet. 
         % this is a precursor to the nudge elastic band method for finding minimum energy path.
