@@ -164,6 +164,34 @@ classdef am_field
             F = F.evolve_scalar_field('laplace',{},'steadystate',0,0,'dirichlet',[plates,metal]);
         end
         
+        function [F] = demo_dielectric_inside_field()
+            clear;clc
+            % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
+            F = am_field.define([2,2].^7,[2 2].^7,{'cdiff','pdiff'});
+            F.F = zeros([1,F.n]);
+            % create capactior plates
+            dirichlet = [];
+            bc = find(F.R(1,:,:)==min(F.R(1,:))) ; dirichlet = [dirichlet;[bc,-ones(size(bc))]];
+            bc = find(F.R(1,:,:)==max(F.R(1,:))) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
+            dirichlet = dirichlet.'; plates = dirichlet;
+            % define dielectric constant
+            ex_ = F.define_mask('circle',F.n/2,F.n(1)/8); epsilon = 3*ex_ + 1*(~ex_); 
+            % find steady state field
+            F = F.evolve_scalar_field('nlaplace',{epsilon},'steadystate',0,0,'dirichlet',plates);
+            % F = F.evolve_scalar_field('nlaplace',{epsilon},'explicit',0.05,100000,'dirichlet',plates);
+            % get derivatives
+            F = F.get_derivatives();
+            % plot field
+            clf; am_lib.set_plot_defaults_(); hold on; clist=am_lib.colormap_('magma',100); colormap(clist); n=2;
+            J = am_lib.diag_(F.J); % J = J./am_lib.normc_(J); J(isnan(J))=0;
+            hc = contour(squeeze(F.R(1,:,:)),squeeze(F.R(2,:,:)),squeeze(F.F(1,:,:)),10,'linewidth',2);
+            hq = am_lib.quiverc_( ...
+                   squeeze(F.R(1,1:n:end,1:n:end)),squeeze(F.R(2,1:n:end,1:n:end)),...
+                   squeeze(J(1,1:n:end,1:n:end)),squeeze(J(2,1:n:end,1:n:end)),squeeze(F.F(1,1:n:end,1:n:end)),clist);
+            hq.LineWidth=1.2;
+            daspect([1 1 1]); axis tight; box on; xticks([]); yticks([]);
+        end
+        
         function [F] = demo_heat_diffusion()
 
             clear;clc
@@ -468,6 +496,12 @@ classdef am_field
                     for i = 1:F.d
                         ex_(ex_) = F.R(i,ex_)<(c(i)+w(i)) & F.R(i,ex_)>(c(i)-w(i));
                     end
+                case 'circle'
+                    % (center, radius)
+                    [c,r]=deal(varargin{:});
+                    ex_ = am_lib.normc_(F.R-c(:)) < r;
+                otherwise 
+                    error('unknown shape');
             end
         end
 
@@ -586,12 +620,17 @@ classdef am_field
                         case 'LS91' % Lai-das Sarma (PRL 1991)
                             % NEED TO TEST
                             LHSe_ = @(U,x) -x{1}*L^2*U(:) + x{2}*L*(D*U(:))^2 + x{3}*randn(size(U)); nargs=2;
-                        case 'poisson' % Poisson equation, x = { charge density }
-                            LHSe_ = @(U,x) L * U(:) - x{1}(:); nargs=1;
                         case 'dissipative_diffusion' % Diffusion equation with dissipation, x = {diffusivity, dissipation}
                             LHSe_ = @(U,x) ( x{1}*L - x{2}*I )*U(:); nargs=2;
-                        case 'laplace' % Laplace equation
+                        case 'poisson' % Poisson equation, x = { charge density }
+                            LHSe_ = @(U,x) L * U(:) - x{1}(:); nargs=1;
+                        case 'laplace' % Laplace equation, x = { }
                             LHSe_ = @(U,x) L * U(:); nargs=0;
+                        case 'nlaplace' % Laplace equation with a spatial-dependent dielectric constant, x = { dielectric constant  }
+                            % seems ok
+                            GE = cellfun(@(G) spdiags(G*x{1}(:),0,N,N), G, 'UniformOutput', false); 
+                            GE = cat(2,GE{:}) * cat(1,G{:}); EL = spdiags(x{1}(:),0,N,N) * L; 
+                            LHSe_ = @(U,x) ( EL  -  GE ) * U(:); nargs=1;
                         otherwise
                             % Ingredients available for designing custom equations:
                             % U (field), L (laplacian), D (divergence), G{i} (gradient along i), I (identity)
@@ -630,8 +669,15 @@ classdef am_field
                             LHSi_ = @(U,x) L - spdiags(x{1}(:)./U(:),0,N,N); nargs=1;
                         case 'dissipative_diffusion' % x = {diffusivity, dissipation}
                             LHSi_ = @(U,x) x{1}*L - x{2}*speye(N); nargs=2;
-                        case 'laplace'
+                        case 'laplace'  % Laplace equation, x = { }
                             LHSi_ = @(U,x) L; nargs=0;
+                        case 'nlaplace' % Laplace equation with a spatial-dependent dielectric constant, x = { dielectric constant }
+                            % seems ok
+                            GE = cellfun(@(G) spdiags(G*x{1}(:),0,N,N), G, 'UniformOutput', false); 
+                            GE = cat(2,GE{:}) * cat(1,G{:}); EL = spdiags(x{1}(:),0,N,N) * L; 
+                            LHSi_ = @(U,x) EL  -  GE; nargs=1;
+                            % Ed = spdiags(repmat(x{1}(:),[F.d,1]),0,F.d*N,F.d*N);
+                            % LHSi_ = @(U,x) E * L  -  cat(2,G{:}) * Ed * cat(1,G{:}); nargs=1;
                         otherwise
                             % Ingredients available for designing custom equations:
                             % U (field), L (laplacian), D (divergence), G{i} (gradient along i), I (identity)
