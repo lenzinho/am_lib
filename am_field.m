@@ -7,7 +7,7 @@ classdef am_field
 
     properties
         T = []; % field type (scalar/vector)
-        Y = []; % coordinate type (cartesian/cylindrical/spherical)
+        Y = []; % coordinate type (cartesian/polar/cylindrical/spherical)
         d = []; % dimensions (2 or 3)
         s = []; % scheme{1:d} ('fourier/chebyshev/legendre/cdiff/discrete') for each dimension
         n = []; % grid points / cart. dimension    3D: [n(1),n(2),n(3)]     2D: [n(1),n(2)] 
@@ -59,6 +59,16 @@ classdef am_field
     end
 
     methods (Static)
+        
+        function [F] = define(n,a,s) 
+            % F = define(n,a,s)
+            ndims = sum(n~=1); ndiscretes=sum(strcmp(s,'discrete'));
+            if numel(s)~=ndims; error('s dimensions mismatch'); end
+            if numel(a)~=ndims; error('a dimensions mismatch'); end
+            if ndiscretes>1; error('only one discrete dimension is supported at this time'); end
+            F = am_field(); F.a=a; F.n=n; F.s=s; F.d=ndims-ndiscretes; F.R = F.get_collocation_points(); F.Y = 'cartesian';
+        end
+        
 
         function [F] = demo()
             
@@ -105,7 +115,7 @@ classdef am_field
         function [F] = demo_hilliard_cahn()
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
-            F = F.solve_differential_equation('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000); % solve
+            F = F.evolve_scalar_field('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000); % solve
         end
         
         function [F] = demo_qin_pablo()
@@ -113,21 +123,21 @@ classdef am_field
             F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field, lines    (mean = 0)
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.455; % initialize field, hexagons (mean = -0.455)
-            F = F.solve_differential_equation('QP13',{@(x)(x^2-1)^2/4,0.5,0.1},'explicit',0.05,10000);
+            F = F.evolve_scalar_field('QP13',{@(x)(x^2-1)^2/4,0.5,0.1},'explicit',0.05,10000);
             %
         end
         
         function [F] = demo_complex_ginzburg_landau()
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-            F = F.solve_differential_equation('GLXX',{1},'explicit',0.1,1000);
+            F = F.evolve_scalar_field('GLXX',{1},'explicit',0.1,1000);
         end
 
         function [F] = demo_poisson_equation()
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
             F.F = zeros([1,F.n]);
             rho = am_lib.gauss_(am_lib.normc_(F.R-[30;30])); % put a charge at (30,30)
-            F = F.solve_differential_equation('poisson',{-rho},'explicit',0.05,5000);
+            F = F.evolve_scalar_field('poisson',{-rho},'explicit',0.05,5000);
         end
         
         function [F] = demo_parallel_plate_capacitor()
@@ -196,7 +206,7 @@ classdef am_field
         function [F] = demo_dielectric_half_space()
             clear;clc
             % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
-            F = am_field.define([2,2].^7,[2 2].^7,{'cdiff','cdiff'});
+            F = am_field.define([2,2].^7,[2,2].^7,{'cdiff','cdiff'});
             F.F = zeros([1,F.n]);
             % create capactior plates
             dirichlet = [];
@@ -464,15 +474,6 @@ classdef am_field
             % am_lib.imagesc_(squeeze(Pr_g{1})) 
         end
 
-        function [F] = define(n,a,s) 
-            % F = define(n,a,s)
-            ndims = sum(n~=1); ndiscretes=sum(strcmp(s,'discrete'));
-            if numel(s)~=ndims; error('s dimensions mismatch'); end
-            if numel(a)~=ndims; error('a dimensions mismatch'); end
-            if ndiscretes>1; error('only one discrete dimension is supported at this time'); end
-            F = am_field(); F.a=a; F.n=n; F.s=s; F.d=ndims-ndiscretes; F.R = F.get_collocation_points();
-        end
-
         function [F] = load_image(A,dx,dy)
             % load image as scalar field
             if nargin == 1; dx=1;dy=1; end
@@ -730,7 +731,7 @@ classdef am_field
                         case 'nlaplace' % Laplace equation with a spatial-dependent dielectric constant, x = { dielectric constant }
                             GE = cellfun(@(G) spdiags(G*x{1}(:),0,N,N), G, 'UniformOutput', false); 
                             OP = ( spdiags(x{1}(:),0,N,N) * L  -  cat(2,GE{:}) * cat(1,G{:}) );
-                            LHSe_ = @(U,x) OP; nargs=1;
+                            LHSi_ = @(U,x) OP; nargs=1;
                         otherwise
                             % Ingredients available for designing custom equations:
                             % U (field), L (laplacian), D (divergence), G{i} (gradient along i), I (identity)
@@ -1349,23 +1350,17 @@ classdef am_field
             if isempty(F.T); F.T = get_field_type(F); end
             % define matmul which supports sparse matrices
             matmul_ = @(A,B) reshape(A*reshape(B,size(B,1),[]),size(A,1),size(B,2),size(B,3),size(B,4),size(B,5));
+            % get differentiation matrices
+            Q = F.get_differentiation_matrices();
             % allocate space
             J = zeros([3,3,F.n]);
-            for i = 1:F.d % loop over dimensions
-                switch F.s{i}
-                    case 'chebyshev'; [~,D] = am_field.chebyshevUr_(F.n(i),'edge');
-                    case 'legendre';  [~,D] = am_field.legendrer_(F.n(i));
-                    case 'fourier';   [~,D] = am_field.fourierr_(F.n(i));
-                    case 'cdiff';     [~,D] = am_field.cdiff_(F.n(i));
-                    case 'pdiff';     [~,D] = am_field.pdiff_(F.n(i));
-                    otherwise; error('unknown s');
-                end 
-                D = D(:,:,1)/F.a(i); % keep only first derivative
+            for i = 1:F.d
+                D = Q{i}(:,:,1); % keep only first derivative
                 if strcmp(F.s{i},'cdiff'); D=sparse(D); end % speed up finite difference with sparse matrices
-                p = [1:F.d+1]; p([1,i+1])=p([i+1,1]);
+                p = [1:F.d+1]; p([1,i+1])=p([i+1,1]); % permute accordingly
                 switch F.T % evaluate derivatives
                     case 'scalar'; J(i,i,:,:,:)     = permute(matmul_(D,permute(F.F,p)),p);
-                    case 'vector'; T = permute(matmul_(D,permute(F.F,p)),p);
+                    case 'vector'; T                = permute(matmul_(D,permute(F.F,p)),p);
                                    J(i,1:F.d,:,:,:) = reshape(T(1:F.d,:),size(J(i,1:F.d,:,:,:)));
                     otherwise; error('unknown field type');
                 end
@@ -1380,18 +1375,12 @@ classdef am_field
             if ~contains(F.T,'scalar'); error('hessian is only defined for scalar fields'); end
             % define matmul which supports sparse matrices
             matmul_ = @(A,B) reshape(A*reshape(B,size(B,1),[]),size(A,1),size(B,2),size(B,3),size(B,4),size(B,5));
+            % get differentiation matrices
+            Q = F.get_differentiation_matrices();
             % allocate space
             H = zeros([3,3,F.n]);
             for i = 1:F.d % loop over dimensions
-                switch F.s{i}
-                    case 'chebyshev'; [~,D] = am_field.chebyshevUr_(F.n(i),'edge');
-                    case 'legendre';  [~,D] = am_field.legendrer_(F.n(i));
-                    case 'fourier';   [~,D] = am_field.fourierr_(F.n(i));
-                    case 'cdiff';     [~,D] = am_field.cdiff_(F.n(i));
-                    case 'pdiff';     [~,D] = am_field.pdiff_(F.n(i));
-                    otherwise; error('unknown s');
-                end 
-                D = D(:,:,1)/F.a(i); % keep only first derivative
+                D = Q{i}(:,:,1); % keep only first derivative
                 if strcmp(F.s{i},'cdiff'); D=sparse(D); end % speed up finite difference with sparse matrices
                 p = [1:F.d+1]; p([1,i+1])=p([i+1,1]); % evaluate hessian from jacobian
                 switch F.T % evaluate derivatives
@@ -1426,8 +1415,8 @@ classdef am_field
             N = F;
             % normalize field
             N.F = N.F./am_lib.normc_(N.F);
-            % recompute derivatives
-            N = N.get_derivatives();
+            % recompute jacobian
+            N.J = N.get_jacobian();
             % compute charge
             switch F.d
                 case 3
@@ -1452,6 +1441,24 @@ classdef am_field
             % subplot(1,2,1); surf(L,'edgecolor','none'); view([0 0 1]); daspect([1 1 1]); axis tight;
             % subplot(1,2,2); surf(squeeze(F.L),'edgecolor','none'); view([0 0 1]); daspect([1 1 1]); axis tight;
             
+            Q = F.get_differentiation_matrices();
+            % note: although the specral differentiation matrix may be full, 
+            %       when spanning multiple dimensions it will become sparse.
+            % divergence
+            D = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
+            D = am_field.get_flattened_divergence_(D{:});
+            % laplacian
+            if nargout < 2; return; end
+            L = cellfun(@(x)sparse(x(:,:,2)),Q,'UniformOutput',false);
+            L = am_field.get_flattened_divergence_(L{:});
+            % gradient
+            if nargout < 3; return; end
+            G = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
+            G = am_field.get_flattened_gradients_(G{:});
+            
+        end
+        
+        function [Q]     = get_differentiation_matrices(F)
             for i = 1:F.d % loop over dimensions
                 switch F.s{i}
                     case 'chebyshev'; [~,Q{i}] = am_field.chebyshevUr_(F.n(i),'edge'); 
@@ -1463,22 +1470,17 @@ classdef am_field
                 end 
                 Q{i} = Q{i}./reshape(F.a(i).^[1:2],1,1,2);
             end
-            % note: although the specral differentiation matrix may be full, 
-            %       when spanning multiple dimensions it will become sparse.
-            % divergence
-            D = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
-            D = am_field.get_flattened_divergence(D{:});
-            % laplacian
-            if nargout < 2; return; end
-            L = cellfun(@(x)sparse(x(:,:,2)),Q,'UniformOutput',false);
-            L = am_field.get_flattened_divergence(L{:});
-            % gradient
-            if nargout < 3; return; end
-            G = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
-            G = am_field.get_flattened_gradients(G{:});
-            
+            for i = 1:F.d
+                switch F.Y % convert to cylindrical or spherical coordinates
+                    case {'cartesian'} % do nothing
+                    case {'polar'};       if i == 1; elseif i == 2; Q{i}(:,:,1) = Q{i}(:,:,1)./permute(F.R(1,:,:),[2,3,1]); else; error('invalid dimension'); end
+                    case {'cylindrical'}; if i == 1; elseif i == 2; Q{i}(:,:,1) = Q{i}(:,:,1)./permute(F.R(1,:,:),[2,3,1]); elseif i == 3; else; error('invalid dimension'); end
+                    case {'spherical'};   if i == 1; elseif i == 2; Q{i}(:,:,1) = Q{i}(:,:,1)./permute(F.R(1,:,:),[2,3,1]); elseif i == 3; Q{i}(:,:,1) = Q{i}(:,:,1)./( permute(F.R(1,:,:),[2,3,1]).*sin(permute(F.R(2,:,:),[2,3,1])) ); else; error('invalid dimension'); end
+                    otherwise; error('unknown coordinate type');
+                end
+            end
         end
-    
+        
     end
      
     methods (Static, Access = protected) % polynomials and spectral methods
@@ -1497,7 +1499,7 @@ classdef am_field
                 w=2*([f(1,1); 2*f(2:N,1); f(n,1)])/2;
                 x=N*f(n:-1:1,2);
             end
-            D = am_field.get_differentiation_matrix(x);
+            D = am_field.get_differentiation_matrix_(x);
         end
         
         function [x,D,w] = chebyshevTr_(n,flag) % roots of Chebyshev T (1st kind) (-1,+1)
@@ -1509,9 +1511,9 @@ classdef am_field
                 x(:,1)=f_(n); 
             end
             if nargout < 2; return; end
-            D = am_field.get_differentiation_matrix(x); D = cat(3,D,D^2);
+            D = am_field.get_differentiation_matrix_(x); D = cat(3,D,D^2);
             if nargout < 3; return; end
-            w(:,1) = am_field.get_integration_weights(x);
+            w(:,1) = am_field.get_integration_weights_(x);
         end
         
         function [x,D,w] = chebyshevUr_(n,flag) % roots of Chebyshev U (2nd kind) [-1,+1] 
@@ -1523,9 +1525,9 @@ classdef am_field
                 x(:,1)=f_(n); 
             end
             if nargout < 2; return; end
-            D = am_field.get_differentiation_matrix(x); D = cat(3,D,D^2);
+            D = am_field.get_differentiation_matrix_(x); D = cat(3,D,D^2);
             if nargout < 3; return; end
-            w(:,1) = am_field.get_integration_weights(x);
+            w(:,1) = am_field.get_integration_weights_(x);
         end
         
         function [x,D,w] = legendrer_(n) % roots of Legendre [-1,+1] 
@@ -1540,7 +1542,7 @@ classdef am_field
             % A. N. Lowan, N. Davids, and A. Levenson, Bulletin of the American Mathematical Society 48, 739 (1942).
             A = (1:n-1)./sqrt(4*(1:n-1).^2-1); J = diag(A,-1)+diag(A,1); [V,x] = eig(J,'vector'); [x,fwd]=sort(x(:));
             if nargout < 2; return; end
-            D = am_field.get_differentiation_matrix(x); D = cat(3,D,D^2);
+            D = am_field.get_differentiation_matrix_(x); D = cat(3,D,D^2);
             if nargout < 3; return; end
             w(:,1) = 2*V(1,fwd)'.^2;
         end
@@ -1564,7 +1566,7 @@ classdef am_field
             if nargout < 2; return; end
             alpha = exp(-x/2); m = 2; % order of differentiation
             beta  = (-0.5).^[1:m].'*ones(1,numel(x));
-            D = am_field.get_differentiation_matrix(x, alpha, beta);
+            D = am_field.get_differentiation_matrix_(x, alpha, beta);
             if nargout < 3; return; end
             w(:,1) = V(1,fwd).^2;
             if contains(flag,'edge')
@@ -1587,7 +1589,7 @@ classdef am_field
             if nargout < 2; return; end
             alpha = exp(-x.^2/2); beta = [ones(size(x'));-x']; m = 2; % order of differentiation
             for l = 3:m+1; beta(l,:) = -x'.*beta(l-1,:)-(l-2)*beta(l-2,:); end; beta(1,:) = [];
-            D = am_field.get_differentiation_matrix(x, alpha, beta);
+            D = am_field.get_differentiation_matrix_(x, alpha, beta);
             if nargout < 3; return; end
             w = sqrt(pi)*V(1,fwd)'.^2;
         end
@@ -1612,7 +1614,7 @@ classdef am_field
             % get first and second derivative
             D = zeros(n,n,2);
             for i = 1:2
-                [c,v] = am_field.get_differentiation_weights([-1,0,1],i); nvs = numel(v); m = ceil(nvs/2);
+                [c,v] = am_field.get_differentiation_weights_([-1,0,1],i); nvs = numel(v); m = ceil(nvs/2);
                 D(:,:,i) = toeplitz([c(m:-1:1),zeros(1,n-m)],[c(m:end),zeros(1,n-m)])*n.^(i);
             end
             if nargout < 3; return; end
@@ -1625,14 +1627,14 @@ classdef am_field
             % get first and second derivative
             D = zeros(n,n,2);
             for i = 1:2
-                [c,v] = am_field.get_differentiation_weights([-1,0,1],i); nvs = numel(v); m = ceil(nvs/2);
+                [c,v] = am_field.get_differentiation_weights_([-1,0,1],i); nvs = numel(v); m = ceil(nvs/2);
                 D(:,:,i) = am_lib.circulant_(circshift([c,zeros(1,n-nvs)],m-nvs))*n.^(i);
             end
             if nargout < 3; return; end
             w(1:n,1) = 1;
         end
     
-        function [D]     = get_flattened_gradients(Dx,Dy,Dz) 
+        function [D]     = get_flattened_gradients_(Dx,Dy,Dz) 
             switch nargin
                 case 1
                     D{1} = Dx;
@@ -1650,7 +1652,7 @@ classdef am_field
             end
         end
         
-        function [D]     = get_flattened_divergence(Dx,Dy,Dz)
+        function [D]     = get_flattened_divergence_(Dx,Dy,Dz)
             switch nargin
                 case 1
                     D = Dx;
@@ -1668,11 +1670,11 @@ classdef am_field
             end
         end
 
-        function [L]     = get_flattened_laplacian(varargin) 
+        function [L]     = get_flattened_laplacian_(varargin) 
             L = am_field.get_divergence_matrix(varargin{:})^2;
         end
 
-        function [c,x]   = get_differentiation_weights(x,n) 
+        function [c,x]   = get_differentiation_weights_(x,n) 
             % x = collocation points or number of collocation points
             % n = order of differentiation
             % for example, 
@@ -1717,10 +1719,10 @@ classdef am_field
             end
         end
         
-        function [D]     = get_differentiation_matrix(varargin) 
-            % get_differentiation_matrix(x)
-            % get_differentiation_matrix(x,order)
-            % get_differentiation_matrix(x,alpha,beta)
+        function [D]     = get_differentiation_matrix_(varargin) 
+            % get_differentiation_matrix_(x)
+            % get_differentiation_matrix_(x,order)
+            % get_differentiation_matrix_(x,alpha,beta)
             
             % select inputs
             switch numel(varargin)
@@ -1755,7 +1757,7 @@ classdef am_field
             end
         end
   
-        function [w]     = get_integration_weights(x) 
+        function [w]     = get_integration_weights_(x) 
             % works only for polynomials integrating between -1 and 1
             % Greg von Winckel
             [x,fwd]=sort(x(:));
