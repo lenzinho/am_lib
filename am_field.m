@@ -69,7 +69,6 @@ classdef am_field
             F = am_field(); F.a=a; F.n=n; F.s=s; F.d=ndims-ndiscretes; F.R = F.get_collocation_points(); F.Y = 'cartesian';
         end
         
-
         function [F] = demo()
             
             F   = am_field.define([2,2].^[7,8],[2*pi,2*pi],{'cdiff','fourier'});
@@ -98,7 +97,7 @@ classdef am_field
                   @(d,th,M) [d*sin(20*pi*th),d*cos(20*pi*th),linspace(min(F.R(3,:)),max(F.R(3,:)),M+1)'];
                   @(d,th,M) [zeros(M+1,1),zeros(M+1,1),mpgrid(M+1)];};
 
-            iI = 1; r = 0.5; M = 500; th = [0:M]'/M; % Select and construct a current path.
+            iI = 2; r = 0.5; M = 1000; th = [0:M]'/M; % Select and construct a current path.
             dI = (D_(M)*I_{iI}(r,th,M)).'; 
              I = (M_(M)*I_{iI}(r,th,M)).';
 
@@ -682,11 +681,11 @@ classdef am_field
                         case 'npoisson' % Poisson equation with a spatial-dependent dielectric constant, x = { charge density, dielectric constant }
                             % seems ok
                             GE = cellfun(@(G) spdiags(G*x{2}(:),0,N,N), G, 'UniformOutput', false); 
-                            OP = ( spdiags(x{2}(:),0,N,N) * L  -  cat(2,GE{:}) * cat(1,G{:}) );
+                            OP = ( spdiags(x{2}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
                             LHSe_ = @(U,x) OP * U(:) - x{1}(:); nargs=2;
                         case 'nlaplace' % Laplace equation with a spatial-dependent dielectric constant, x = { dielectric constant }
                             GE = cellfun(@(G) spdiags(G*x{1}(:),0,N,N), G, 'UniformOutput', false); 
-                            OP = ( spdiags(x{1}(:),0,N,N) * L  -  cat(2,GE{:}) * cat(1,G{:}) );
+                            OP = ( spdiags(x{1}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
                             LHSe_ = @(U,x) OP * U(:); nargs=1;
                         otherwise
                             % Ingredients available for designing custom equations:
@@ -730,7 +729,7 @@ classdef am_field
                             LHSi_ = @(U,x) L; nargs=0;
                         case 'nlaplace' % Laplace equation with a spatial-dependent dielectric constant, x = { dielectric constant }
                             GE = cellfun(@(G) spdiags(G*x{1}(:),0,N,N), G, 'UniformOutput', false); 
-                            OP = ( spdiags(x{1}(:),0,N,N) * L  -  cat(2,GE{:}) * cat(1,G{:}) );
+                            OP = ( spdiags(x{1}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
                             LHSi_ = @(U,x) OP; nargs=1;
                         otherwise
                             % Ingredients available for designing custom equations:
@@ -1122,7 +1121,7 @@ classdef am_field
                                 S(I{l+1}(2,:))=S(I{l+1}(1,:));
                                 % reset l+1 level
                                 x=am_lib.minmax_(I{l+1}(1,:)); S(x(1):x(2))=NaN; I(l+1)=[]; N(l+1)=[]; 
-                            case +1 % coursen
+                            case +1 % corsen
                                 % Sj marks which spins have already been considered consider, j is the next position to sweep, iC counts and labels clusters
                                 i=0; nIs=0; nNs=0; N{l}=zeros(3,4*p(end)); I{l}=zeros(3,4*p(end)); 
                                 x=am_lib.minmax_(I{l-1}(1,:)); j=x(1); iC=x(2); Sj=S; Sj(1:x(1)-1)=NaN; 
@@ -1420,8 +1419,8 @@ classdef am_field
             % compute charge
             switch F.d
                 case 3
-                    Q = cross(F.J(:,1,:,:),F.J(:,2,:,:),1); 
-                    Q = dot( F.F, permute(Q,[1,3,4,2]), 1);
+                    Q = cross(F.J(:,1,:,:,:),F.J(:,2,:,:,:),1); 
+                    Q = dot( F.F, permute(Q,[1,3,4,5,2]), 1);
                 case 2
                     Q = cross(N.J(:,1,:,:),N.J(:,2,:,:),1); 
                     Q = permute(Q(3,:,:,:),[1,3,4,2]);

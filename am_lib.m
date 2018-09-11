@@ -929,6 +929,12 @@ classdef am_lib
             C = A./am_lib.normc_(A);
         end
         
+        function [C] = intercalate_(A,B)
+            % intercalates columns of A and B into C
+            C = B(:,[1;1]*(1:size(B,2)));
+            C(:,1:2:end) = A;
+        end
+        
 
         % matching
         
@@ -1526,6 +1532,27 @@ classdef am_lib
                  0 s  c];
         end
         
+        function R      = rotz_(t)
+            c = cos(t); s = sin(t);
+            R = [c -s 0;
+                 s  c 0;
+                 0  0 1];
+        end
+        
+        function R      = roty_(t)
+            c = cos(t); s = sin(t);
+            R = [ c 0 s; 
+                  0 1 0; 
+                 -s 0 c];
+        end
+        
+        function R      = rotx_(t)
+            c = cos(t); s = sin(t);
+            R = [1 0  0; 
+                 0 c -s;
+                 0 s  c];
+        end
+        
         function [A]    = R_axis_(R)
             % [A] = R_axis_(R);
             
@@ -1650,8 +1677,11 @@ classdef am_lib
                 end
             end
         end
-        
+
         function J      = J_(j)
+            % Angular momentum operators in 2j+1 dimensions. For j = 1/2, J are the generators of SU(2). For j = 1, J are the generators of SO(3).            
+            % The number of matrices needed to generate a Lie group is the same as the dimension of the group; SU(n) groups have dimension n^2 - 1; SO(n) groups have dimension n(n-1)/2
+            
             % define kronecker delta
             d_ = @(x,y) logical(x==y); 
             
@@ -1664,6 +1694,9 @@ classdef am_lib
         end
         
         function [W]    = get_wigner(j,R,flag)
+            %
+            % The D in Wigner D-matrices stands for Darstellung, which means "representation" in German.
+            %
             % The group SO(3) is the set of all three dimensional, real orthogonal matrices with unit
             % determinant. [Requiring that the determinant equal 1 and not -1 excludes inversion.]
             % The group O is obtained from the direct product of SO(3) and the the group Ci = {E,I}. 
@@ -1691,7 +1724,6 @@ classdef am_lib
             % 
             %   - O. Chalaev, arXiv cond-mat.mtrl-sci, (2012).
             %
-           
                 
             import am_lib.*
 
@@ -1701,7 +1733,7 @@ classdef am_lib
             % batch convert all rotation matrices to wigner functions
             nRs = size(R,3); W = zeros(2*j+1,2*j+1,nRs);
             for i = [1:nRs]; W(:,:,i) = get_wigner_engine(J,j,R(:,:,i)); end
-            
+
             % convert to real harmonics
             if     contains(flag,'tesseral') || contains(flag,'real')
                 % define basis change: spherical (complex) to tesseral harmonics (real basis)
@@ -1710,13 +1742,13 @@ classdef am_lib
                 T = d_(0,m) .* d_(mp,m) + ...
                     t_(m,0) .* sqrt(-1/2) .* ( d_(m,-mp) - (-1).^m .* d_(m, mp) ) + ... % sine   terms
                     t_(0,m) .* sqrt( 1/2) .* ( d_(m, mp) + (-1).^m .* d_(m,-mp) );      % cosine terms
-                
+
                 % reorder to recover SO(3) rotations
                 O = circshift([1:(2*j+1)],floor((2*j+1)/2)); T = T(:,O);
-                
+
                 % do the actual conversion
                 W = matmul_(matmul_(T',W),T);
-                
+
                 % make sure the teseral harmonics are real
                 if any_(~eq_(imag(W),0))
                     if ~eq_(mod_(j),0)
@@ -2062,14 +2094,22 @@ classdef am_lib
             end
         end
         
-        function x = ddsolver_(A,x,b,m,algo)
+        function [x,converged] = ddsolver_(A,x,b,m,algo)
+            % break condition m = [tol, max iterations]
             if ~am_lib.isdiagdom_(A); error('ddsolver_ only works on diagonally dominant matrices'); end
             %
             if isempty(x); x = zeros(size(A,2),1); end
             if isempty(b); b = zeros(size(A,2),1); end
-            % set break condition
-            if m < 1; break_ = @(x,i,m) norm(x) < m;
-            else;     break_ = @(x,i,m) i == m; end
+            % set break condition m = [tol, max iterations]
+            if numel(m) == 1
+                if m < 1
+                    [tol,maxiter] = deal(m,Inf);
+                else  
+                    [tol,maxiter] = deal(0,m);
+                end
+            else
+                [tol,maxiter] = deal(m(1),m(2));
+            end
             % A = D + L + U; Notice the different defifinition from Multigrid Tutorial
             LDU_ = @(A,n) deal( (tril(A)-spdiags(diag(A),0,n,n)), ...
                                          spdiags(diag(A),0,n,n) , ...
@@ -2102,7 +2142,9 @@ classdef am_lib
             % iterate
             while true
                 xp = x; x = R*xp + B;
-                if break_(x-xp,i,m); return; else; i = i+1; end
+                if     norm(x-xp)           < tol; converged = true;  return;
+                elseif i > maxiter;                converged = false; return;
+                else   i = i+1; end
             end
         end
         
@@ -2218,7 +2260,7 @@ classdef am_lib
             elseif contains(flag,'gauss')
                 % define function
                 func_ = @(c,x) c(1).*gauss_((x-c(2)).*c(3)) + c(5);
-                FWHM_ = @(c) sqrt(2*log(2))*c(3); 
+                FWHM_ = @(c) 2*sqrt(log(2))*c(3); 
                 % name parameter
                 label = {'Amp','Center','Width''Background'};
                 % estimate parameters
@@ -2913,7 +2955,11 @@ classdef am_lib
                 h = quiver3(U, V, W);
             elseif nargin == 6
                 [X,Y,U,V,C,clist]=deal(varargin{:});
-                h = quiver(X, Y, U, V);
+                % center
+                    [T,R] = am_lib.cart2pol_(U,V); I=abs(X(:).'-X(:)); S = min(I(I(:)~=0))./max(R(R(:)~=0));
+                    [U,V] = am_lib.pol2cart_(T,R*S);
+                    X = X - U/2; Y = Y - V/2;
+                h = quiver(X, Y, U, V, 'autoscale', 'off');
             elseif nargin == 4
                 [U,V,C,clist]=deal(varargin{:});
                 h = quiver(U, V);
@@ -4827,6 +4873,11 @@ classdef am_lib
             g = real(ifft(fft(y) .* reshape(fftshift(am_lib.gaussw_(numel(y),w)),size(y)) ));
         end
         
+        function [g]    = lopass2_(y,w) % low pass filter (2D)
+            w = fftshift(am_lib.gaussw_(size(y,1),w)*am_lib.gaussw_(size(y,2),w).');
+            g = real(ifftn(fftn(y) .* w ));
+        end
+        
         function [y,bg] = fft_filter_(y,m,npasses,flag)
             % m = # of fft components to keep
             n = size(y); d = ndims(y); bg = zeros(size(y));
@@ -5176,7 +5227,7 @@ classdef am_lib
         
         
         % interpolation
-        
+
         function [fq,S,iS,c] = fftinterp_(f,q,n,algo,R)
             % R is only required for algo = 'star'
             % R must be input in real space!
@@ -5286,8 +5337,8 @@ classdef am_lib
             end
             
         end          
-        
-        
+
+
         % linear interpolation
         
         function y    = linspacen_(v1, v2, n)
