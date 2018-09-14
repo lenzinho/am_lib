@@ -114,7 +114,7 @@ classdef am_field
         function [F] = demo_hilliard_cahn()
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
-            F = F.evolve_scalar_field('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000); % solve
+            F = F.evolve_scalar_field('CH58',{@(x)(x^2-1)^2/4,1},'runge-kutta',0.03,10000); % solve
         end
         
         function [F] = demo_qin_pablo()
@@ -123,6 +123,14 @@ classdef am_field
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field, lines    (mean = 0)
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.455; % initialize field, hexagons (mean = -0.455)
             F = F.evolve_scalar_field('QP13',{@(x)(x^2-1)^2/4,0.5,0.1},'explicit',0.05,10000);
+            %
+        end
+        
+        function [F] = demo_lifshitz_petrich()
+            % Lifshitz-Petrich x = {eps, alpha, q}; eps* = eps/alpha^2 = eps (for alpha fixed at 1)
+            F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+            F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field
+            F = F.evolve_scalar_field('LP97',{2,1,2*cos(pi/12)},'explicit',0.05,10000);
             %
         end
         
@@ -150,7 +158,7 @@ classdef am_field
             bc = find(F.R(1,:,:)==74  & F.R(2,:,:)<100 & F.R(2,:,:)>20 ) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
             dirichlet = dirichlet.';
             % find steadys tate field
-            F = F.evolve_scalar_field('laplace',{},'steadystate',0,0,'dirichlet',dirichlet);
+            F = F.evolve_scalar_field('laplace',{},'steady-state',0,0,'dirichlet',dirichlet);
         end
         
         function [F] = demo_metal_inside_field()
@@ -164,14 +172,14 @@ classdef am_field
             bc = find(F.R(1,:,:)==max(F.R(1,:))) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
             dirichlet = dirichlet.'; plates = dirichlet;
             % find steady state field
-            F = F.evolve_scalar_field('laplace',{},'steadystate',0,0,'dirichlet',plates);
+            F = F.evolve_scalar_field('laplace',{},'steady-state',0,0,'dirichlet',plates);
             % create conductor [inside conductor: 1) equipotential, 2) electric field, 3) no charge]
             ex_=F.define_mask('square',F.n/2,F.n/8);
             dirichlet = []; mean_ = @(f,ex_) repmat(mean(f(ex_(:))), sum(ex_(:)), 1);
             bc = find(ex_); dirichlet = [dirichlet;[bc,mean_(F.F,ex_)]]; 
             dirichlet = dirichlet.'; metal = dirichlet;
             % find steady state field with the metal
-            F = F.evolve_scalar_field('laplace',{},'steadystate',0,0,'dirichlet',[plates,metal]);
+            F = F.evolve_scalar_field('laplace',{},'steady-state',0,0,'dirichlet',[plates,metal]);
         end
 
         function [F] = demo_dielectric_inside_field()
@@ -187,7 +195,7 @@ classdef am_field
             % define dielectric constant
             ex_ = F.define_mask('circle',F.n/2,F.n(1)/8); epsilon = 3*ex_ + 1*(~ex_); 
             % find steady state field
-            F = F.evolve_scalar_field('nlaplace',{epsilon},'steadystate',0,0,'dirichlet',plates);
+            F = F.evolve_scalar_field('nlaplace',{epsilon},'steady-state',0,0,'dirichlet',plates);
             % F = F.evolve_scalar_field('nlaplace',{epsilon},'explicit',0.05,100000,'dirichlet',plates);
             % get derivatives
             F = F.get_derivatives();
@@ -214,7 +222,7 @@ classdef am_field
             % define dielectric constant
             ex_ = F.define_mask('halfspace',F.n(1)/3); epsilon = 30*ex_ + 1*(~ex_); 
             % find steady state field
-            F = F.evolve_scalar_field('nlaplace',{epsilon},'steadystate',0,0,'dirichlet',charge);
+            F = F.evolve_scalar_field('nlaplace',{epsilon},'steady-state',0,0,'dirichlet',charge);
             % F = F.evolve_scalar_field('nlaplace',{epsilon},'explicit',0.05,100000,'dirichlet',plates);
             % get derivatives
             F = F.get_derivatives();
@@ -271,7 +279,7 @@ classdef am_field
             neumann   = [neumann;[F.n,0]];
             neumann   = neumann.';
 
-            F = F.evolve_scalar_field('dissipative_diffusion',{8,5},'steadystate',0,0,'dirichlet',dirichlet,'neumann',neumann);
+            F = F.evolve_scalar_field('dissipative_diffusion',{8,5},'steady-state',0,0,'dirichlet',dirichlet,'neumann',neumann);
 
         end
         
@@ -648,15 +656,14 @@ classdef am_field
             [D,L,G] = F.get_flattened_differentiation_matrices(); I = speye(N); % Get flattened divergence, laplacian, gradient operators
             
 			switch algorithm
-            case {'explicit','implicit','steadystate','crank-nicolson','jacobi','gauss-seidel'}
-            	if any(strcmp(algorithm,{'explicit','crank-nicolson'}))
+                case {'explicit','crank-nicolson','adams?bashforth','runge-kutta'}
 	                % equations of the form F(n+1) = F(n) + dt * LHS
                     %                       LHS = ( F(n+1) - F(n)) / dt = dF/dt
                     switch equation
                         case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
                             LHSe_ = @(U,x) x{1}*U(:) - (L+I)^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=2;
-                        case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
-                            LHSe_ = @(U,x) x{1}*U(:) - (L+I)^2*(L+x{3}.^2*speye(N))^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=3;
+                        case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {eps, c, alpha, q}
+                            LHSe_ = @(U,x) ( I*x{1} - x{2}*(L+I)^2*(L + I*x{3}.^2)^2 + x{4}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N) )*U(:); nargs=4;
                         case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002; Arason & Tang PRL 1998)
                             LHSe_ = @(U,x) ( I*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) )*U(:); nargs=1;
                         case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
@@ -690,11 +697,10 @@ classdef am_field
                         otherwise
                             % Ingredients available for designing custom equations:
                             % U (field), L (laplacian), D (divergence), G{i} (gradient along i), I (identity)
-                            % example: F = F.evolve_scalar_field('8*L-5*eye(N)',{},'steadystate',0,0,'dirichlet',dirichlet,'neumann',neumann);
+                            % example: F = F.evolve_scalar_field('8*L-5*eye(N)',{},'steady-state',0,0,'dirichlet',dirichlet,'neumann',neumann);
                             eval(['LHSe_ = @(U,x) ',equation,';']); nargs=0;
                     end
-                end
-                if any(strcmp(algorithm,{'implicit','crank-nicolson','steadystate'}))
+                case {'implicit','steady-state','jacobi'}
                     % equations of the form F(n+1) = (1 - dt*LHS)\F(n)
                     %                       LHS * F(n+1) = ( F(n+1) - F(n) ) / dt
                     %                       i.e., LHS has a factor of F(n+1) removed
@@ -702,9 +708,9 @@ classdef am_field
                         case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
                             LHSi_ = @(U,x) x{1}*I - (L+I)^2 + x{2}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N); nargs=2;
                         case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
-                            LHSi_ = @(U,x) x{1}*I - (L+I)^2*(L+x{3}.^2*speye(N))^2 + x{2}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N); nargs=3;
+                            LHSi_ = @(U,x) ( I*x{1} - x{2}*(L+I)^2*(L + I*x{3}.^2)^2 + x{4}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N) ); nargs=4;
                         case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002)
-                            LHSe_ = @(U,x) ( speye(N)*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) ); nargs=1;
+                            LHSi_ = @(U,x) ( speye(N)*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) ); nargs=1;
                         case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
                             syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
                             LHSi_ = @(U,x)   ( spdiags(x{1}(U(:)),0,N,N) + x{2}*L ); nargs=2;
@@ -734,12 +740,11 @@ classdef am_field
                         otherwise
                             % Ingredients available for designing custom equations:
                             % U (field), L (laplacian), D (divergence), G{i} (gradient along i), I (identity)
-                            % example: F = F.evolve_scalar_field('8*L-5*eye(N)',{},'steadystate',0,0,'dirichlet',dirichlet,'neumann',neumann);
+                            % example: F = F.evolve_scalar_field('8*L-5*eye(N)',{},'steady-state',0,0,'dirichlet',dirichlet,'neumann',neumann);
                             eval(['LHSi_ = @(U,x) ',equation,';']); nargs = 0;
                     end
-                end
-            otherwise
-                error('unknown solver');
+                otherwise
+                    error('unknown solver');
             end
 
             if ~iscell(x); x=num2cell(x); end % convert array to cells if necessary (cells allow passing functions)
@@ -748,7 +753,7 @@ classdef am_field
 
             % Propagate in time 
             switch algorithm
-                case 'steadystate' % dF/dt = 0
+                case 'steady-state' % dF/dt = 0
                     % initialize system of equations
                     n = prod(F.n); V = zeros(n,1); O = LHSi_(F.F,x);
                     % add dirichlet boundary conditions
@@ -777,6 +782,52 @@ classdef am_field
                 case 'explicit' % unstable for large steps
                     for i = [1:M]
                         UP = F.F(:); F.F(1:N) = F.F(:) + dt*LHSe_(F.F,x);
+                        if any(isnan(F.F(:))); warning('NaN'); break; end
+                        if mod(i,round(M/100))==0
+                            F.plot_field('F'); ediff = norm(UP(:)-F.F(:));
+                            title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
+                            if ediff<F.tiny; break; end
+                        end
+                        % b.c.
+                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                        if ~isempty(neumann); error('not yet implemented'); end
+                    end
+                    
+                case 'runge-kutta'  % explicit (LHS must not have an explicit time dependence!)
+                    f = zeros(numel(F.F),4);
+                    for i = [1:M]
+                        UP = F.F(:);
+                        k(:,1) = dt*LHSe_(F.F(:)         ,x);
+                        k(:,2) = dt*LHSe_(F.F(:)+k(:,1)/2,x);
+                        k(:,3) = dt*LHSe_(F.F(:)+k(:,2)/2,x);
+                        k(:,4) = dt*LHSe_(F.F(:)+k(:,3)  ,x);
+                        F.F(1:N) = F.F(:) + k*[1/3;2;2;1]/6;
+                        
+                        if any(isnan(F.F(:))); warning('NaN'); break; end
+                        if mod(i,round(M/100))==0
+                            F.plot_field('F'); ediff = norm(UP(:)-F.F(:));
+                            title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
+                            if ediff<F.tiny; break; end
+                        end
+                        % b.c.
+                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                        if ~isempty(neumann); error('not yet implemented'); end
+                    end
+                    
+                case 'adams?bashforth' % explicit with multiple steps
+                    f = zeros(numel(F.F),5);
+                    for i = [1:M]
+                        UP = F.F(:); f(:,1) = LHSe_(F.F,x);
+                        switch i
+                            case 1; F.F(1:N) = F.F(:) + dt*(f(:,1));
+                            case 2; F.F(1:N) = F.F(:) + dt*(f(:,1:2)*[3/2;-1/2]);
+                            case 3; F.F(1:N) = F.F(:) + dt*(f(:,1:3)*[23/12;-4/3;5/12]);
+                            case 4; F.F(1:N) = F.F(:) + dt*(f(:,1:4)*[55/24;-59/24;37/24;-3/8]);
+                            otherwise
+                                    F.F(1:N) = F.F(:) + dt*(f(:,1:5)*[1901/720;-1387/360;109/30;-637/360;251/720]);
+                        end
+                        f = circshift(f,[0,1]);
+                        
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0
                             F.plot_field('F'); ediff = norm(UP(:)-F.F(:));
