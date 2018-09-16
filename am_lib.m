@@ -1039,12 +1039,15 @@ classdef am_lib
         function c_id = reindex_using_occurances(c_id)
             % relabel based on repetitions 
             import am_lib.*
-            % count repetitions/occurances
-            occurances = sum(c_id==c_id.',2);
-            % sort, lift degeneracies if present using original labeling
-            fwd = rankc_([occurances(:).';c_id(:).']);
-            % relabel and return indicies to original order
-            c_id(fwd) = cumsum([0;diff(c_id(fwd))~=0])+1; 
+            % reshape
+            [n,m]=size(c_id); if n < m; c_id = c_id.'; end
+                % count repetitions/occurances
+                occurances = sum(c_id==c_id.',2);
+                % sort, lift degeneracies if present using original labeling
+                fwd = rankc_([occurances(:).';c_id(:).']);
+                % relabel and return indicies to original order
+                c_id(fwd) = cumsum([0;diff(c_id(fwd))~=0])+1; 
+            c_id = reshape(c_id,[n,m]);
         end
         
         function [X] = strmatch_(A,B)
