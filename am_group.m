@@ -127,7 +127,7 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             G.get_subgroup_conjugates();
             G.identify_normal_subgroups();
             G.identify_proper_subgroups();
-%             G.get_subgroup_quotients();
+            G.get_subgroup_quotients();
         end
         
         function         get_order(G)
@@ -367,6 +367,33 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
    
     methods %(Access = protected) % internal stuff; functions for which the class is input, but not output
 
+        function [x]   = multiply(G,u,v)
+            % x = u * v
+            [n] = size(u); [m] = size(v);
+            if numel(u) == 1
+                u = repmat(u,size(v));
+            elseif numel(v) == 1
+                v = repmat(v,size(u));
+            elseif ~all(n == m)
+                error('outer products not yet implemented');
+            end
+            x = G.MT(sub2ind([G.nSs,G.nSs], u(:),v(:)));
+        end
+        
+        function [x]   = conjugate(G,u,v)
+            % x = u * v * u^-1
+            [n] = size(u); [m] = size(v);
+            if numel(u) == 1
+                u = repmat(u,size(v));
+            elseif numel(v) == 1
+                v = repmat(v,size(u));
+            elseif ~all(n == m)
+                error('outer products not yet implemented');
+            end
+            x = G.multiply( G.multiply(u,v), G.I(u) );
+        end
+        
+        
         function [u]   = expand_multiplication_table(G,u)
 			% initialize
             x = false(G.nSs,1); x([G.E;u(:)]) = true; u = false(G.nSs,1);
