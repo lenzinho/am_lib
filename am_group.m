@@ -18,10 +18,15 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
         I  = []; % symmetry inverses
         C  = []; % symmetry conjugates
         % subgroup properties
+        isproper = [];
+        isnormal = [];
         nHs= []; % number of subgroups
         H  = []; % subgroup
         Rc = []; % subgroup coset representatives
         Hc = []; % subgroup conjugates
+        Sc = []; % subgroup stabilizers
+        Oc = []; % subgroup orbit (Rc x s2g)
+        Qc = []; % subgroup quotient group index (for normal subgroups only; 0 if group is not a normal group)
         s2g= []; % subgroup-to-group symmetry indexing
     end
 
@@ -49,7 +54,7 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
                 otherwise
                     error('invalid input');
             end
-            G.S = S; G.T = P; G.MT = MT; G.get_order(); G.get_identity; G.get_inverses;
+            G.S = S; G.T = P; G.MT = MT; G.get_order(); G.get_identity(); G.get_symmetry_inverses();
 
         end
         
@@ -116,10 +121,13 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
         end
 
         function         get_group_properties(G)
-            G.get_conjugate_symmetries();
-            G.get_generators();
+            G.get_symmetry_conjugates();
+            G.get_symmetry_generators();
             G.get_subgroups();
-            G.get_conjugate_subgroups();
+            G.get_subgroup_conjugates();
+            G.identify_normal_subgroups();
+            G.identify_proper_subgroups();
+%             G.get_subgroup_quotients();
         end
         
         function         get_order(G)
@@ -130,12 +138,12 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             G.E = find(all(G.MT==[1:G.nSs].',1));
         end
         
-        function         get_inverses(G)
+        function         get_symmetry_inverses(G)
             if isempty(G.E); G = G.get_identity(); end
             G.I = [G.MT==G.E]*[1:G.nSs].';
         end
 
-        function         get_conjugate_symmetries(G)
+        function         get_symmetry_conjugates(G)
             %
             % for AX = XB, if elements A and B are conjugate pairs for some other element X in the group,  they are in the same class
             %
@@ -164,29 +172,16 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             G.C = am_lib.reindex_using_occurances(C);
         end
 
-        function         get_generators(G)
+        function         get_symmetry_generators(G)
             % returns all possible sets of generators with ngens elements
-            n = 0; N = []; u = false(G.nSs,1); x = false(G.nSs,1);
+            n = 0; N = [];
             for ngens = 1:G.nSs
                 % generate a list of all possible generators (incldues order of generator for completness)
                 P = am_lib.perm_norep_(G.nSs,ngens); nPs = size(P,2);
                 % loop over the list one set of generators at a time, checking whether the entire multiplication table can be generated
                 for i = 1:nPs
-                    % initialize
-                    x(:) = false(G.nSs,1); x([G.E;P(:,i)]) = true; u(:) = false;
-                    % expand multiplication table
-                    while true
-                        % expand
-                        u(G.MT(x,x)) = true;
-                        % status?
-                        switch sum(u)
-                            case G.nSs % whole group, generators found!
-                                n=n+1; N(:,n) = P(:,i); break;
-                            case sum(x) % subgroup found!
-                                break;
-                            otherwise % update
-                                x = u;
-                        end
+                    if numel( G.expand_multiplication_table(P(:,i)) ) == G.nSs
+                        n=n+1; N(:,n) = P(:,i);
                     end
                 end
                 % smallest generating sets found 
@@ -195,51 +190,36 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             % save
             G.N = N;
         end
-        
+
         function         get_subgroups(G)
-            % get generators
-            if isempty(G.N); G.get_generators(); end
-            % returns all possible sets of generators with ngens elements
-            h = 0; u = false(G.nSs,1); x = false(G.nSs,1);
-            for ngens = 1:size(G.N,1)
-                % generate a list of all possible generators (incldues order of generator for completness)
-                P = am_lib.perm_norep_(G.nSs,ngens); nPs = size(P,2);
-                % loop over the list one set of generators at a time, checking whether the entire multiplication table can be generated
-                for i = 1:nPs
-                    % initialize
-                    x(:) = false(G.nSs,1); x([G.E;P(:,i)]) = true; u(:) = false;
-                    % expand multiplication table
-                    while true
-                        % expand
-                        u(G.MT(x,x)) = true;
-                        % status?
-                        switch sum(u)
-                            case G.nSs % whole group, generators found!
-                                break;
-                            case sum(x) % subgroup found!
-                                h=h+1; H(:,h) = x; break;
-                            otherwise % update
-                                x = u;
-                        end
-                    end
+            % G. Butler, Fundamental Algorithms for Permutation Groups (2014), p 46.
+            G.H = am_group(); h = 1; level = 1;
+            % initialize identity group
+            G.H(1).define('MT',1); G.H(1).s2g=G.E; 
+            % loop over layers
+            for i = 2:numel(factor(G.nSs))+1
+                for j = find(level==i-1) % loop over subgroups in level i-1
+                   for g = find( ~G.contains(G.H(j),[1:G.nSs]) ) % loop over elements not in this subgroup
+                       if G.stabilizes(G.H(j),g)  % select only elements that stabilize the group
+                           s2g = G.expand_multiplication_table([g;G.H(j).s2g]);
+                           ex_ = [G.H.nSs]==numel(s2g);
+                           if ~any(ex_) || ~any(all([G.H(ex_).s2g]==s2g(:),1))
+                               h = h + 1; level(h) = i; 
+                               % add group
+                               fwd(s2g)=[1:numel(s2g)]; G.H(h).s2g=s2g;
+                               G.H(h).define('MT', fwd(G.MT(s2g,s2g))); 
+                           end
+                       end
+                   end
                 end
             end
+            G.nHs = h;
             
-            % get unique subgroups
-            H = am_lib.uniquec_(single(H));
-            % sort subgroups by order and convert to logical
-            H = H(:, am_lib.rankc_(sum(H,1)) ) == 1;
-            % create subgroup objects
-            G.nHs = size(H,2); G.H = am_group(); G.H(G.nHs) = am_group();
-            for i = 1:G.nHs
-                fwd(H(:,i)) = [1:sum(H(:,i))];
-                G.H(i).define('MT', fwd(G(1).MT(H(:,i),H(:,i))) ); 
-                G.H(i).s2g = find(H(:,i));
-                if ~isempty(G.S); G.H(i).S = G.S(:,:, G.H(i).s2g); end
-            end
+            % check for uniqueness
+            % X = arrayfun(@(x) any(x.s2g.'==[1:G.nSs].',2), G.H,'uniformoutput',false); size([X{:}]), size(am_lib.uniquec_(double([X{:}])));
         end
         
-        function         get_coset_representatives(G,H)
+        function         get_subgroup_coset_representatives(G,H)
             switch nargin
                 case 1
                     for i = 1:G.nHs
@@ -247,9 +227,10 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
                     end
                 case 2
                     % get coset representative
-                    R_ = any([1:G.nSs]==H.s2g,1); Rc = zeros(1,G.nSs); k=0;
-                    for i = 1:G.nSs; if ~R_(i)
-                        R_(G.MT(i,H.s2g)) = true; k=k+1; Rc(k) = i;
+                    ex_ = true(1,G.nSs); Rc = zeros(1,G.nSs); k=0;
+                    for i = [G.E,1:G.nSs]; if ex_(i)
+                        k=k+1; Rc(k) = i;
+                        ex_(G.MT(i,H.s2g)) = false; 
                     end; end
                     H.Rc = Rc(1:k);
                 otherwise
@@ -257,32 +238,118 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             end
         end
 
-        function         get_conjugate_subgroups(G,H)
+        function         get_subgroup_stabilizers(G,H)
             switch nargin
                 case 1
                     for i = 1:G.nHs
-                        G.get_conjugate_subgroups(G.H(i));
+                        G.get_subgroup_stabilizers(G.H(i));
+                    end
+                case 2
+                    % loop over coset representatives
+                    s2g = false(1,G.nSs);
+                    for j = 1:G.nSs
+                        % stabilizer?
+                        if all(sort(G.MT(G.MT(j,H.s2g),G.I(j)))==H.s2g(:)); s2g(j) = true; end
+                    end
+                    % find matching subgroup
+                    s2g = find(s2g); o_ = find([G.H.nSs]==numel(s2g)); o_ = o_(all([G.H(o_).s2g]==s2g(:),1));
+                    % save
+                    if ~isempty(o_)
+                        H.Sc=o_;
+                    else
+                        error('failed to find stabilizer subgroup'); 
+                    end
+                otherwise
+                    error('invalid input');
+            end
+        end
+
+        function         get_subgroup_conjugates(G,H)
+            switch nargin
+                case 1
+                    for i = 1:G.nHs
+                        G.get_subgroup_conjugates(G.H(i));
                     end
                 case 2
                     % get coset representatives
-                    if isempty(H.Rc); G.get_coset_representatives(H); end
+                    if isempty(H.Rc); G.get_subgroup_coset_representatives(H); end
                     %
                     Hc = false(1,H.nHs);
                     % loop over coset representatives
                     for j = [G.E,H.Rc]
                         % operate on the subgroup with the coset rep
-                        s2g = G.MT(G.MT(j,H.s2g),G.I(j));
+                        s2g = sort(G.MT(G.MT(j,H.s2g),G.I(j)));
                         % search over subgroups with the same order ...
-                        ex_ = find([G.H.nSs]==numel(s2g));
+                        o_ = find([G.H.nSs]==numel(s2g));
                         % to find matching subgroups
-                        Hc(ex_(all([G.H(ex_).s2g]==s2g,1)))=true;
+                        o_ = o_(all([G.H(o_).s2g]==s2g,1));
+                        if ~isempty(o_)
+                            Hc(o_)=true;
+                        else
+                            error('failed to find conjguate subgroup'); 
+                        end
                     end
-                    % ouput
-                    Hc = find(Hc);
                     % update
-                    H.Hc = Hc;
+                    H.Hc = find(Hc);
                 otherwise
                     error('invalid input');
+            end
+        end
+        
+        function         get_subgroup_quotients(G,H)
+            % J. S. Lomont, Applications of Finite Groups (1959), p 21.
+            switch nargin
+                case 1
+                    for i = find([G.H.isnormal])
+                        G.get_subgroup_quotients(G.H(i)); 
+                    end
+                    % confirm
+                    if ~all( [G.H([G.H([G.H.isnormal]).Qc]).nSs].*[G.H([G.H.isnormal]).nSs] == G.nSs )
+                        error('failed to find quotient subgroup');
+                    end
+                case 2
+                    % get quotient group: cosets are elevated to the status of symmetries
+                    cosets = sort(G.MT(H.Rc,H.s2g).'); nCs = size(cosets,2); MT = zeros(nCs,nCs);
+                    for i = 1:nCs; for j = 1:nCs
+                        MT(i,j) = find(all(sort(G.MT(cosets(:,i),cosets(1,j)))==cosets,1));
+                    end; end
+                    % create factor group
+                    Q = am_group(); Q.define('MT',MT);
+                    % find a subgroup that is isomorphic to this multiplication table
+                    for o_ = find([G.H.nSs]==nCs)
+                        if ~isempty(get_bijections(Q,G.H(o_))); break; end
+                    end
+                    % save
+                    if isempty(o_) || H.nSs * G.H(o_).nSs ~= G.nSs
+                        error('failed to find quotient subgroup'); 
+                    else
+                        H.Qc = o_;
+                    end
+            end
+        end
+
+        function         identify_normal_subgroups(G,H) % identify subgroup that are normal (invariant, self-conjugate)
+            switch nargin
+                case 1
+                    G.identify_normal_subgroups(G.H);
+                case 2
+                    for i = 1:numel(H)
+                        if isempty(G.H(i).Hc)
+                            G.get_subgroup_conjugates(H(i))
+                        end
+                        H(i).isnormal = numel(G.H(i).Hc)==1; 
+                    end
+            end
+        end
+        
+        function         identify_proper_subgroups(G,H)
+            switch nargin
+                case 1
+                    ex_ = ~( [G.H.nSs]==1 |  [G.H.nSs]==G.nSs);
+                    ex_ = num2cell(ex_); [G.H.isproper] = ex_{:};
+                case 2
+                    ex_ = ~(   [H.nSs]==1 |    [H.nSs]==G.nSs);
+                    ex_ = num2cell(ex_); [H.isproper] = ex_{:};
             end
         end
         
@@ -295,22 +362,45 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             end
             plot(digraph(i,j,'OmitSelfLoops'),'layout','subspace3');
         end
-        
-        function         plot_subgroup_structure(G)
-            % structure(:,k) indicates subgroups contained within group k
-            g = am_lib.eq_((G.H./am_lib.normc_(G.H).^2).'*G.H,1);
-            spy(g);
-        end
-        
+
     end
    
     methods %(Access = protected) % internal stuff; functions for which the class is input, but not output
 
+        function [u]   = expand_multiplication_table(G,u)
+			% initialize
+            x = false(G.nSs,1); x([G.E;u(:)]) = true; u = false(G.nSs,1);
+            % expand multiplication table
+            while true
+                % expand
+                u(G.MT(x,x)) = true;
+                % procede ...
+                switch sum(u)
+                    case G.nSs;  break; % whole group, generators found!
+                    case sum(x); break; % subgroup found!
+                    otherwise; x = u;   % update
+                end
+            end
+            % convert back to indices
+            u = find(u);
+        end
+
+        function [L]   = contains(G,H,u)
+            L = any(u(:).'==H.s2g(:),1);
+        end
+        
+        function [L]   = stabilizes(G,H,u)
+            n = numel(u); L = false(1,n);
+            for j = 1:n
+                L(j) = all( sort(G.MT(G.MT(u(j),H.s2g),G.I(u(j)))) == H.s2g(:) );
+            end
+        end
+        
         function [Hcc] = get_subgroup_conjugacy_classes(G)
             Hcc = zeros(1,G.nHs); k=0;
             for i = 1:G.nHs; if all(Hcc(G.H(i).Hc)==0); k=k+1; Hcc(G.H(i).Hc) = k; end; end
         end
-        
+
         function [IR]  = get_irreducible_representations(G)
             % MATHEMATICS OF COMPUTATION, VOLUME 24, NUMBER 111, JULY, 1970
             % Computing Irreducible Representations of Groups
@@ -380,7 +470,7 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             % get regular rep G by putting identity along diagonal of multiplciation table
             RR = double(am_lib.accessc_(G.MT,G.I)==permute([1:G.nSs],[1,3,2]));
         end
-        
+
         function [N]   = expand_generators(G,N)
             % expands generators, recording the order in which the elements are generated.
             while true
@@ -390,7 +480,7 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
                 if numel(N) == G.nSs; break; end
             end
         end
-        
+
         function [B]   = get_bijections(G,H)
             % for i = 1:size(B,2)
             %     G.MT - relabel_multiplication_table(H.MT,B(:,i))
@@ -399,8 +489,8 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             % compare symmetries
             if G.nSs ~= H.nSs; B = []; return; end
             % get generators
-            if isempty(G.N); G.get_generators(); end
-            if isempty(H.N); H.get_generators(); end
+            if isempty(G.N); G.get_symmetry_generators(); end
+            if isempty(H.N); H.get_symmetry_generators(); end
             % compare number of generators
             if any(size(G.N)~=size(H.N)); B = []; return; end
 
@@ -433,22 +523,20 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
                 syms x y z
                 eq = 0;
                 for n = order
-                    M = am_lib.kronpow_([x;y;z],n);
+                    % get unique indices (because multiplication operations commutes)
+                    M = am_lib.kronpow_([x;y;z],n); [~,m_] = unique(M);
                     % loop over idntity and generators
-                    W = sparse(3^n,3^n);
-                    for i = [G.N(:,1)].'
-                        W = W + am_lib.kronpow_(G.S(:,:,i),n) - eye(3^n);
-                    end
+                    W = sum( am_lib.kronpow_(G.S(:,:,G.N(:,1)),n) - eye(3^n), 3);
                     % solve
                     N = null(W,'r'); N = am_lib.frref_(N.').';
                     % expand
                     c = sym(sprintf('c%02i%s',n,repmat('_%d',1,1)),[1,size(N,2)], 'real').';
                     % collect
-                    eq = eq + collect( M.'*(N*c) , c);
+                    eq = eq + collect( M(m_).'*N(m_,:)*c , c);
                 end
 
         end
-        
+
     end
      
     methods (Static) %, Access = protected) % static functions for which the class is neither input nor output
