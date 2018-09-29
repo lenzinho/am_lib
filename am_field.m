@@ -111,6 +111,28 @@ classdef am_field
             
         end
 
+        function [F] = demo_dipole_field()
+            % calculate the field due to a dipole M at Rp
+            clear;clc;
+            F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'cdiff','cdiff'}); % initialize object
+
+            % calculate demagnetization field due to dipole at M at Rp
+            M = [0;1]; Rp = [F.n(1)/2;F.n(2)/2];
+            % put magnetic moment M at Rp
+            F.F = zeros([2,F.n]); ex_ = all(F.R(:,:)==Rp,1); F.F(:,ex_) = M;
+            % shift M to center
+            F.R = F.R - Rp;
+                % calculate normal
+                N = F.R./(am_lib.normc_(F.R)+eps);
+                % calculate field
+                H = (3*N.*sum(N.*M,1)-M);%./(am_lib.normc_(F.R).^3 + eps);
+            % return R
+            F.R = F.R + Rp;
+            % save field
+            F.F = H;
+            F.plot_field('F');
+        end
+        
         function [F] = demo_hilliard_cahn()
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
@@ -814,7 +836,7 @@ classdef am_field
                         if ~isempty(neumann); error('not yet implemented'); end
                     end
                     
-                case 'adams?bashforth' % explicit with multiple steps
+                case 'adams-bashforth' % explicit with multiple steps
                     f = zeros(numel(F.F),5);
                     for i = [1:M]
                         UP = F.F(:); f(:,1) = LHSe_(F.F,x);

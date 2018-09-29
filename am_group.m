@@ -8,6 +8,7 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
         T  = []; % group type (space/point/translational/[empty])
         nSs= []; % order of the group
         % representation
+        GR = []; % ground representation (for subgroups)
         S  = []; % input representation
         % properties
         MT = []; % multiplication table
@@ -31,7 +32,16 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
     end
 
     methods (Static) % demo
-       
+
+        function demo_get_crystal_field()
+            clear;clc;
+            G = am_group();
+            G.define('pg','o_h');
+            G.get_group_properties();
+            A=G.expand_crystal_field([1:6]);
+            A
+        end
+        
     end
 
     methods % functions that operate on and return the class
@@ -328,6 +338,21 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             end
         end
 
+        function         get_subgroup_groundreps(G,H)
+            switch nargin
+                case 1
+                    for i = 1:G.nHs
+                        G.get_subgroup_groundreps(G.H(i));
+                    end
+                case 2
+                    n = numel(H.Rc); GR = zeros(n,n,G.nSs); s2g = permute(H.s2g,[3,2,1]);
+                    for i = 1:G.nSs
+                        GR(:,:,i) = sum( ( G.MT(G.multiply(G.I(H.Rc),i),H.Rc) == s2g ) .* s2g , 3);
+                    end
+                    H.GR = GR;
+            end
+        end
+        
         function         identify_normal_subgroups(G,H) % identify subgroup that are normal (invariant, self-conjugate)
             switch nargin
                 case 1
@@ -337,7 +362,7 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
                         if isempty(G.H(i).Hc)
                             G.get_subgroup_conjugates(H(i))
                         end
-                        H(i).isnormal = numel(G.H(i).Hc)==1; 
+                        H(i).isnormal = numel(G.H(i).Hc)==1;
                     end
             end
         end
@@ -551,15 +576,18 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
                 eq = 0;
                 for n = order
                     % get unique indices (because multiplication operations commutes)
-                    M = am_lib.kronpow_([x;y;z],n); [~,m_] = unique(M);
+                    M = am_lib.kronpow_([x;y;z],n); 
+                    % cannot take unique here
+                    [M,~,j_]=unique(M,'stable'); J = (j_==[1:max(j_)]).'; 
+                    % m_ = true(size(M)); % [~,m_] = unique(M); 
                     % loop over idntity and generators
                     W = sum( am_lib.kronpow_(G.S(:,:,G.N(:,1)),n) - eye(3^n), 3);
                     % solve
-                    N = null(W,'r'); N = am_lib.frref_(N.').';
+                    N = J*null(W,'r'); N = am_lib.frref_(N.').';
                     % expand
                     c = sym(sprintf('c%02i%s',n,repmat('_%d',1,1)),[1,size(N,2)], 'real').';
                     % collect
-                    eq = eq + collect( M(m_).'*N(m_,:)*c , c);
+                    eq = eq + collect( M.'*N*c , c);
                 end
 
         end

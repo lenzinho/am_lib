@@ -548,6 +548,46 @@ classdef am_lib
             end
         end
         
+        function [A] = wrap_(A,dim,n)
+            % wraps matrix
+            % e.g. am_lib.wrap_(magic(3),[1,2],[2,2])
+            nds = numel(dim);
+            if nds>1
+                if nds ~= numel(n); error('incorrect input'); end
+                for i = 1:nds; A = am_lib.wrap_(A,dim(i),n(i)); end
+            else
+                if n==0; return; end
+                ind = [1:ndims(A)]; fwd = circshift(ind,dim-1); rev(fwd) = ind;
+                A = permute(A,fwd); s = size(A); A = reshape(A,s(1),[]);
+                    if n > 0
+                        A = cat(1,A,A(1:n,:));
+                    else
+                        A = cat(1,A(end+n+1:end,:),A);
+                    end
+                A = reshape(A,[s(1)+abs(n),s(2:end)]); A = permute(A,rev);
+            end
+        end
+        
+        function [A] = reflect_(A,dim,n)
+            % reflects matrix
+            % e.g. am_lib.reflect_(reshape([1:16],4,4).',2,-3)
+            nds = numel(dim);
+            if nds>1
+                if nds ~= numel(n); error('incorrect input'); end
+                for i = 1:nds; A = am_lib.wrap_(A,dim(i),n(i)); end
+            else
+                if n==0; return; end
+                ind = [1:ndims(A)]; fwd = circshift(ind,dim-1); rev(fwd) = ind;
+                A = permute(A,fwd); s = size(A); A = reshape(A,s(1),[]);
+                    if n > 0
+                        A = cat(1,A,A(end-1:-1:end-abs(n),:));
+                    else
+                        A = cat(1,A(abs(n)+1:-1:2,:),A);
+                    end
+                A = reshape(A,[s(1)+abs(n),s(2:end)]); A = permute(A,rev);
+            end
+        end
+        
         function [C] = matmul_(A,B,applysqueeze)
             % matrix multiple the first two dimensions and entry-wise the rest
             %
@@ -1927,17 +1967,6 @@ classdef am_lib
             F(indep_rows, i_dep) = speye(length(i_dep));
         end
         
-        function [C] = cconv_(A,B)
-            n = size(A); m = size(B);
-            if all(n==m)
-                % convolution with pbc in Fourier Space
-                C = ifftn(fftn(A).*fftn(B));
-            else
-                % convolution by circlshift in real space
-                error('not yet implemented');
-            end
-        end
-        
         function [A] = force_hermiticity_(A)
             A = (A'+A)/2;
         end
@@ -1972,6 +2001,14 @@ classdef am_lib
                 case 'full'
                     [m1]=size(A); [m2]=size(B); m = m1+m2-1;
                     C = ifftn(fftn(A,m).*fftn(B,m));
+                case 'same'
+                    [m1] = size(A); [m2] = size(B); 
+                    m = m1 + m2 - 1; a = ceil((m2-1)./2);
+                    % pad and fft
+                    C = ifftn(fftn(A,m).* fftn(B,m)); 
+                    % unpad
+                    for i = 1:numel(a); x_{i} = a(i)+1:m1(i)+a(i); end
+                    C = C(x_{:});
                 case 'valid'
                     [m1]=size(A); [m2]=size(B); m = m1+m2-1;
                     C = ifftn(fftn(A,m).*fftn(B,m));
@@ -2961,8 +2998,8 @@ classdef am_lib
                 % center
                     [T,R] = am_lib.cart2pol_(U,V); I=abs(X(:).'-X(:)); S = min(I(I(:)~=0))./max(R(R(:)~=0));
                     [U,V] = am_lib.pol2cart_(T,R*S);
-                    X = X - U/2; Y = Y - V/2;
-                h = quiver(X, Y, U, V, 'autoscale', 'off');
+                    % X = X - U/2; Y = Y - V/2;
+                h = quiver(X, Y, U, V, 0.5, 'linewidth', 1.5);
             elseif nargin == 4
                 [U,V,C,clist]=deal(varargin{:});
                 h = quiver(U, V);
@@ -4847,7 +4884,7 @@ classdef am_lib
             y = 2*real(ifft(y)); 
         end
         
-        function [y,a,b]  = fftup2_(y) % up-sample y two fold (2D), x = [0,1)
+        function [y,a,b]= fftup2_(y) % up-sample y two fold (2D), x = [0,1)
             [n,m] = size(y); a = [0:2*n-1]/(2*n); b = [0:2*m-1]/(2*m); t = zeros(2*n,2*m); 
             t([1:floor(n/2),n+[floor(n/2)+1:n]],[1:floor(m/2),m+[floor(m/2)+1:m]]) = fftn(y); y = 2*real(ifftn(t));
         end
