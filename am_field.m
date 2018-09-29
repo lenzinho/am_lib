@@ -6,9 +6,9 @@ classdef am_field
     end
 
     properties
-        T = []; % field type (scalar/vector)
         Y = []; % coordinate type (cartesian/polar/cylindrical/spherical)
-        d = []; % dimensions (2 or 3)
+        v = []; % field dimensions (1 = scalar, >1 = vector)
+        d = []; % spactial dimensions (2 or 3)
         s = []; % scheme{1:d} ('fourier/chebyshev/legendre/cdiff/discrete') for each dimension
         n = []; % grid points / cart. dimension    3D: [n(1),n(2),n(3)]     2D: [n(1),n(2)] 
         a = []; % lattice/grid spacing             3D: [a(1),a(2),a(3)]     2D: [n(1),n(2)] 
@@ -74,7 +74,7 @@ classdef am_field
             F   = am_field.define([2,2].^[7,8],[2*pi,2*pi],{'cdiff','fourier'});
             F.F = cat(1,sin(F.R(1,:,:,:)), sin(F.R(2,:,:,:))); 
             F.F = sum(F.F,1);
-            F.T = F.get_field_type();
+            F.v = F.get_field_dimension();
             F.J = F.get_jacobian();
             F.D = F.get_divergence();
             F.C = F.get_curl();
@@ -131,6 +131,149 @@ classdef am_field
             % save field
             F.F = H;
             F.plot_field('F');
+        end
+        
+        function [F] = demo_dipole_field_convolution_2d()
+            
+            % clear;clc;
+            F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize object
+            [~,~,G] = F.get_flattened_differentiation_matrices();
+            
+            % setup auxiliary S transform
+            x = 2; S = am_field.define(x*F.n,x*F.a,F.s); S.R = S.R - floor(S.n(:)/2);
+            % define S (PBC accounting for periodic images is not implemented yet)
+            S.F = zeros([2,S.n]); Delta = S.n(:)./S.a(:); 
+            for m = [1:2]; for i = [-1,+1]; for j = [-1,+1]
+                    S.F(m,:) = S.F(m,:) + i.*j .* f2_(circshift(S.R(:,:),m,1) + [i;j].*Delta/2 )/(4*pi);
+                end; end
+                S.F(m,:,:,:) = fftn(S.F(m,:,:,:));
+            end
+
+            % put dipoles Mi at points i
+            F.F = zeros([2,F.n]); Mi = [[1;1],[1;0]]; i = [2081,1000]; F.F(:,i)=Mi;
+
+            % convlute S and M to get scalar potential
+            PHI=zeros([1,F.n]);
+            for i = 1:2
+                PHI = PHI + am_lib.conv_( F.F(i,:,:,:), ifftn(S.F(i,:,:,:)), 'same');
+            end
+
+            % differentiate scalar potential to get field on F: H = - GRAD * PHI
+            F.F = -reshape([G{1}*PHI(:), G{2}*PHI(:)].',[2,F.n]);
+
+            % normalize for debugging
+            F.F=F.F./am_lib.normc_(F.F);
+            
+            F.plot_field('F');
+            
+            function f = f2_(r)
+                n = am_lib.normc_(r(:,:));
+                f = atanh(r(1,:)./n);
+            end
+        end
+        
+        function [F] = demo_dipole_field_convolution_3d()
+            
+            % clear;clc;
+            F = am_field.define([2,2,2].^6,[2,2,2].^6,{'pdiff','pdiff','pdiff'}); F.v = 3; % initialize object
+            
+            [~,~,G] = F.get_flattened_differentiation_matrices();
+            
+            % setup auxiliary S transform
+            x = 2; S = am_field.define(x*F.n,x*F.a,F.s); S.R = S.R - floor(S.n(:)/2);
+            % define S (PBC accounting for periodic images is not implemented yet)
+            S.F = zeros([F.v,S.n]); Delta = S.n(:)./S.a(:); 
+            for m = [1:F.v]; for i = [-1,+1]; for j = [-1,+1]; for k = [-1,+1]
+                    S.F(m,:) = S.F(m,:) + i.*j .* f3_(circshift(S.R(:,:),m,1) + [i;j;k].*Delta/2 )/(4*pi);
+                end; end; end
+                S.F(m,:,:,:) = fftn(S.F(m,:,:,:));
+            end
+
+            % put dipoles Mi at points i
+            F.F = zeros([F.v,F.n]); Mi = [[1;1;0],[1;0;0]]; i = [2081,1000]; F.F(:,i)=Mi;
+
+            % convlute S and M to get scalar potential
+            PHI=zeros([1,F.n]);
+            for i = 1:F.v
+                PHI = PHI + am_lib.conv_( F.F(i,:,:,:), ifftn(S.F(i,:,:,:)), 'same');
+            end
+
+            % differentiate scalar potential to get field on F: H = - GRAD * PHI
+            F.F = -reshape([G{1}*PHI(:), G{2}*PHI(:)].',[2,F.n]);
+
+            % normalize for debugging
+            F.F=F.F./am_lib.normc_(F.F);
+            
+            F.plot_field('F');
+            
+            function f = f3_(r)
+                n = am_lib.normc_(r(:,:));
+                f = - r(3,:).*atanh(r(1,:).*r(2,:)./n) + r(1,:).*tanh(r(2,:)./n) + r(2,:).*log(r(1,:)+n);
+            end
+        end
+        
+        function [F] = demo_micromagnetics_2d()
+            clear;clc;
+            F = am_field.define([2,2].^[5],[2,2].^[5],{'pdiff','pdiff'}); % initialize object
+            F.F = rand([2,F.n]); F.F = F.F - mean(F.F(:)); % initialize random vector field
+            [~,L,G] = F.get_flattened_differentiation_matrices();
+
+            % setup auxiliary S transform
+            x = 2; S = am_field.define(x*F.n,x*F.a,F.s); S.R = S.R - floor(S.n(:)/2);
+            % define S (PBC accounting for periodic images is not implemented yet)
+            S.F = zeros([2,S.n]); Delta = S.n(:)./S.a(:); 
+            for m = [1:2]; for i = [-1,+1]; for j = [-1,+1]
+                    S.F(m,:) = S.F(m,:) + i.*j .* f2_(circshift(S.R(:,:),m,1) + [i;j].*Delta/2 )/(4*pi);
+                end; end
+                S.F(m,:,:,:) = fftn(S.F(m,:,:,:));
+            end
+
+            % get vector field size
+            v = size(F.F,1); 
+
+            % time step
+            dt = prod(F.a)/50000; 
+            dF_c = zeros(v,prod(F.n)); dF_e = zeros(v,prod(F.n)); 
+            dF_z = zeros(v,prod(F.n)); dF_d = zeros(v,prod(F.n));
+            dF_l = zeros(v,prod(F.n));
+            for t = 1:1000
+
+                % Crystalline Anistropy
+                dF_c(:) = 0;
+                for i = 1:v
+                    % mexican hat potential: 
+                    % U    = - 2 * (m_x^2 + m_y^2) + (m_x^2 + m_y^2)^2 = 2 |r|^2 + |r|^4  ,  minimum at |r| = 1
+                    dF_c(i,:) = dF_c(i,:) + ( -4*F.F(i,:) + F.F(i,:).^3 + F.F(i,:).*sum(F.F([1:v]~=i,:).^2,1) );
+                end
+            %     dF_c(1,:) = dF_c(1,:) + F.F(1,:);
+                dF_c = - dF_c;
+
+                % Exchange
+                dF_e(:) = 0;
+                dF_e(:,:) = F.F(:,:)*transpose(L)*10;
+
+                % Zeman
+                dF_z(:) = 0;
+            %     dF_z(:) = repmat([1;0],1,prod(F.n));
+
+                % Demagnetization field
+                dF_d(:) = 0; PHI = zeros([1,F.n]);
+                for i = 1:2; PHI = PHI + am_lib.conv_( F.F(i,:,:,:), ifftn(S.F(i,:,:,:)), 'same'); end
+                dF_d(:,:) = -[G{1}*PHI(:), G{2}*PHI(:)].';
+
+                % Langevin noise
+                dF_l(:) = 0;
+            %     dF_l(:) = normrnd(0,10,[1,numel(F.F)]);
+
+                F.F(:) = F.F(:) + dt * (dF_e(:) + dF_c(:) + dF_d(:) + dF_z(:) + dF_l(:));
+                if mod(t,10)==0; F.plot_field('F'); drawnow; end
+                M(t) = sum(am_lib.normc_(F.F(:,:)))/prod(F.n);
+            end
+            
+            function f = f2_(r)
+                n = am_lib.normc_(r(:,:));
+                f = atanh(r(1,:)./n);
+            end
         end
         
         function [F] = demo_hilliard_cahn()
@@ -638,12 +781,12 @@ classdef am_field
         % differentiation
         
         function [F] = get_derivatives(F)
-            F.T = F.get_field_type();
+            F.v = F.get_field_dimension();
             F.J = F.get_jacobian();
             F.Q = F.get_topological_charge();
             F.D = F.get_divergence();
             F.C = F.get_curl();
-            if contains(F.T,'scalar')
+            if F.v==1
                 F.H = F.get_hessian(); 
                 F.L = F.get_laplacian();
             end
@@ -1409,17 +1552,12 @@ classdef am_field
             R = permute(cat(4,R{:}),[4,1,2,3]);
         end
 
-        function [T] = get_field_type(F)
-            if ~isempty(F.T); T = F.T; return; end
-            switch size(F.F,1)
-                case {1}  ; T = 'scalar';
-                case {2,3}; T = 'vector';
-                otherwise; error('unknown field type');
-            end
+        function [v] = get_field_dimension(F)
+            if isempty(F.v); v = size(F.F,1); return; end
         end
 
         function [J] = get_jacobian(F)
-            if isempty(F.T); F.T = get_field_type(F); end
+            if isempty(F.v); F.v = F.get_field_dimension(); end
             % define matmul which supports sparse matrices
             matmul_ = @(A,B) reshape(A*reshape(B,size(B,1),[]),size(A,1),size(B,2),size(B,3),size(B,4),size(B,5));
             % get differentiation matrices
@@ -1430,11 +1568,11 @@ classdef am_field
                 D = Q{i}(:,:,1); % keep only first derivative
                 if strcmp(F.s{i},'cdiff'); D=sparse(D); end % speed up finite difference with sparse matrices
                 p = [1:F.d+1]; p([1,i+1])=p([i+1,1]); % permute accordingly
-                switch F.T % evaluate derivatives
-                    case 'scalar'; J(i,i,:,:,:)     = permute(matmul_(D,permute(F.F,p)),p);
-                    case 'vector'; T                = permute(matmul_(D,permute(F.F,p)),p);
-                                   J(i,1:F.d,:,:,:) = reshape(T(1:F.d,:),size(J(i,1:F.d,:,:,:)));
-                    otherwise; error('unknown field type');
+                if F.v == 1 % scalar
+                    J(i,i,:,:,:)     = permute(matmul_(D,permute(F.F,p)),p);
+                else % vector
+                    T                = permute(matmul_(D,permute(F.F,p)),p);
+                    J(i,1:F.d,:,:,:) = reshape(T(1:F.d,:),size(J(i,1:F.d,:,:,:)));
                 end
             end
             % undefine boundaries
@@ -1444,7 +1582,7 @@ classdef am_field
         end
 
         function [H] = get_hessian(F)
-            if ~contains(F.T,'scalar'); error('hessian is only defined for scalar fields'); end
+            if F.v~=1; error('hessian is only defined for scalar fields'); end
             % define matmul which supports sparse matrices
             matmul_ = @(A,B) reshape(A*reshape(B,size(B,1),[]),size(A,1),size(B,2),size(B,3),size(B,4),size(B,5));
             % get differentiation matrices
@@ -1455,10 +1593,10 @@ classdef am_field
                 D = Q{i}(:,:,1); % keep only first derivative
                 if strcmp(F.s{i},'cdiff'); D=sparse(D); end % speed up finite difference with sparse matrices
                 p = [1:F.d+1]; p([1,i+1])=p([i+1,1]); % evaluate hessian from jacobian
-                switch F.T % evaluate derivatives
-                    case 'scalar'
-                        Ji = am_lib.diag_(F.J); H(i,:,:,:,:) = permute(matmul_(D,permute(Ji,p)),p);
-                    otherwise; error('hessian is only defined for scalar fields');
+                if F.v == 1 % evaluate derivatives
+                    Ji = am_lib.diag_(F.J); H(i,:,:,:,:) = permute(matmul_(D,permute(Ji,p)),p);
+                else
+                    error('hessian is only defined for scalar fields');
                 end
             end
             % undefine boundaries

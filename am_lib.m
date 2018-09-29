@@ -1996,6 +1996,27 @@ classdef am_lib
             % A = rand(6); B = rand(5);
             % conv_(A,B,'full')  - conv2(A,B,'full')
             % conv_(A,B,'valid') - conv2(A,B,'valid')
+            %
+            % test:
+            %
+            % clear;clc;
+            % % fft convolution demo
+            % n = 50; m = 60;
+            % A=zeros(n);B=zeros(m);
+            % A(20:30,25:26) = 1;
+            % B(23:26,23:26) = 1;
+            % C = convn(A,B,'same'); size(A)
+            % % A = padarray(A,(m-size(A))/2); size(A)
+            % % B = padarray(B,(m-size(B))/2); size(B)
+            % % D = fftn(  fftn(A).*fftn(B) );
+            % % F = fftshift((ifftn(  fftn(A).*fftn(B) )));
+            % F = am_lib.conv_(A,B,'same');
+            % norm(C(:)-F(:))
+            % subplot(2,2,1);imagesc(A); daspect([1 1 1]);
+            % subplot(2,2,2);imagesc(B); daspect([1 1 1]);
+            % subplot(2,2,3);imagesc(C); daspect([1 1 1]);
+            % subplot(2,2,4);imagesc(F); daspect([1 1 1]);
+            % 
 
             switch flag
                 case 'full'
