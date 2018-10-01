@@ -1,4 +1,4 @@
-classdef am_field
+classdef am_field < matlab.mixin.Copyable
 
     properties (Constant)
         tiny = 1E-8; 
@@ -57,21 +57,30 @@ classdef am_field
         Pr_g = []; % (GPA) phase
         dPr_g= []; % (GPA) phase derivative
     end
+    
+    properties (Access = private) % auxiliary properties which should only be computed once (these functions are always recalled from memory on subsequent calls)
+        D_ = []; % flattened divergence
+        L_ = []; % flattened laplacian
+        G_ = []; % flattened gradient
+        S_ = []; % auxiliary field use for computing demagnetizating/depolarization field
+    end
 
     methods (Static)
         
-        function [F] = define(n,a,s) 
+        function [F] = define(n,a,s,v) 
             % F = define(n,a,s)
             ndims = sum(n~=1); ndiscretes=sum(strcmp(s,'discrete'));
             if numel(s)~=ndims; error('s dimensions mismatch'); end
             if numel(a)~=ndims; error('a dimensions mismatch'); end
             if ndiscretes>1; error('only one discrete dimension is supported at this time'); end
-            F = am_field(); F.a=a; F.n=n; F.s=s; F.d=ndims-ndiscretes; F.R = F.get_collocation_points(); F.Y = 'cartesian';
+            F = am_field(); F.a=a; F.n=n; F.s=s; F.d=ndims-ndiscretes; F.R = F.get_collocation_points(); F.Y = 'cartesian'; F.v = v; 
+            % allocate space
+            F.F = zeros([F.v,F.n]);
         end
         
         function [F] = demo()
             
-            F   = am_field.define([2,2].^[7,8],[2*pi,2*pi],{'cdiff','fourier'});
+            F   = am_field.define([2,2].^[7,8],[2*pi,2*pi],{'cdiff','fourier'},1);
             F.F = cat(1,sin(F.R(1,:,:,:)), sin(F.R(2,:,:,:))); 
             F.F = sum(F.F,1);
             F.v = F.get_field_dimension();
@@ -87,7 +96,7 @@ classdef am_field
 
         function [F] = demo_biot_savart()
             
-            F   = am_field.define([2,2,2].^[5,5,5],[1,1,1],{'chebyshev','chebyshev','chebyshev'});
+            F   = am_field.define([2,2,2].^[5,5,5],[1,1,1],{'chebyshev','chebyshev','chebyshev'},3);
             F.R = get_collocation_points(F);
 
             D_ = @(N)      sparse([1:N],1+[1:N],1,N,N+1)-sparse([1:N],[1:N],1,N,N+1); % Define forward-difference and forward-mean transforms.
@@ -114,36 +123,35 @@ classdef am_field
         function [F] = demo_dipole_field()
             % calculate the field due to a dipole M at Rp
             clear;clc;
-            F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'cdiff','cdiff'}); % initialize object
+            F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'cdiff','cdiff'},2); % initialize object
 
-            % calculate demagnetization field due to dipole at M at Rp
-            M = [0;1]; Rp = [F.n(1)/2;F.n(2)/2];
-            % put magnetic moment M at Rp
-            F.F = zeros([2,F.n]); ex_ = all(F.R(:,:)==Rp,1); F.F(:,ex_) = M;
-            % shift M to center
-            F.R = F.R - Rp;
-                % calculate normal
-                N = F.R./(am_lib.normc_(F.R)+eps);
-                % calculate field
-                H = (3*N.*sum(N.*M,1)-M);%./(am_lib.normc_(F.R).^3 + eps);
-            % return R
-            F.R = F.R + Rp;
+            % calculate demagnetization field due to dipole at M at Rp and a dipole M and Rp'
+            F.F = zeros([2,F.n]); M = [[1;1],[1;0]]; C = [2081,1000]; H = zeros([2,F.n]);
+            for i = 1:numel(C)
+                % shift M to center
+                F.R = F.R - F.R(:,C(i));
+                    % calculate normal
+                    R = am_lib.normc_(F.R)+eps;
+                    % calculate field
+                    H = H + (3*F.R.*sum(F.R.*M(:,i),1)-M(:,i).*R.^2)./(4*pi*R.^5);
+                % return R
+                F.R = F.R + F.R(:,C(i));
+            end
             % save field
             F.F = H;
+            % plot
             F.plot_field('F');
         end
         
         function [F] = demo_dipole_field_convolution_2d()
-            
-            % clear;clc;
-            F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize object
-            [~,~,G] = F.get_flattened_differentiation_matrices();
-            
+            clear;clc; Ref = am_field.demo_dipole_field();
+            F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},2);
+
             % setup auxiliary S transform
-            x = 2; S = am_field.define(x*F.n,x*F.a,F.s); S.R = S.R - floor(S.n(:)/2);
+            s = F.n+ceil(F.n/2)+3; S = am_field.define(s,s,F.s,F.v); S.R = S.R - floor(S.n(:)/2);
             % define S (PBC accounting for periodic images is not implemented yet)
             S.F = zeros([2,S.n]); Delta = S.n(:)./S.a(:); 
-            for m = [1:2]; for i = [-1,+1]; for j = [-1,+1]
+            for m = [1:F.v]; for i = [-1,+1]; for j = [-1,+1]
                     S.F(m,:) = S.F(m,:) + i.*j .* f2_(circshift(S.R(:,:),m,1) + [i;j].*Delta/2 )/(4*pi);
                 end; end
                 S.F(m,:,:,:) = fftn(S.F(m,:,:,:));
@@ -152,35 +160,51 @@ classdef am_field
             % put dipoles Mi at points i
             F.F = zeros([2,F.n]); Mi = [[1;1],[1;0]]; i = [2081,1000]; F.F(:,i)=Mi;
 
-            % convlute S and M to get scalar potential
-            PHI=zeros([1,F.n]);
-            for i = 1:2
-                PHI = PHI + am_lib.conv_( F.F(i,:,:,:), ifftn(S.F(i,:,:,:)), 'same');
-            end
-
+            % convlute S and M to get scalar potential on vertices (vertices is better for edge points)
+            PHI=zeros([1,F.n+1]);
+            for i = 1:F.v; PHI = PHI + am_lib.conv_( padarray(F.F(i,:,:,:),[0,1,1],0,'pre'), ifftn(S.F(i,:,:,:)), 'same'); end
             % differentiate scalar potential to get field on F: H = - GRAD * PHI
-            F.F = -reshape([G{1}*PHI(:), G{2}*PHI(:)].',[2,F.n]);
+            F.F = cat(1,diff(PHI(1,1:(F.n(1)+1),1:F.n(2)),1,2),diff(PHI(1,1:F.n(1),1:(F.n(2)+1)),1,3));
 
-            % normalize for debugging
-            F.F=F.F./am_lib.normc_(F.F);
+            % % normalize for debugging
+            % F.F=F.F./am_lib.normc_(F.F);
+            % Ref.F=Ref.F./am_lib.normc_(Ref.F);
             
-            F.plot_field('F');
-            
+            colormap('parula');
+            subplot(4,2,[1,4]);
+            imagesc(squeeze(PHI)); view([0 0 1]);
+            pbaspect([1 1 1]); axis tight; caxis([-1 1]/100)
+
+            subplot(4,2,5);
+            imagesc(squeeze(F.F(1,:,:))); view([0 0 1]); 
+            pbaspect([1 1 1]); axis tight; caxis([-1 1]/100)
+            subplot(4,2,6);
+            imagesc(squeeze(Ref.F(1,:,:))); view([0 0 1]);
+            pbaspect([1 1 1]); axis tight; caxis([-1 1]/100)
+
+            subplot(4,2,7);
+            imagesc(squeeze(F.F(2,:,:))); view([0 0 1]);
+            pbaspect([1 1 1]); axis tight; caxis([-1 1]/100)
+            subplot(4,2,8);
+            imagesc(squeeze(Ref.F(2,:,:))); view([0 0 1]);
+            pbaspect([1 1 1]); axis tight; caxis([-1 1]/100)
+
             function f = f2_(r)
                 n = am_lib.normc_(r(:,:));
                 f = atanh(r(1,:)./n);
+            %     f = -(2*r(2,:).*atan(r(1,:)./r(2,:)) + r(1,:).*(-2+log(n)));
             end
         end
         
         function [F] = demo_dipole_field_convolution_3d()
             
             % clear;clc;
-            F = am_field.define([2,2,2].^6,[2,2,2].^6,{'pdiff','pdiff','pdiff'}); F.v = 3; % initialize object
+            F = am_field.define([2,2,2].^6,[2,2,2].^6,{'pdiff','pdiff','pdiff'},3); % initialize object
             
             [~,~,G] = F.get_flattened_differentiation_matrices();
             
             % setup auxiliary S transform
-            x = 2; S = am_field.define(x*F.n,x*F.a,F.s); S.R = S.R - floor(S.n(:)/2);
+            S = am_field.define(2*F.n,2*F.n,F.s,F.v); S.R = S.R - floor(S.n(:)/2);
             % define S (PBC accounting for periodic images is not implemented yet)
             S.F = zeros([F.v,S.n]); Delta = S.n(:)./S.a(:); 
             for m = [1:F.v]; for i = [-1,+1]; for j = [-1,+1]; for k = [-1,+1]
@@ -199,7 +223,7 @@ classdef am_field
             end
 
             % differentiate scalar potential to get field on F: H = - GRAD * PHI
-            F.F = -reshape([G{1}*PHI(:), G{2}*PHI(:)].',[2,F.n]);
+            F.F = -reshape([G{1}*PHI(:), G{2}*PHI(:), G{3}*PHI(:)].',[F.v,F.n]);
 
             % normalize for debugging
             F.F=F.F./am_lib.normc_(F.F);
@@ -214,108 +238,68 @@ classdef am_field
         
         function [F] = demo_micromagnetics_2d()
             clear;clc;
-            F = am_field.define([2,2].^[5],[2,2].^[5],{'pdiff','pdiff'}); % initialize object
+            F = am_field.define([2,2].^[6,5],[2,2].^[6,5],{'pdiff','pdiff'},2); % initialize object
             F.F = rand([2,F.n]); F.F = F.F - mean(F.F(:)); % initialize random vector field
-            [~,L,G] = F.get_flattened_differentiation_matrices();
+            F = F.evolve_field(@(F) micromagnetics_(F),'explicit',1E-3,1000);
 
-            % setup auxiliary S transform
-            x = 2; S = am_field.define(x*F.n,x*F.a,F.s); S.R = S.R - floor(S.n(:)/2);
-            % define S (PBC accounting for periodic images is not implemented yet)
-            S.F = zeros([2,S.n]); Delta = S.n(:)./S.a(:); 
-            for m = [1:2]; for i = [-1,+1]; for j = [-1,+1]
-                    S.F(m,:) = S.F(m,:) + i.*j .* f2_(circshift(S.R(:,:),m,1) + [i;j].*Delta/2 )/(4*pi);
-                end; end
-                S.F(m,:,:,:) = fftn(S.F(m,:,:,:));
-            end
-
-            % get vector field size
-            v = size(F.F,1); 
-
-            % time step
-            dt = prod(F.a)/50000; 
-            dF_c = zeros(v,prod(F.n)); dF_e = zeros(v,prod(F.n)); 
-            dF_z = zeros(v,prod(F.n)); dF_d = zeros(v,prod(F.n));
-            dF_l = zeros(v,prod(F.n));
-            for t = 1:1000
-
+            function dF = micromagnetics_(F)
+                % get differentiation matrix and allocate space
+                [~,L,~] = F.get_flattened_differentiation_matrices(); dF = zeros(F.v,prod(F.n));
                 % Crystalline Anistropy
-                dF_c(:) = 0;
-                for i = 1:v
-                    % mexican hat potential: 
-                    % U    = - 2 * (m_x^2 + m_y^2) + (m_x^2 + m_y^2)^2 = 2 |r|^2 + |r|^4  ,  minimum at |r| = 1
-                    dF_c(i,:) = dF_c(i,:) + ( -4*F.F(i,:) + F.F(i,:).^3 + F.F(i,:).*sum(F.F([1:v]~=i,:).^2,1) );
-                end
-            %     dF_c(1,:) = dF_c(1,:) + F.F(1,:);
-                dF_c = - dF_c;
-
-                % Exchange
-                dF_e(:) = 0;
-                dF_e(:,:) = F.F(:,:)*transpose(L)*10;
-
+                ex_ = F.define_mask('slab',[0;1],F.n/2,6);
+                dF(:, ex_) = dF(:, ex_) + F.get_micromagnetics_crystalline_potential('<111>',      ex_)*2;
+                dF(:,~ex_) = dF(:,~ex_) + F.get_micromagnetics_crystalline_potential('dielectric',~ex_)*10;
+                % Exchange (controls the size of the domain walls)
+                dF(:,:) = dF(:,:) + F.F(:,:)*transpose(L)*10;
                 % Zeman
-                dF_z(:) = 0;
-            %     dF_z(:) = repmat([1;0],1,prod(F.n));
-
-                % Demagnetization field
-                dF_d(:) = 0; PHI = zeros([1,F.n]);
-                for i = 1:2; PHI = PHI + am_lib.conv_( F.F(i,:,:,:), ifftn(S.F(i,:,:,:)), 'same'); end
-                dF_d(:,:) = -[G{1}*PHI(:), G{2}*PHI(:)].';
-
+                % dF(:,:) = dF(:,:) + repmat([1;0],1,prod(F.n));
+                % Demagnetization field (controls whether domains form)
+                dF(:,:) = dF(:,:) + reshape( F.get_micromagnetics_demagnetization('2D-log'), [F.v, prod(F.n)])*20;
                 % Langevin noise
-                dF_l(:) = 0;
-            %     dF_l(:) = normrnd(0,10,[1,numel(F.F)]);
-
-                F.F(:) = F.F(:) + dt * (dF_e(:) + dF_c(:) + dF_d(:) + dF_z(:) + dF_l(:));
-                if mod(t,10)==0; F.plot_field('F'); drawnow; end
-                M(t) = sum(am_lib.normc_(F.F(:,:)))/prod(F.n);
-            end
-            
-            function f = f2_(r)
-                n = am_lib.normc_(r(:,:));
-                f = atanh(r(1,:)./n);
+                % dF(:,:) = normrnd(0,10,[1,numel(F.F)]);
             end
         end
-        
+
         function [F] = demo_hilliard_cahn()
-            F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize object
+            F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},1); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
-            F = F.evolve_scalar_field('CH58',{@(x)(x^2-1)^2/4,1},'runge-kutta',0.03,10000); % solve
+            F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},'runge-kutta',0.03,10000); % solve
         end
         
         function [F] = demo_qin_pablo()
             % Cahn-Hilliard Polymer (mean = -0.45: hexagons, mean = 0: lines)
-            F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+            F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field, lines    (mean = 0)
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.455; % initialize field, hexagons (mean = -0.455)
-            F = F.evolve_scalar_field('QP13',{@(x)(x^2-1)^2/4,0.5,0.1},'explicit',0.05,10000);
+            F = F.evolve_field({'QP13',@(x)(x^2-1)^2/4,0.5,0.1},'explicit',0.05,10000);
             %
         end
         
         function [F] = demo_lifshitz_petrich()
             % Lifshitz-Petrich x = {eps, alpha, q}; eps* = eps/alpha^2 = eps (for alpha fixed at 1)
-            F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+            F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field
-            F = F.evolve_scalar_field('LP97',{2,1,2*cos(pi/12)},'explicit',0.05,10000);
+            F = F.evolve_field({'LP97',2,1,2*cos(pi/12)},'explicit',0.05,10000);
             %
         end
         
         function [F] = demo_complex_ginzburg_landau()
-            F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
+            F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-            F = F.evolve_scalar_field('GLXX',{1},'explicit',0.1,1000);
+            F = F.evolve_field({'GLXX',1},'explicit',0.1,1000);
         end
 
         function [F] = demo_poisson_equation()
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
             F.F = zeros([1,F.n]);
             rho = am_lib.gauss_(am_lib.normc_(F.R-[30;30])); % put a charge at (30,30)
-            F = F.evolve_scalar_field('poisson',{-rho},'explicit',0.05,5000);
+            F = F.evolve_field('poisson',{-rho},'explicit',0.05,5000);
         end
         
         function [F] = demo_parallel_plate_capacitor()
             clear;clc;
             
-            F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'cdiff','cdiff'});
+            F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'cdiff','cdiff'},1);
             F.F = zeros([1,F.n]);
             % create boundary conditions
             dirichlet = [];
@@ -323,13 +307,13 @@ classdef am_field
             bc = find(F.R(1,:,:)==74  & F.R(2,:,:)<100 & F.R(2,:,:)>20 ) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
             dirichlet = dirichlet.';
             % find steadys tate field
-            F = F.evolve_scalar_field('laplace',{},'steady-state',0,0,'dirichlet',dirichlet);
+            F = F.evolve_field({'laplace'},'steady-state',0,0,'dirichlet',dirichlet);
         end
         
         function [F] = demo_metal_inside_field()
             clear;clc
             % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
-            F = am_field.define([2,2].^[7,7],[2 2].^7,{'cdiff','pdiff'});
+            F = am_field.define([2,2].^[7,7],[2 2].^7,{'cdiff','pdiff'},1);
             F.F = zeros([1,F.n]);
             % create capactior plates
             dirichlet = [];
@@ -337,36 +321,35 @@ classdef am_field
             bc = find(F.R(1,:,:)==max(F.R(1,:))) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
             dirichlet = dirichlet.'; plates = dirichlet;
             % find steady state field
-            F = F.evolve_scalar_field('laplace',{},'steady-state',0,0,'dirichlet',plates);
+            F = F.evolve_field({'laplace'},'steady-state',0,0,'dirichlet',plates);
             % create conductor [inside conductor: 1) equipotential, 2) electric field, 3) no charge]
             ex_=F.define_mask('square',F.n/2,F.n/8);
             dirichlet = []; mean_ = @(f,ex_) repmat(mean(f(ex_(:))), sum(ex_(:)), 1);
             bc = find(ex_); dirichlet = [dirichlet;[bc,mean_(F.F,ex_)]]; 
             dirichlet = dirichlet.'; metal = dirichlet;
             % find steady state field with the metal
-            F = F.evolve_scalar_field('laplace',{},'steady-state',0,0,'dirichlet',[plates,metal]);
+            F = F.evolve_field({'laplace'},'steady-state',0,0,'dirichlet',[plates,metal]);
         end
 
-        function [F] = demo_dielectric_inside_field()
+        function [F] = demo_dielectric_inside_field() 
             clear;clc
             % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
-            F = am_field.define([2,2].^7,[2 2].^7,{'cdiff','pdiff'});
-            F.F = zeros([1,F.n]);
+            F = am_field.define([2,2].^7,[2 2].^7,{'cdiff','pdiff'},1);
             % create capactior plates
             dirichlet = [];
             bc = find(F.R(1,:,:)==min(F.R(1,:))) ; dirichlet = [dirichlet;[bc,-ones(size(bc))]];
             bc = find(F.R(1,:,:)==max(F.R(1,:))) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
             dirichlet = dirichlet.'; plates = dirichlet;
             % define dielectric constant
-            ex_ = F.define_mask('circle',F.n/2,F.n(1)/8); epsilon = 3*ex_ + 1*(~ex_); 
+            ex_ = F.define_mask('circle',F.n/2,F.n(1)/5); epsilon = 3*ex_ + 1*(~ex_); 
             % find steady state field
-            F = F.evolve_scalar_field('nlaplace',{epsilon},'steady-state',0,0,'dirichlet',plates);
-            % F = F.evolve_scalar_field('nlaplace',{epsilon},'explicit',0.05,100000,'dirichlet',plates);
+            F = F.evolve_field({'nlaplace',epsilon},'steady-state',0,0,'dirichlet',plates);
+            % F = F.evolve_field('nlaplace',{epsilon},'explicit',0.05,100000,'dirichlet',plates);
             % get derivatives
             F = F.get_derivatives();
             % plot field
             clf; am_lib.set_plot_defaults_(); hold on; clist=am_lib.colormap_('magma',100); colormap(clist); n=2;
-            J = am_lib.diag_(F.J); % J = J./am_lib.normc_(J); J(isnan(J))=0;
+            J = am_lib.diag_(F.J); J = J./am_lib.normc_(J); J(isnan(J))=0;
             hc = contour(squeeze(F.R(1,:,:)),squeeze(F.R(2,:,:)),squeeze(F.F(1,:,:)),10,'linewidth',2);
             hq = am_lib.quiverc_( ...
                    squeeze(F.R(1,1:n:end,1:n:end)),squeeze(F.R(2,1:n:end,1:n:end)),...
@@ -378,23 +361,23 @@ classdef am_field
         function [F] = demo_dielectric_half_space()
             clear;clc
             % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
-            F = am_field.define([2,2].^7,[2,2].^7,{'cdiff','cdiff'});
-            F.F = zeros([1,F.n]);
+            F = am_field.define([2,2].^7,[2,2].^7,{'cdiff','cdiff'},1);
             % create capactior plates
             dirichlet = [];
             bc = find(F.R(1,:,:)==F.n(1)/2 & F.R(2,:,:)==F.n(2)/2) ; dirichlet = [dirichlet;[bc,1]];
             dirichlet = dirichlet.'; charge = dirichlet;
-            % define dielectric constant
-            ex_ = F.define_mask('halfspace',F.n(1)/3); epsilon = 30*ex_ + 1*(~ex_); 
+            % define dielectric constant 
+            %       interesting... the field inside the dielectric flips orientation at eps_r = 1/5 ... is this real?
+            ex_ = F.define_mask('halfspace',F.n(1)/3); epsilon = 5*ex_ + 1*(~ex_); 
             % find steady state field
-            F = F.evolve_scalar_field('nlaplace',{epsilon},'steady-state',0,0,'dirichlet',charge);
-            % F = F.evolve_scalar_field('nlaplace',{epsilon},'explicit',0.05,100000,'dirichlet',plates);
+            F = F.evolve_field({'nlaplace',epsilon},'steady-state',0,0,'dirichlet',charge);
+            % F = F.evolve_field('nlaplace',{epsilon},'explicit',0.05,100000,'dirichlet',plates);
             % get derivatives
             F = F.get_derivatives();
             % plot field
             clf; am_lib.set_plot_defaults_(); hold on; clist=am_lib.colormap_('magma',100); colormap(clist); n=2;
-            J = am_lib.diag_(F.J); % J = J./am_lib.normc_(J); J(isnan(J))=0;
-            hc = contour(squeeze(F.R(1,:,:)),squeeze(F.R(2,:,:)),squeeze(F.F(1,:,:)),10,'linewidth',2);
+            J = am_lib.diag_(F.J); J = J./am_lib.normc_(J); J(isnan(J))=0;
+            hc = contour(squeeze(F.R(1,:,:)),squeeze(F.R(2,:,:)),squeeze(F.F(1,:,:)),20,'linewidth',2);
             hq = am_lib.quiverc_( ...
                    squeeze(F.R(1,1:n:end,1:n:end)),squeeze(F.R(2,1:n:end,1:n:end)),...
                    squeeze(J(1,1:n:end,1:n:end)),squeeze(J(2,1:n:end,1:n:end)),squeeze(F.F(1,1:n:end,1:n:end)),clist);
@@ -405,16 +388,13 @@ classdef am_field
         function [F] = demo_charge_in_dielectric()
             clear;clc
             % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
-            F = am_field.define([2,2].^6,[2,2].^6,{'cdiff','cdiff'}); 
-            F.F = zeros([1,F.n]);
+            F = am_field.define([2,2].^6,[2,2].^6,{'cdiff','cdiff'},1); 
             % define dielectric constant
             epsilon = F.define_mask('annulus',F.n/2,[F.n(1)/8,F.n(1)/4]); epsilon = 2.5*epsilon + 1*(~epsilon); 
             % define charge_
             charge  = F.define_mask('point',F.n/2); charge = -10*charge;
             % find steady state field
-            F = F.evolve_scalar_field('npoisson',{charge,epsilon},'explicit',0.1,1E5);
-            % F = F.evolve_scalar_field('nlaplace',{epsilon},'explicit',0.05,100000,'dirichlet',plates);
-            axis tight;
+            F = F.evolve_field({'npoisson',charge,epsilon},'explicit',0.1,1E5);
             % get derivatives
             F = F.get_derivatives();
             % plot field
@@ -430,12 +410,13 @@ classdef am_field
             plot(abs(diff(squeeze(F.F(1,end/2,:)))))
         end
         
+        % HEAT DIFFUSION IS BROKEN, MOST LIKELY RELATED TO BOUNDARY CONDITIONS
+
         function [F] = demo_heat_diffusion()
 
             clear;clc
             
-            F = am_field.define([2].^[9],1,{'chebyshev'});
-            F.F = zeros([1,F.n]);
+            F = am_field.define([2].^[9],1,{'chebyshev'},1);
             % create boundary conditions
             dirichlet = [];
             dirichlet = [dirichlet;[1,10]];
@@ -444,7 +425,7 @@ classdef am_field
             neumann   = [neumann;[F.n,0]];
             neumann   = neumann.';
 
-            F = F.evolve_scalar_field('dissipative_diffusion',{8,5},'steady-state',0,0,'dirichlet',dirichlet,'neumann',neumann);
+            F = F.evolve_field({'dissipative_diffusion',8,5},'steady-state',0,0,'dirichlet',dirichlet,'neumann',neumann);
 
         end
         
@@ -716,70 +697,6 @@ classdef am_field
             end; end
         end
 
-        function ex_ = define_mask(F,shape,varargin)
-            switch shape
-                case 'square'
-                    % (center, width)
-                    [c,w]=deal(varargin{:});
-                    if F.d==1; ex_ = true(1,F.n); else; ex_ = true(F.n); end
-                    for i = 1:F.d
-                        ex_(ex_) = F.R(i,ex_)<(c(i)+w(i)) & F.R(i,ex_)>(c(i)-w(i));
-                    end
-                case 'circle'
-                    % (center, radius)
-                    [c,r]=deal(varargin{:});
-                    ex_ = am_lib.normc_(F.R-c(:)) < r;
-                case {'annulus','ring'}
-                    % (center, inner and outer radii)
-                    [c,r]=deal(varargin{:});
-                    R = am_lib.normc_(F.R-c(:));
-                    ex_ = R < r(2) & R > r(1);
-                case {'point'}
-                    % (r)
-                    r = deal(varargin{:});
-                    if F.d==1; ex_ = true(1,F.n); else; ex_ = true(F.n); end
-                    for i = 1:F.d; ex_(ex_) = F.R(i,ex_)==r(i); end
-                case 'halfspace'
-                    % (edge)
-                    [e]=deal(varargin{:});
-                    ex_ = F.R(1,:,:) < e;
-                otherwise 
-                    error('unknown shape');
-            end
-        end
-
-        
-%         function [F] = crop(F,x,dx)
-%             % x = coordinates to begin croping
-%             % dx= crop size
-%                   
-%             % trim dimension
-%             F.d   = F.d-1;
-%             % trim scheme, grid size, grid spacing
-%             for f = {'s','n','a'}; if ~isempty(F.(f{:}))
-%                 F.(f{:})(i) = []; 
-%             end; end
-%             % trim coordinates, field, jacobian, hessian, divergence, curl
-%             for f = {'R','F','J','H','D','C'}; if ~isempty(F.(f{:}))
-%                 switch f{:}
-%                     case 'R'; o=1; case 'F'; o=1; case 'J'; o=2;
-%                     case 'H'; o=2; case 'D'; o=1; case 'C'; o=1;
-%                 end
-%                 % permute
-%                 p=[1:ndims(F.(f{:}))]; p([1,i+o])=p([i+o,1]);     
-%                 % trim and permute back to orginal
-%                 F.(f{:}) = permute(F.(f{:}),p); F.(f{:}) = permute(F.(f{:})(j,:,:,:,:,:,:,:),p);
-%                 % permute trimmed to end
-%                 p=[1:ndims(F.(f{:}))+1]; p([i+o,end])=p([end,i+o]); F.(f{:}) = permute(F.(f{:}),p);
-%                 switch f{:}
-%                     case 'R'; F.(f{:})(i,:,:,:,:,:) = []; 
-%                     case 'F'; F.(f{:})(i,:,:,:,:,:) = []; 
-%                 end
-%             end; end
-%         end
-
-        % differentiation
-        
         function [F] = get_derivatives(F)
             F.v = F.get_field_dimension();
             F.J = F.get_jacobian();
@@ -791,221 +708,138 @@ classdef am_field
                 F.L = F.get_laplacian();
             end
         end
-        
-        function [F] = evolve_scalar_field(F,equation,x,algorithm,dt,M,varargin)
+
+        function [F] = evolve_field(F,f_,algorithm,dt,M,varargin) % evolve_field(F,{model,x(1),x(2),...},algorithm,dt,M,varargin)
             % examples
             % F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-            % F = F.evolve_scalar_field('SW76',{0.1,1.0},'implicit',2,500);         % hexagons
-            % F = F.evolve_scalar_field('SW76',{0.3,0.0},'implicit',2,500);         % finger prints
-            % F = F.evolve_scalar_field('SW76',{0.8,1.85},'explicit',0.03,5000);    % maze
-            % F = F.evolve_scalar_field('CH58',{@(x)(x^2-1)^2/4,1},'explicit',0.01,10000);
-            % F = F.evolve_scalar_field('CH58',{@(x)(x^2-1)^2/4,1},'implicit',1,1000);
-            % F = F.evolve_scalar_field('GL50',{@(x)(x^2-1)^2/4,1},'explicit',0.01,5000);
-            %
+            % F = F.evolve_field({'SW76',0.1,1.0},'implicit',2,500);         % hexagons
+            % F = F.evolve_field({'SW76',0.3,0.0},'implicit',2,500);         % finger prints
+            % F = F.evolve_field({'SW76',0.8,1.85},'explicit',0.03,5000);    % maze
+            % F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},'explicit',0.01,10000);
+            % F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},'implicit',1,1000);
+            % F = F.evolve_field({'GL50',@(x)(x^2-1)^2/4,1},'explicit',0.01,5000);
             
-            import am_field.*
+            % parse boundary conditions
+            p = inputParser; 
+            checkdbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == 2); 
+            checknbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == F.d+1);
+            addParameter(p,'dirichlet',[],checkdbc_);
+            addParameter(p,'neumann'  ,[],checknbc_);
+            parse(p,varargin{:});
+            dirichlet = p.Results.dirichlet; % dirichlet( (index, value), n)
+            neumann   = p.Results.neumann;   %   neumann( (index, value), n)
             
-            % parse boundary conditions if present
-                p = inputParser; 
-                checkdbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == 2); 
-                checknbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == F.d+1);
-                addParameter(p,'dirichlet',[],checkdbc_);
-                addParameter(p,'neumann'  ,[],checknbc_);
-                parse(p,varargin{:});
-                dirichlet = p.Results.dirichlet; % dirichlet( (index, value), n)
-                neumann   = p.Results.neumann;   %   neumann( (index, value), n)
-            
-            N=prod(F.n); % Simplify notation: get total number of grid points.
-
-            [D,L,G] = F.get_flattened_differentiation_matrices(); I = speye(N); % Get flattened divergence, laplacian, gradient operators
-            
-			switch algorithm
-                case {'explicit','crank-nicolson','adams?bashforth','runge-kutta'}
-	                % equations of the form F(n+1) = F(n) + dt * LHS
-                    %                       LHS = ( F(n+1) - F(n)) / dt = dF/dt
-                    switch equation
-                        case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
-                            LHSe_ = @(U,x) x{1}*U(:) - (L+I)^2*U(:) + x{2}*U(:).^2 - U(:).^3; nargs=2;
-                        case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {eps, c, alpha, q}
-                            LHSe_ = @(U,x) ( I*x{1} - x{2}*(L+I)^2*(L + I*x{3}.^2)^2 + x{4}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N) )*U(:); nargs=4;
-                        case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002; Arason & Tang PRL 1998)
-                            LHSe_ = @(U,x) ( I*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) )*U(:); nargs=1;
-                        case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
-                            syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
-                            LHSe_ = @(U,x)   ( x{1}(U(:)) + x{2}*L*U(:) ); nargs=2;
-                        case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
-                            syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
-                            LHSe_ = @(U,x) L*( x{1}(U(:)) - x{2}*L*U(:) ); nargs=2;
-                        case 'QP13' % Qin-Pablo (Soft Matter, 2013, 9, 11467)
-                            syms z; x{1} = matlabFunction(diff(x{1}(z),z)); % P.E. derivative
-                            LHSe_ = @(U,x) L*( x{1}(U(:)) - x{2}*L*U(:) ) - x{3}*(U(:) - mean(U(:))); nargs=3;
-                        case 'LS91' % Lai-das Sarma (PRL 1991)
-                            % NEED TO TEST
-                            LHSe_ = @(U,x) -x{1}*L^2*U(:) + x{2}*L*(D*U(:))^2 + x{3}*randn(size(U)); nargs=2;
-                        case 'dissipative_diffusion' % Diffusion equation with dissipation, x = { diffusivity, dissipation }
-                            OP = ( x{1}*L - x{2}*I );
-                            LHSe_ = @(U,x) OP * U(:); nargs=2;
-                        case 'poisson' % Poisson equation, x = { charge density }
-                            LHSe_ = @(U,x) L * U(:) - x{1}(:); nargs=1;
-                        case 'laplace' % Laplace equation, x = { }
-                            LHSe_ = @(U,x) L * U(:); nargs=0;
-                        case 'npoisson' % Poisson equation with a spatial-dependent dielectric constant, x = { charge density, dielectric constant }
-                            % seems ok
-                            GE = cellfun(@(G) spdiags(G*x{2}(:),0,N,N), G, 'UniformOutput', false); 
-                            OP = ( spdiags(x{2}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
-                            LHSe_ = @(U,x) OP * U(:) - x{1}(:); nargs=2;
-                        case 'nlaplace' % Laplace equation with a spatial-dependent dielectric constant, x = { dielectric constant }
-                            GE = cellfun(@(G) spdiags(G*x{1}(:),0,N,N), G, 'UniformOutput', false); 
-                            OP = ( spdiags(x{1}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
-                            LHSe_ = @(U,x) OP * U(:); nargs=1;
-                        otherwise
-                            % Ingredients available for designing custom equations:
-                            % U (field), L (laplacian), D (divergence), G{i} (gradient along i), I (identity)
-                            % example: F = F.evolve_scalar_field('8*L-5*eye(N)',{},'steady-state',0,0,'dirichlet',dirichlet,'neumann',neumann);
-                            eval(['LHSe_ = @(U,x) ',equation,';']); nargs=0;
-                    end
-                case {'implicit','steady-state','jacobi'}
-                    % equations of the form F(n+1) = (1 - dt*LHS)\F(n)
-                    %                       LHS * F(n+1) = ( F(n+1) - F(n) ) / dt
-                    %                       i.e., LHS has a factor of F(n+1) removed
-                    switch equation
-                        case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
-                            LHSi_ = @(U,x) x{1}*I - (L+I)^2 + x{2}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N); nargs=2;
-                        case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {e, g1, q}
-                            LHSi_ = @(U,x) ( I*x{1} - x{2}*(L+I)^2*(L + I*x{3}.^2)^2 + x{4}*spdiags(U(:),0,N,N) - spdiags(U(:).^2,0,N,N) ); nargs=4;
-                        case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002)
-                            LHSi_ = @(U,x) ( speye(N)*(1-1i*x{1}) + L - spdiags((1-1i*x{1})*abs(U(:)).^2,0,N,N) ); nargs=1;
-                        case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
-                            syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
-                            LHSi_ = @(U,x)   ( spdiags(x{1}(U(:)),0,N,N) + x{2}*L ); nargs=2;
-                        case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
-                            syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
-                            LHSi_ = @(U,x) L*( spdiags(x{1}(U(:)),0,N,N) - x{2}*L ); nargs=2;
-                        case 'QP13' % Qin-Pablo (Soft Matter, 2013, 9, 11467)
-                            % Something is wrong about this implicit implementation; results do no match explicit version. Compare:
-                            % F = F.evolve_scalar_field('QP13',{@(x)(x^2-1)^2/4,1,0.05},'implicit',1,100);
-                            % F = F.evolve_scalar_field('QP13',{@(x)(x^2-1)^2/4,1,0.05},'explicit',0.01,10000);
-                            error('something is wrong with this implementation');
-                            syms z; x{1} = matlabFunction(expand(diff(x{1}(z),z)/z)); % P.E. derivative with field factored out
-                            LHSi_ = @(U,x) L*( spdiags(x{1}(U(:)),0,N,N) - x{2}*L ) - x{3}*spdiags(U(:) - mean(U(:)),0,N,N); nargs=3;
-                        case 'poisson' % Poisson equation, x = { charge density }
-                            error('The Poisson equation cannot be relaxed using an implicit method.');
-                            % The Poisson equation cannot be relaxed using an implicit method because
-                            % the field needs to be factored out from the charge.
-                            LHSi_ = @(U,x) L - spdiags(x{1}(:)./U(:),0,N,N); nargs=1;
-                        case 'dissipative_diffusion' % x = {diffusivity, dissipation}
-                            LHSi_ = @(U,x) x{1}*L - x{2}*speye(N); nargs=2;
-                        case 'laplace'  % Laplace equation, x = { }
-                            LHSi_ = @(U,x) L; nargs=0;
-                        case 'nlaplace' % Laplace equation with a spatial-dependent dielectric constant, x = { dielectric constant }
-                            GE = cellfun(@(G) spdiags(G*x{1}(:),0,N,N), G, 'UniformOutput', false); 
-                            OP = ( spdiags(x{1}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
-                            LHSi_ = @(U,x) OP; nargs=1;
-                        otherwise
-                            % Ingredients available for designing custom equations:
-                            % U (field), L (laplacian), D (divergence), G{i} (gradient along i), I (identity)
-                            % example: F = F.evolve_scalar_field('8*L-5*eye(N)',{},'steady-state',0,0,'dirichlet',dirichlet,'neumann',neumann);
-                            eval(['LHSi_ = @(U,x) ',equation,';']); nargs = 0;
-                    end
-                otherwise
-                    error('unknown solver');
+            % setup model
+            if iscell(f_)
+                switch algorithm
+                    case {'explicit','crank-nicolson','adams-bashforth','runge-kutta'}
+                        f_ = F.get_evolution_model(f_,'explicit'); 
+                    case {'implicit','steady-state','jacobi'}
+                        f_ = F.get_evolution_model(f_,'implicit');
+                    otherwise
+                        f_ = F.get_evolution_model(f_,algorithm);
+                end
             end
-
-            if ~iscell(x); x=num2cell(x); end % convert array to cells if necessary (cells allow passing functions)
-            if numel(x)~=nargs; error('incorrect number of parameters'); end % check parameters
-            if isempty(F.F); error('field has not been initialized'); end % check parameters
-
-            % Propagate in time 
+            
             switch algorithm
+                % explicit algorithms
+                case 'explicit' % explicit
+                    for i = [1:M]
+                        UP = F.F(:,:); F.F(:,:) = F.F(:,:) + dt*f_(F);
+                        % b.c.
+                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                        if ~isempty(neumann); error('not yet implemented'); end
+                        
+                        if any(isnan(F.F(:))); warning('NaN'); break; end
+                        if mod(i,round(M/100))==0
+                            ediff(i) = norm(UP(:)-F.F(:)); title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                            subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect;
+                            subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                            if ediff(i)<F.tiny; break; end
+                        end
+                    end
+                case 'adams-bashforth' % explicit
+                    for i = [1:M]
+                        UP = F.F(:,:); f(:,:,1) = f_(F);
+                        switch i        
+                            case 1; F.F(:,:) = F.F(:,:) + dt*sum(f(:,:,1),3);
+                            case 2; F.F(:,:) = F.F(:,:) + dt*sum(f(:,:,1:2).*cat(3,3/2,-1/2),3);
+                            case 3; F.F(:,:) = F.F(:,:) + dt*sum(f(:,:,1:3).*cat(3,23/12,-4/3,5/12),3);
+                            case 4; F.F(:,:) = F.F(:,:) + dt*sum(f(:,:,1:4).*cat(3,55/24,-59/24,37/24,-3/8),3);
+                         otherwise; F.F(:,:) = F.F(:,:) + dt*sum(f(:,:,1:5).*cat(3,1901/720,-1387/360,109/30,-637/360,251/720),3);
+                        end
+                        f = circshift(f,[0,0,1]);
+                        % b.c.
+                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                        if ~isempty(neumann); error('not yet implemented'); end
+
+                        if any(isnan(F.F(:))); warning('NaN'); break; end
+                        if mod(i,round(M/100))==0
+                            ediff(i) = norm(UP(:)-F.F(:)); title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                            subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect;
+                            subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                            if ediff(i)<F.tiny; break; end
+                        end
+                    end
+                case 'runge-kutta' % explicit (LHS must not have an explicit time dependence!)
+                    % create an auxiliary dummy field
+                    A = F.copy(); k = zeros([F.v,prod(F.n),4]); 
+                    for i = [1:M]
+                        UP = F.F(:,:);
+                        A.F = F.F(:,:);            k(:,:,1) = dt*f_(A);
+                        A.F = F.F(:,:)+k(:,:,1)/2; k(:,:,2) = dt*f_(A);
+                        A.F = F.F(:,:)+k(:,:,2)/2; k(:,:,3) = dt*f_(A);
+                        A.F = F.F(:,:)+k(:,:,3);   k(:,:,4) = dt*f_(A);
+                        F.F(:,:) = F.F(:,:)+sum(k.*(cat(3,1,2,2,1)./6),3);
+                        % b.c.
+                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                        if ~isempty(neumann); error('not yet implemented'); end
+
+                        if any(isnan(F.F(:))); warning('NaN'); break; end
+                        if mod(i,round(M/100))==0
+                            ediff(i) = norm(UP(:)-F.F(:)); title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                            subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect;
+                            subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                            if ediff(i)<F.tiny; break; end
+                        end
+                    end
+                    
+                % implicit algorithms ( NEED TO WORK ON THIS )
+                
                 case 'steady-state' % dF/dt = 0
+                    
+                    if F.v>1; error('currently only implemented for scalar potentials'); end
+    
                     % initialize system of equations
-                    n = prod(F.n); V = zeros(n,1); O = LHSi_(F.F,x);
+                    n = prod(F.n); V = zeros(n,1); O = f_(F); [~,~,G] = F.get_flattened_differentiation_matrices();
                     % add dirichlet boundary conditions
                     if ~isempty(dirichlet)
                         % make the b.c. robust by removing coupling to everything else
-                        O(dirichlet(1,:),:) = [];
-                        V(dirichlet(1,:),:) = [];
+                        O(dirichlet(1,:),:) = []; V(dirichlet(1,:),:) = [];
                         % add boundary conditions
-                        Op = speye(n);
-                        Op = Op(dirichlet(1,:),:);
-                        Vp = dirichlet(2,:).';
+                        Op = speye(n); Op = Op(dirichlet(1,:),:); Vp = dirichlet(2,:).';
                         % augment
                         O = [O;Op]; V = [V;Vp];
                     end
                     % add neuamnn boundary conditions for each dimension
-                    if ~isempty(neumann); for j = 1:F.d
-                        Op = G{j}(neumann(1,:),:);
-                        Vp = neumann(j+1,:).';
-                        % augment
-                        O = [O;Op]; V = [V;Vp];
-                    end; end
+                    if ~isempty(neumann); k = 1;
+                        for j = 1:F.d; for i = 1:F.v; k=k+1;
+                            Op = G{j}(neumann(1,:),:); Vp = neumann(k,:).'; O = [O;Op]; V = [V;Vp];
+                        end; end
+                    end
                     % evaluate
-                    F.F(1:N) = O\V;
+                    F.F(:) = O\V;
                     % plot
                     F.plot_field('F');
-                case 'explicit' % unstable for large steps
-                    for i = [1:M]
-                        UP = F.F(:); F.F(1:N) = F.F(:) + dt*LHSe_(F.F,x);
-                        if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/100))==0
-                            F.plot_field('F'); ediff = norm(UP(:)-F.F(:));
-                            title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
-                            if ediff<F.tiny; break; end
-                        end
-                        % b.c.
-                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                        if ~isempty(neumann); error('not yet implemented'); end
-                    end
                     
-                case 'runge-kutta'  % explicit (LHS must not have an explicit time dependence!)
-                    f = zeros(numel(F.F),4);
-                    for i = [1:M]
-                        UP = F.F(:);
-                        k(:,1) = dt*LHSe_(F.F(:)         ,x);
-                        k(:,2) = dt*LHSe_(F.F(:)+k(:,1)/2,x);
-                        k(:,3) = dt*LHSe_(F.F(:)+k(:,2)/2,x);
-                        k(:,4) = dt*LHSe_(F.F(:)+k(:,3)  ,x);
-                        F.F(1:N) = F.F(:) + k*[1/3;2;2;1]/6;
-                        
-                        if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/100))==0
-                            F.plot_field('F'); ediff = norm(UP(:)-F.F(:));
-                            title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
-                            if ediff<F.tiny; break; end
-                        end
-                        % b.c.
-                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                        if ~isempty(neumann); error('not yet implemented'); end
-                    end
-                    
-                case 'adams-bashforth' % explicit with multiple steps
-                    f = zeros(numel(F.F),5);
-                    for i = [1:M]
-                        UP = F.F(:); f(:,1) = LHSe_(F.F,x);
-                        switch i
-                            case 1; F.F(1:N) = F.F(:) + dt*(f(:,1));
-                            case 2; F.F(1:N) = F.F(:) + dt*(f(:,1:2)*[3/2;-1/2]);
-                            case 3; F.F(1:N) = F.F(:) + dt*(f(:,1:3)*[23/12;-4/3;5/12]);
-                            case 4; F.F(1:N) = F.F(:) + dt*(f(:,1:4)*[55/24;-59/24;37/24;-3/8]);
-                            otherwise
-                                    F.F(1:N) = F.F(:) + dt*(f(:,1:5)*[1901/720;-1387/360;109/30;-637/360;251/720]);
-                        end
-                        f = circshift(f,[0,1]);
-                        
-                        if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/100))==0
-                            F.plot_field('F'); ediff = norm(UP(:)-F.F(:));
-                            title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
-                            if ediff<F.tiny; break; end
-                        end
-                        % b.c.
-                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                        if ~isempty(neumann); error('not yet implemented'); end
-                    end
                 case 'implicit' % more stable
+                    
+                    if F.v>1; error('currently only implemented for scalar potentials'); end
+
+                    N = prod(F.n);
                     for i = [1:M]
-                        UP = F.F(:); F.F(1:N) = (speye(N) - dt*LHSi_(F.F,x))\F.F(:);
+                        UP = F.F(:); F.F(:) = (speye(N) - dt*f_(F))\F.F(:);
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0
                             F.plot_field('F'); ediff = norm(UP(:)-F.F(:));
@@ -1017,8 +851,12 @@ classdef am_field
                         if ~isempty(neumann); error('not yet implemented'); end
                     end
                 case 'crank-nicolson'
+                    
+                    if F.v>1; error('currently only implemented for scalar potentials'); end
+
+                    N = prod(F.n);
                     for i = [1:M]
-                        UP = F.F(:); F.F(1:N) = ( (speye(N)-dt*LHSi_(F.F,x))\F.F(:) + F.F(:)+dt*LHSe_(F.F,x) )/2;
+                        UP = F.F(:); F.F(:) = ( (speye(N)-dt*f_(F))\F.F(:) + F.F(:)+dt*f_(F) )/2;
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0
                             F.plot_field('F'); ediff = norm(UP(:)-F.F(:));
@@ -1029,8 +867,9 @@ classdef am_field
                         if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
                         if ~isempty(neumann); error('not yet implemented'); end
                     end
+                    
                 otherwise
-                    error('unknown solver');
+                    error('invalid algorithm');
             end
         end
 
@@ -1133,6 +972,23 @@ classdef am_field
 
         function [r] = relax_points(F,r,ediff,flag)
             % relax the coordinates of r [(x,y),n] points
+            
+
+        % TO DO: ADD NVT SIMULATION
+%                 % 6) current temperature
+%                 Tj = 2/3*KE(j)/uc.natoms/k_boltz;
+% 
+%                 % 5) compute Nose-Hoover drag: p_eta = KE - TE
+%                 nosehoover = v(:,:,j)/Q * ( Tj - T ) / uc.natoms;
+% 
+%                 % 6) get acceleration
+%                 acc = f(:,:,j) ./ uc.mass(uc.species);
+% 
+%                 % ***) update md [frac]: x' = x + v * dt; v' = v + a * dt; Nose-Hoover dv/dt becomes a - p_eta / Q * v;
+%                 if j ~= nsteps
+%                     u(:,:,j+1) = u(:,:,j) + dt * v(:,:,j);
+%                     v(:,:,j+1) = v(:,:,j) + dt * (acc - nosehoover);
+%                 end
             
             % get number of nodes
             nnodes = size(r,2);
@@ -1509,32 +1365,218 @@ classdef am_field
             h = am_lib.overlay_(squeeze(F.F),x,f);
         end
         
-        % statistical quantities
-
-
-        % TO DO: drop particles (nodes) on a converged potential and move MD based on Lagrangian mechanics
-        % evolve each particle using different algorithms, including verlet. 
-        % this is a precursor to the nudge elastic band method for finding minimum energy path.
-        % can also add nose hoover and make the simulation an NVT ensamble instead of NVE
-        
-
-%                 % 6) current temperature
-%                 Tj = 2/3*KE(j)/uc.natoms/k_boltz;
-% 
-%                 % 5) compute Nose-Hoover drag: p_eta = KE - TE
-%                 nosehoover = v(:,:,j)/Q * ( Tj - T ) / uc.natoms;
-% 
-%                 % 6) get acceleration
-%                 acc = f(:,:,j) ./ uc.mass(uc.species);
-% 
-%                 % ***) update md [frac]: x' = x + v * dt; v' = v + a * dt; Nose-Hoover dv/dt becomes a - p_eta / Q * v;
-%                 if j ~= nsteps
-%                     u(:,:,j+1) = u(:,:,j) + dt * v(:,:,j);
-%                     v(:,:,j+1) = v(:,:,j) + dt * (acc - nosehoover);
-%                 end
     end
-   
+    
+    methods % micromagnetics
+        
+        function [H]     = get_micromagnetics_crystalline_potential(F,type,ex_)
+            % mask
+            if nargin < 3 || isempty(ex_); ex_ = true(1,prod(F.n)); end
+            % allocate
+            H = zeros([F.v,sum(ex_(:))]);
+            % build
+            switch type
+                case {'U(1)','mexican-hat'}
+                    % U = - 2 * (m_x^2 + m_y^2) + (m_x^2 + m_y^2)^2 = 2 |r|^2 + |r|^4  ,  minimum at |r| = 1
+                    for i = 1:F.v
+                        H(i,:) = H(i,:) + ( -4*F.F(i,ex_) + F.F(i,ex_).^3 + F.F(i,ex_).*sum(F.F([1:F.v]~=i,ex_).^2,1) );
+                    end
+                case {'<111>'}
+                    % U = - 2 * (m_x^2 + m_y^2) + (m_x^2 + m_y^2)^2 = 2 |r|^2 + |r|^4  ,  minimum at |r| = 1
+                    for i = 1:F.v
+                        H(i,:) = H(i,:) + ( -4*F.F(i,ex_) + 3*F.F(i,ex_).^3 + F.F(i,ex_).*sum(F.F([1:F.v]~=i,ex_).^2,1) );
+                    end
+                case {'dielectric','diamagnetic'}
+                    % U = (m_x^2 + m_y^2),  minimum at |r| = 0
+                    for i = 1:F.v
+                        H(i,:) = H(i,:) + F.F(i,ex_);
+                    end
+                otherwise
+                    error('invalid potential');
+            end
+            H = - H;
+        end
+
+        function [H,V]   = get_micromagnetics_demagnetization(F,type)
+            if isempty(F.S_); F.S_ = get_micromagnetics_demagnetization_auxiliary_field(F,type); end
+            % allocate scalar potential
+            V = zeros([1,F.n+1]);
+            switch F.d
+                case 1; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:)    ,[0,1]    ,0,'pre'), F.S_.F(i,:)    , 'same'); end
+                case 2; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:,:)  ,[0,1,1]  ,0,'pre'), F.S_.F(i,:,:)  , 'same'); end
+                case 3; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:,:,:),[0,1,1,1],0,'pre'), F.S_.F(i,:,:,:), 'same'); end
+                otherwise; error('invalid dimensions');
+            end
+            switch F.d
+                case 1; H =        diff(V(1,1:(F.n(1)+1)),1,2);
+                case 2; H = cat(1, diff(V(1,1:(F.n(1)+1),1:F.n(2)),1,2),          diff(V(1,1:F.n(1),1:(F.n(2)+1)),1,3) );
+                case 3; H = cat(1, diff(V(1,1:(F.n(1)+1),1:F.n(2),1:F.n(3)),1,2), diff(V(1,1:F.n(1),1:(F.n(2)+1),1:F.n(3)),1,3), diff(V(1,1:F.n(1),1:F.n(2),1:(F.n(3)+1)),1,4) );
+                otherwise; error('invalid dimensions');
+            end
+            
+        end
+        
+        function [S]     = get_micromagnetics_demagnetization_auxiliary_field(F,type)
+            % select type of potential
+            switch type
+                case '2D-log'; f_ = @(r) f_2D_log(r);
+                case '2D-1/r'; f_ = @(r) f_2D_rinv(r);
+                case '3D-1/r'; f_ = @(r) f_3D_rinv(r);
+                otherwise; error('invalid input');
+            end
+            % setup auxiliary S transform
+            S = am_field.define(2*F.n,2*F.n,F.s,F.v); S.R = S.R - floor(S.n(:)/2);
+            % define S (PBC accounting for periodic images is not implemented yet)
+            S.F = zeros([2,S.n]); Delta = S.n(:)./S.a(:); 
+            for m = [1:2]; for i = [-1,+1]; for j = [-1,+1]
+                    S.F(m,:) = S.F(m,:) + i.*j .* f_(circshift(S.R(:,:),m,1) + [i;j].*Delta/2 )/(4*pi);
+                end; end
+            end
+            
+            function f = f_2D_log(r)
+                n = am_lib.normc_(r(:,:));
+                f = -(2*r(2,:).*atan(r(1,:)./r(2,:)) + r(1,:).*(-2+log(n)));
+            end
+
+            function f = f_2D_rinv(r)
+                n = am_lib.normc_(r(:,:));
+                f = atanh(r(1,:)./n);
+            end
+            
+            function f = f_3D_rinv(r)
+                n = am_lib.normc_(r(:,:));
+                f = - r(3,:).*atanh(r(1,:).*r(2,:)./n) + r(1,:).*tanh(r(2,:)./n) + r(2,:).*log(r(1,:)+n);
+            end
+            
+        end
+
+        function [f_]    = get_evolution_model(F,model,algorithm)
+            % explicit equations:
+            % equations of the form F(n+1) = F(n) + dt * LHS
+            %                       LHS = ( F(n+1) - F(n)) / dt = dF/dt
+            % implicit equations:
+            % equations of the form F(n+1) = (1 - dt*LHS)\F(n)
+            %                       LHS * F(n+1) = ( F(n+1) - F(n) ) / dt
+            %                       i.e., LHS has a factor of F(n+1) removed
+            is_explicit = strcmp(algorithm,'explicit');
+            
+            % Get flattened divergence, laplacian, gradient operators            
+            [D,L,G] = F.get_flattened_differentiation_matrices(); N=prod(F.n); I = speye(N); 
+                
+            % Build model
+            switch model{1}
+                case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
+                    OP = model{2}*I - (L+I)^2 + model{3}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
+                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) ); nargs=2;
+                    else            f_ = @(F) transpose( OP          ); nargs=2;
+                    end
+                case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {eps, c, alpha, q}
+                    OP = I*model{2} - model{3}*(L+I)^2*(L + I*model{4}.^2)^2 + model{5}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
+                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) ); nargs=4;
+                    else            f_ = @(F) transpose( OP          ); nargs=4;
+                    end
+                case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002; Arason & Tang PRL 1998)
+                    OP = I*(1-1i*model{2}) + L - spdiags((1-1i*model{2})*abs(F.F(:)).^2,0,N,N);
+                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) ); nargs=1;
+                    else            f_ = @(F) transpose( OP          ); nargs=1;
+                    end
+                case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
+                    syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
+                    if is_explicit; f_ = @(F) transpose(   (         model{2}(F.F(:))        + model{3}*L*F.F(:) ) ); nargs=2;
+                    else            f_ = @(F) transpose(   ( spdiags(model{2}(F.F(:)),0,N,N) + model{3}*L        ) ); nargs=2;
+                    end
+                case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
+                    syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
+                    if is_explicit; f_ = @(F) transpose( L*(         model{2}(F.F(:))        - model{3}*L*F.F(:) ) ); nargs=2;
+                    else            f_ = @(F) transpose( L*( spdiags(model{2}(F.F(:)),0,N,N) - model{3}*L        ) ); nargs=2;
+                    end
+                case 'QP13' % Qin-Pablo (Soft Matter, 2013, 9, 11467)
+                    syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
+                    if is_explicit; f_ = @(F) transpose( L*( model{2}(F.F(:)) - model{3}*L*F.F(:) ) - model{4}*(F.F(:) - mean(F.F(:))) ); nargs=3;
+                    else;           error('not yet implemented');
+                    end
+                case 'LS91' % Lai-das Sarma (PRL 1991)
+                    % NEED TO TEST
+                    if is_explicit; f_ = @(F) transpose( -model{2}*L^2*F.F(:) + model{3}*L*(D*F.F(:))^2 + model{4}*randn(size(F)) ); nargs=2;
+                    else;           error('not yet implemented');
+                    end
+                case 'dissipative_diffusion' % Diffusion equation with dissipation, x = { diffusivity, dissipation }
+                    OP = ( model{2}*L - model{3}*I );
+                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) ); nargs=2;
+                    else            f_ = @(F) transpose( OP          ); nargs=2;
+                    end
+                case 'poisson' % Poisson equation, x = { charge density }
+                    if is_explicit; f_ = @(F) transpose( L * F.F(:) - model{2}(:) ); nargs=1;
+                    else;           error('not yet implemented');
+                    end
+                case 'npoisson' % Poisson equation with a spatial-dependent dielectric constant, x = { charge density, dielectric constant }
+                    % seems ok
+                    GE = cellfun(@(G) spdiags(G*model{3}(:),0,N,N), G, 'UniformOutput', false); 
+                    OP = ( spdiags(model{3}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
+                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) - model{2}(:) ); nargs=2;
+                    else;           error('not yet implemented');
+                    end
+                case 'laplace' % Laplace equation, x = { }
+                    if is_explicit; f_ = @(F) transpose( L * F.F(:)  ); nargs=0;
+                    else            f_ = @(F) transpose( L           ); nargs=0;
+                    end
+                case 'nlaplace' % Laplace equation with a spatial-dependent dielectric constant, x = { dielectric constant }
+                    GE = cellfun(@(G) spdiags(G*model{2}(:),0,N,N), G, 'UniformOutput', false); 
+                    OP = ( spdiags(model{2}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
+                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) ); nargs=1;
+                    else            f_ = @(F) transpose( OP          ); nargs=1;
+                    end
+                otherwise
+                    error('invalid model')
+            end
+
+            if numel(model)~=nargs+1; error('incorrect number of parameters'); end % check parameters
+        end
+        
+    end
+    
     methods %(Access = protected) % internal stuff
+
+        function [ex_] = define_mask(F,shape,varargin)
+            % clear;clc;
+            % F = am_field.define([2,2,2].^[5],[2,2,2].^[5],{'pdiff','pdiff','pdiff'},1);
+            % ex_ = F.define_mask('slab',[1;1;1],F.n/2,1); ex_ = reshape(ex_,F.n);
+            % scatter3(F.R(1,:),F.R(2,:),F.R(3,:),ex_(:)+0.1,'filled'); axis tight; daspect([1 1 1]);
+            
+            switch shape
+                case {'square'}
+                    % (center, width)
+                    [c,w]=deal(varargin{:});
+                    if F.d==1; ex_ = true(1,F.n); else; ex_ = true(F.n); end
+                    for i = 1:F.d
+                        ex_(ex_) = F.R(i,ex_)<(c(i)+w(i)) & F.R(i,ex_)>(c(i)-w(i));
+                    end
+                case {'circle'}
+                    % (center, radius)
+                    [c,r]=deal(varargin{:});
+                    ex_ = am_lib.normc_(F.R-c(:)) < r;
+                case {'annulus','ring'}
+                    % (center, inner and outer radii)
+                    [c,r]=deal(varargin{:});
+                    R = am_lib.normc_(F.R-c(:));
+                    ex_ = R < r(2) & R > r(1);
+                case {'point'}
+                    % (r)
+                    r = deal(varargin{:});
+                    if F.d==1; ex_ = true(1,F.n); else; ex_ = true(F.n); end
+                    for i = 1:F.d; ex_(ex_) = F.R(i,ex_)==r(i); end
+                case {'slab'}
+                    % (normal, center, width) slab
+                    [n,c,w]=deal(varargin{:});
+                    ex_ = abs(sum(F.R(:,:).*n(:) - c(:).*n(:),1))./norm(n) < w;
+                case {'halfspace'}
+                    % (edge)
+                    [e]=deal(varargin{:});
+                    ex_ = F.R(1,:,:) < e;
+                otherwise 
+                    error('unknown shape');
+            end
+        end
         
         function [R] = get_collocation_points(F)
             for i = 1:F.d % loop over dimensions
@@ -1553,7 +1595,11 @@ classdef am_field
         end
 
         function [v] = get_field_dimension(F)
-            if isempty(F.v); v = size(F.F,1); return; end
+            if isempty(F.v)
+                v = size(F.F,1); 
+            else
+                v = F.v;
+            end
         end
 
         function [J] = get_jacobian(F)
@@ -1604,11 +1650,15 @@ classdef am_field
             if F.d>1 && strcmp(F.s{2},'cdiff'); H(2,2,:,[1,end],:)=0; end
             if F.d>2 && strcmp(F.s{3},'cdiff'); H(3,3,:,:,[1,end])=0; end
         end
-
+        
+        function [G] = get_gradient(F)
+            G = am_lib.diag_(F.J);
+        end
+        
         function [D] = get_divergence(F)
             D = am_lib.trace_(F.J);
         end
-        
+
         function [L] = get_laplacian(F)
             L = am_lib.trace_(F.H);
         end
@@ -1622,7 +1672,7 @@ classdef am_field
         
         function [Q] = get_topological_charge(F)
             % copy
-            N = F;
+            N = F.copy();
             % normalize field
             N.F = N.F./am_lib.normc_(N.F);
             % recompute jacobian
@@ -1651,20 +1701,25 @@ classdef am_field
             % subplot(1,2,1); surf(L,'edgecolor','none'); view([0 0 1]); daspect([1 1 1]); axis tight;
             % subplot(1,2,2); surf(squeeze(F.L),'edgecolor','none'); view([0 0 1]); daspect([1 1 1]); axis tight;
             
-            Q = F.get_differentiation_matrices();
-            % note: although the specral differentiation matrix may be full, 
-            %       when spanning multiple dimensions it will become sparse.
-            % divergence
-            D = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
-            D = am_field.get_flattened_divergence_(D{:});
-            % laplacian
-            if nargout < 2; return; end
-            L = cellfun(@(x)sparse(x(:,:,2)),Q,'UniformOutput',false);
-            L = am_field.get_flattened_divergence_(L{:});
-            % gradient
-            if nargout < 3; return; end
-            G = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
-            G = am_field.get_flattened_gradients_(G{:});
+            if isempty(F.D_) || isempty(F.L_) || isempty(F.G_)            
+                Q = F.get_differentiation_matrices();
+                % note: although the specral differentiation matrix may be full, 
+                %       when spanning multiple dimensions it will become sparse.
+                % divergence
+                D = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
+                D = am_field.get_flattened_divergence_(D{:});
+                % laplacian
+                L = cellfun(@(x)sparse(x(:,:,2)),Q,'UniformOutput',false);
+                L = am_field.get_flattened_divergence_(L{:});
+                % gradient
+                G = cellfun(@(x)sparse(x(:,:,1)),Q,'UniformOutput',false);
+                G = am_field.get_flattened_gradients_(G{:});
+                % save for later use
+                F.D_ = D; F.L_ = L; F.G_ = G;
+            else
+                % recall from storage
+                D = F.D_; L = F.L_; G = F.G_;
+            end
             
         end
         
@@ -2008,7 +2063,7 @@ classdef am_field
         end
         
     end
-    
+
     methods (Static) % electricity/magnetism
         
         function [A] = get_vector_potential(R,dI,I)
