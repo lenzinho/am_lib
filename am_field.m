@@ -25,22 +25,22 @@ classdef am_field < matlab.mixin.Copyable
                 %     [ ( dF(x)/dx  dF(x)/dy  dF(x)/dz )              ]
                 %     [ ( dF(y)/dx  dF(y)/dy  dF(y)/dz ) , x , y , z  ]
                 %     [ ( dF(z)/dx  dF(z)/dy  dF(z)/dz )              ]
-        H = []; % hessian ( F.d , F.d , F.n )
-                % H = jacobian (for scalar field)
-                %     [ ( d2F/dxdx  d2F/dxdy  d2F/dxdz )              ]
-                %     [ ( d2F/dydx  d2F/dydy  d2F/dydz ) , x , y , z  ]
-                %     [ ( d2F/dzdx  d2F/dzdy  d2F/dzdz )              ]
         D = []; % divergence
                 % trace of jacobian = 
                 %     [         dF/dx + dF/dy + dF/z     , x , y , z  ]
-        L = []; % laplacian
-                % trace of hessian = 
-                %     [d^2F/dx^2 + d^2F/dy^2 + d^2F/dz^2 , x , y , z  ]
         C = []; % curl
                 % skew  of jacobian = 
                 %     [ (     dFz/dy    -    dFy/dz    ) 
                 %     [ (     dFx/dz    -    dFz/dx    ) , x , y , z  ]
                 %     [ (     dFy/dx    -    dFx/dy    ) 
+        H = []; % hessian ( F.d , F.d , F.n )
+                % H = jacobian (for scalar field)
+                %     [ ( d2F/dxdx  d2F/dxdy  d2F/dxdz )              ]
+                %     [ ( d2F/dydx  d2F/dydy  d2F/dydz ) , x , y , z  ]
+                %     [ ( d2F/dzdx  d2F/dzdy  d2F/dzdz )              ]
+        L = []; % laplacian
+                % trace of hessian = 
+                %     [d^2F/dx^2 + d^2F/dy^2 + d^2F/dz^2 , x , y , z  ]
         Q = []; % topological charge
                 %     [ (               1              ) , x , y , z  ]
         % AFM
@@ -288,7 +288,7 @@ classdef am_field < matlab.mixin.Copyable
         
         function [F]     = demo_micromagnetics_2d()
             clear;clc;clf;
-            F = am_field.define([2,2].^[6,5],[2,2].^[6,5],{'pdiff','pdiff'},2); % initialize object
+            F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},2); % initialize object
             F.F = rand([2,F.n]); F.F = F.F - mean(F.F(:)); % initialize random vector field
             % F = F.evolve_field(@(F) micromagnetics_(F),{'adams-bashforth',1E-3,1000});
             F = F.evolve_field(@(F) micromagnetics_(F),{'VE',0.010,1000});
@@ -296,16 +296,19 @@ classdef am_field < matlab.mixin.Copyable
             function dF = micromagnetics_(F)
                 % get differentiation matrix and allocate space
                 [~,L,~] = F.get_flattened_differentiation_matrices(); dF = zeros(F.v,prod(F.n));
-                % Crystalline Anistropy
-                ex_ = F.define_mask('slab',[0;1],F.n/2,6);
-                dF(:, ex_) = dF(:, ex_) + F.get_micromagnetics_crystalline_potential('<111>',      ex_);
-                dF(:,~ex_) = dF(:,~ex_) + F.get_micromagnetics_crystalline_potential('dielectric',~ex_)*20;
+                % Crystalline Anistropy 
+                ex_ = false(1,prod(F.n));
+%                 ex_ = F.define_mask('slab',[0;1],F.n*1/4,6) | F.define_mask('slab',[0;1],F.n*3/4,6);
+                ex_ = F.define_mask('slab',[0;1],F.n*1/4,7) | F.define_mask('slab',[0;1],F.n*3/4,7);
+%                 ex_ = F.define_mask('slab',[0;1],F.n/2,6);
+                dF(:, ex_) = dF(:, ex_) + F.get_micromagnetics_crystalline_potential('U(1)',       ex_);
+                dF(:,~ex_) = dF(:,~ex_) + F.get_micromagnetics_crystalline_potential('dielectric',~ex_);
                 % Exchange (controls the size of the domain walls)
                 dF(:,:) = dF(:,:) + F.F(:,:)*transpose(L)*10;
                 % Zeman
                 % dF(:,:) = dF(:,:) + repmat([1;0],1,prod(F.n));
                 % Demagnetization field (controls whether domains form)
-                dF(:,:) = dF(:,:) + reshape( F.get_micromagnetics_demagnetization('2D-log'), [F.v, prod(F.n)])*20;
+                dF(:,:) = dF(:,:) + reshape( F.get_micromagnetics_demagnetization('2D-log,pbc'), [F.v, prod(F.n)])*20;
                 % Langevin noise
                 % dF(:,:) = normrnd(0,10,[1,numel(F.F)]);
                 % flatten
@@ -810,7 +813,7 @@ classdef am_field < matlab.mixin.Copyable
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0
                             ediff(i) = norm(UP(:)-F.F(:))/dt; title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
-                            subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect;
+                            subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
                             subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
                             if ediff(i)<F.tiny; break; end
                         end
@@ -829,7 +832,7 @@ classdef am_field < matlab.mixin.Copyable
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0
                             ediff(i) = norm(UP(:)-F.F(:))/dt; title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
-                            subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect;
+                            subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
                             subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
                             if ediff(i)<F.tiny; break; end
                         end
@@ -1446,15 +1449,20 @@ classdef am_field < matlab.mixin.Copyable
     
     methods % micromagnetics
         
-        function [H]     = get_micromagnetics_crystalline_potential(F,type,ex_)
+        function [H]     = get_micromagnetics_crystalline_potential(F,ex_,potential)
             % mask
             if nargin < 3 || isempty(ex_); ex_ = true(1,prod(F.n)); end
             % allocate
             H = zeros([F.v,sum(ex_(:))]);
             % build
-            switch type
+            switch potential{1}
                 case {'U(1)','mexican-hat'}
                     % U = - 2 * (m_x^2 + m_y^2) + (m_x^2 + m_y^2)^2 = 2 |r|^2 + |r|^4  ,  minimum at |r| = 1
+                    for i = 1:F.v
+                        H(i,:) = H(i,:) + ( -4*F.F(i,ex_) + F.F(i,ex_).^3 + F.F(i,ex_).*sum(F.F([1:F.v]~=i,ex_).^2,1) );
+                    end
+                case {'sin'}
+                    % U = - 2 * (m_x^2 + m_y^2) + (m_x^2 + m_y^2)^2 = 2 |r|^2 + |r|^4  ,  minimum at |r| = 1 with radial 
                     for i = 1:F.v
                         H(i,:) = H(i,:) + ( -4*F.F(i,ex_) + F.F(i,ex_).^3 + F.F(i,ex_).*sum(F.F([1:F.v]~=i,ex_).^2,1) );
                     end
@@ -1494,6 +1502,12 @@ classdef am_field < matlab.mixin.Copyable
         end
         
         function [S]     = get_micromagnetics_demagnetization_auxiliary_field(F,type)
+            % apply periodic boundary conditions
+            if contains(type,'pbc')
+                ispbc = true; type = strrep(type,'pbc',''); type = strrep(type,',','');
+            else
+                ispbc = false;
+            end
             % select type of potential
             switch type
                 case '2D-log'; f_ = @(r) f_2D_log(r);
@@ -1503,13 +1517,20 @@ classdef am_field < matlab.mixin.Copyable
             end
             % setup auxiliary S transform
             S = am_field.define(2*F.n,2*F.n,F.s,F.v); S.R = S.R - floor(S.n(:)/2);
-            % define S (PBC accounting for periodic images is not implemented yet)
-            S.F = zeros([2,S.n]); Delta = S.n(:)./S.a(:); 
-            for m = [1:2]; for i = [-1,+1]; for j = [-1,+1]
-                    S.F(m,:) = S.F(m,:) + i.*j .* f_(circshift(S.R(:,:),m,1) + [i;j].*Delta/2 )/(4*pi);
-                end; end
+            % initialize conditions for periodic images (sum over supercell first nearest neighbors only)
+            if ~ispbc; B = zeros(F.v,1); else
+            [B{1:S.d}] = ndgrid([-3:3]); B=reshape(permute(cat(3,B{:}),[3,1,2]),2,[]); 
             end
+            % initialize parameters for surface integral
+            [A{1:S.d}] = ndgrid([-1,1]); A=reshape(permute(cat(3,A{:}),[3,1,2]),2,[]); 
+            % define S (PBC accounting for periodic images is not implemented yet)
+            S.F = zeros([2,S.n]); Delta = S.n(:)./S.a(:);
+            % perform surface integration
+            for m = [1:F.v]; for i = 1:size(A,2); for j = 1:size(B,2)
+                S.F(m,:) = S.F(m,:) + prod(A(:,i)) .* f_(circshift(S.R(:,:),m,1) + A(:,i).*Delta/2 + B(:,j).*circshift(F.n(:),m,1) )/(4*pi);
+            end; end; end
             
+    
             function f = f_2D_log(r)
                 n = am_lib.normc_(r(:,:));
                 f = -(2*r(2,:).*atan(r(1,:)./r(2,:)) + r(1,:).*(-2+log(n)));
@@ -1628,7 +1649,7 @@ classdef am_field < matlab.mixin.Copyable
                 case {'square'}
                     % (center, width)
                     [c,w]=deal(varargin{:});
-                    if F.d==1; ex_ = true(1,F.n); else; ex_ = true(F.n); end
+                    if F.d==1; ex_ = true([1,F.n]); else; ex_ = true(F.n); end
                     for i = 1:F.d
                         ex_(ex_) = F.R(i,ex_)<(c(i)+w(i)) & F.R(i,ex_)>(c(i)-w(i));
                     end
@@ -1650,6 +1671,14 @@ classdef am_field < matlab.mixin.Copyable
                     % (normal, center, width) slab
                     [n,c,w]=deal(varargin{:});
                     ex_ = abs(sum(F.R(:,:).*n(:) - c(:).*n(:),1))./norm(n) < w;
+                case {'edge'}
+                    % (width) edge points
+                    [w]=deal(varargin{:});
+                    ex_ = false([1,F.n]); n = cumprod([1,F.n]);
+                    for i = 1:F.d
+                    ex_(:,:) = ex_(:,:) | any(F.R(i,:)==F.R(i,1:n(i):w*n(i)).',1);
+                    ex_(:,:) = ex_(:,:) | any(F.R(i,:)==F.R(i,end-w*n(i)+1:n(i):end).',1);
+                    end
                 case {'halfspace'}
                     % (edge)
                     [e]=deal(varargin{:});
@@ -1770,11 +1799,20 @@ classdef am_field < matlab.mixin.Copyable
         end
 
         function [C]     = get_curl(F)
-            if any([F.v,F.d]~=3); error('curl is not well defined when F.d = F.v ~= 3'); end
-            C = cat(1, F.J(3,2,:,:,:)-F.J(2,3,:,:,:), ...
-                       F.J(1,3,:,:,:)-F.J(3,1,:,:,:), ...
-                       F.J(2,1,:,:,:)-F.J(1,2,:,:,:));
-            C = permute(C,[1,3,4,5,6,7,8,2]);
+            % get jacobian
+            if isempty(F.J) F.J = F.get_jacobian(); end
+            % compute curl
+            if    all([F.v,F.d]==3)
+                C = cat(1, F.J(3,2,:,:,:)-F.J(2,3,:,:,:), ...
+                           F.J(1,3,:,:,:)-F.J(3,1,:,:,:), ...
+                           F.J(2,1,:,:,:)-F.J(1,2,:,:,:));
+                C = permute(C,[1,3,4,5,6,7,8,2]);
+            elseif all([F.v,F.d]==2)
+                C = F.J(2,1,:,:,:)-F.J(1,2,:,:,:);
+                C = permute(C,[1,3,4,5,6,7,8,2]);
+            else
+                error('curl is not well defined when F.d = F.v ~= 3 or 2');
+            end
         end
         
         function [Q]     = get_topological_charge(F)
@@ -1786,7 +1824,7 @@ classdef am_field < matlab.mixin.Copyable
                     Q = cross(F.J(:,1,:,:,:),F.J(:,2,:,:,:),1); 
                     Q = dot( F.F, permute(Q,[1,3,4,5,2]), 1);
                 case 2
-                    Q = cross(N.J(:,1,:,:),N.J(:,2,:,:),1); 
+                    Q = cross( padarray(N.J(:,1,:,:),1,0,'post') , padarray(N.J(:,2,:,:),1,0,'post'),1); 
                     Q = permute(Q(3,:,:,:),[1,3,4,2]);
                 otherwise
                     error('ERROR [get_topological_charge]: invalid dimension.');
