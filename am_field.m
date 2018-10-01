@@ -14,23 +14,19 @@ classdef am_field < matlab.mixin.Copyable
         a = []; % lattice/grid spacing             3D: [a(1),a(2),a(3)]     2D: [n(1),n(2)] 
         R = []; % coordinates                          [  x , y , z ] , [ r , th , z ] , [  r , phi , chi ]
         F = []; % field
-                % vector field
+                % vector field ( F.v , F.n )
                 %     [ (             F(x)             )                 ]
                 %     [ (             F(y)             ) , x , y , z , t ]
                 %     [ (             F(z)             )                 ]
                 % scalar field
                 %     [ (               1              ) , x , y , z , t ]
-        J = []; % jacobian
-                % J = jacobian (for vector field) [3,3,n(1),n(2),n(3)]
+        J = []; % jacobian ( F.v , F.d , F.n )
+                % J = jacobian (for vector field)
                 %     [ ( dF(x)/dx  dF(x)/dy  dF(x)/dz )              ]
                 %     [ ( dF(y)/dx  dF(y)/dy  dF(y)/dz ) , x , y , z  ]
                 %     [ ( dF(z)/dx  dF(z)/dy  dF(z)/dz )              ]
-                % J = jacobian (for scalar field) [3,3,n(1),n(2),n(3)]
-                %     [ (  dF/dx        0        0     )              ]
-                %     [ (     0       dF/dy      0     ) , x , y , z  ]
-                %     [ (     0         0      dF/dz   )              ]
-        H = []; % hessian
-                % H = jacobian (for scalar field) [3,3,n(1),n(2),n(3)]
+        H = []; % hessian ( F.d , F.d , F.n )
+                % H = jacobian (for scalar field)
                 %     [ ( d2F/dxdx  d2F/dxdy  d2F/dxdz )              ]
                 %     [ ( d2F/dydx  d2F/dydy  d2F/dydz ) , x , y , z  ]
                 %     [ ( d2F/dzdx  d2F/dzdy  d2F/dzdz )              ]
@@ -816,7 +812,7 @@ classdef am_field < matlab.mixin.Copyable
                     % add dirichlet boundary conditions
                     if ~isempty(dirichlet)
                         % make the b.c. robust by removing coupling to everything else
-                        O(dirichlet(1,:),:) = []; V(dirichlet(1,:),:) = [];
+%                         O(dirichlet(1,:),:) = []; V(dirichlet(1,:),:) = [];
                         % add boundary conditions
                         Op = speye(n); Op = Op(dirichlet(1,:),:); Vp = dirichlet(2,:).';
                         % augment
@@ -1308,34 +1304,34 @@ classdef am_field < matlab.mixin.Copyable
             sl2_= @(R,i,j) squeeze(R(i,j,:,:,:,:));
             
             mm = am_lib.minmax_(F.J(:)); xyz=['x','y','z']; set(gcf,'color','w');
-            for j = 1:3
-            for i = 1:3
-                n=j+3*(i-1);
-                ax{n} = subplot(3,3,n); h = surf(sl_(F.R,1), sl_(F.R,2), sl2_(F.J,i,j) ); 
+            for j = 1:F.d
+            for i = 1:F.v
+                n=j+F.v*(i-1);
+                ax{n} = subplot(F.v,F.d,n); h = surf(sl_(F.R,1), sl_(F.R,2), sl2_(F.J,i,j) ); 
                 h.EdgeColor= 'none'; h.LineWidth = 1; view([0 0 1]); daspect([1 1 1]); axis tight;
-                title(sprintf('d_%sf_%s',xyz(i),xyz(j))); caxis(mm);
+                title(sprintf('d_%sf_%s',xyz(j),xyz(i))); caxis(mm); pbaspect([1 1 1]);
             end
             end
             linkaxes([ax{:}],'xy');
-            % colorbar('location','Manual', 'position', [0.93 0.1 0.02 0.81]);
         end
 
         function [ax]= plot_hessian(F)
+            
+            if isempty(F.H); F.H = F.get_hessian(); end
             
             sl_ = @(R,i)   squeeze(R(i,:,:,:,:,:));
             sl2_= @(R,i,j) squeeze(R(i,j,:,:,:,:));
             
             mm = am_lib.minmax_(F.H(:)); xyz=['x','y','z']; set(gcf,'color','w');
-            for j = 1:3
-            for i = 1:3
-                n=j+3*(i-1);
-                ax{n} = subplot(3,3,n); h = surf(sl_(F.R,1), sl_(F.R,2), sl2_(F.H,i,j) ); 
+            for j = 1:F.d
+            for i = 1:F.d
+                n=j+F.d*(i-1);
+                ax{n} = subplot(F.d,F.d,n); h = surf(sl_(F.R,1), sl_(F.R,2), sl2_(F.H,j,i) ); 
                 h.EdgeColor= 'none'; h.LineWidth = 1; view([0 0 1]); daspect([1 1 1]); axis tight;
-                title(sprintf('d_%s_%sf',xyz(i),xyz(j))); caxis(mm);
+                title(sprintf('d_%s_%s f',xyz(j),xyz(i))); caxis(mm); pbaspect([1 1 1]);
             end
             end
             linkaxes([ax{:}],'xy');
-            % colorbar('location','Manual', 'position', [0.93 0.1 0.02 0.81]);
         end
         
         function [h] = plot_divergence(F)
@@ -1603,67 +1599,78 @@ classdef am_field < matlab.mixin.Copyable
         end
 
         function [J] = get_jacobian(F)
-            if isempty(F.v); F.v = F.get_field_dimension(); end
+            % J = jacobian ( F.v , F.d , F.n )
+            %     [ ( dF(x)/dx  dF(x)/dy  dF(x)/dz )              ]
+            %     [ ( dF(y)/dx  dF(y)/dy  dF(y)/dz ) , x , y , z  ]
+            %     [ ( dF(z)/dx  dF(z)/dy  dF(z)/dz )              ]
+            
             % define matmul which supports sparse matrices
             matmul_ = @(A,B) reshape(A*reshape(B,size(B,1),[]),size(A,1),size(B,2),size(B,3),size(B,4),size(B,5));
             % get differentiation matrices
             Q = F.get_differentiation_matrices();
             % allocate space
-            J = zeros([3,3,F.n]);
+            J = zeros([F.v,F.d,F.n]);
             for i = 1:F.d
                 D = Q{i}(:,:,1); % keep only first derivative
                 if strcmp(F.s{i},'cdiff'); D=sparse(D); end % speed up finite difference with sparse matrices
                 p = [1:F.d+1]; p([1,i+1])=p([i+1,1]); % permute accordingly
-                if F.v == 1 % scalar
-                    J(i,i,:,:,:)     = permute(matmul_(D,permute(F.F,p)),p);
-                else % vector
-                    T                = permute(matmul_(D,permute(F.F,p)),p);
-                    J(i,1:F.d,:,:,:) = reshape(T(1:F.d,:),size(J(i,1:F.d,:,:,:)));
-                end
+                J(1:F.v,i,:,:,:) = permute(matmul_(D,permute(F.F,p)),p);
             end
             % undefine boundaries
-            if F.d>0 && strcmp(F.s{1},'cdiff'); J(1,1,[1,end],:,:)=0; end
-            if F.d>1 && strcmp(F.s{2},'cdiff'); J(2,2,:,[1,end],:)=0; end
-            if F.d>2 && strcmp(F.s{3},'cdiff'); J(3,3,:,:,[1,end])=0; end
+            if F.d>0 && strcmp(F.s{1},'cdiff'); J(:,1,[1,end],:,:)=0; end
+            if F.d>1 && strcmp(F.s{2},'cdiff'); J(:,2,:,[1,end],:)=0; end
+            if F.d>2 && strcmp(F.s{3},'cdiff'); J(:,3,:,:,[1,end])=0; end
         end
 
         function [H] = get_hessian(F)
-            if F.v~=1; error('hessian is only defined for scalar fields'); end
+            % hessian ( F.d , F.d , F.n )
+            % H = jacobian (for scalar field)
+            %     [ ( d2F/dxdx  d2F/dxdy  d2F/dxdz )              ]
+            %     [ ( d2F/dydx  d2F/dydy  d2F/dydz ) , x , y , z  ]
+            %     [ ( d2F/dzdx  d2F/dzdy  d2F/dzdz )              ]
+            
+            % checks
+            if F.v~=1
+                error('hessian is only defined for scalar fields'); 
+            end
+            if isempty(F.J)
+                F.J = F.get_jacobian(); 
+            end
             % define matmul which supports sparse matrices
             matmul_ = @(A,B) reshape(A*reshape(B,size(B,1),[]),size(A,1),size(B,2),size(B,3),size(B,4),size(B,5));
             % get differentiation matrices
             Q = F.get_differentiation_matrices();
             % allocate space
-            H = zeros([3,3,F.n]);
+            H = zeros([F.d,F.d,F.n]);
             for i = 1:F.d % loop over dimensions
                 D = Q{i}(:,:,1); % keep only first derivative
                 if strcmp(F.s{i},'cdiff'); D=sparse(D); end % speed up finite difference with sparse matrices
-                p = [1:F.d+1]; p([1,i+1])=p([i+1,1]); % evaluate hessian from jacobian
-                if F.v == 1 % evaluate derivatives
-                    Ji = am_lib.diag_(F.J); H(i,:,:,:,:) = permute(matmul_(D,permute(Ji,p)),p);
-                else
-                    error('hessian is only defined for scalar fields');
-                end
+                p = [1:F.d+2]; p([1,i+2])=p([i+2,1]); % evaluate hessian from jacobian
+                H(:,i,:,:,:) = permute(matmul_(D,permute(F.J,p)),p);
             end
             % undefine boundaries
-            if F.d>0 && strcmp(F.s{1},'cdiff'); H(1,1,[1,end],:,:)=0; end
-            if F.d>1 && strcmp(F.s{2},'cdiff'); H(2,2,:,[1,end],:)=0; end
-            if F.d>2 && strcmp(F.s{3},'cdiff'); H(3,3,:,:,[1,end])=0; end
+            if F.d>0 && strcmp(F.s{1},'cdiff'); H(:,1,[1,end],:,:)=0; end
+            if F.d>1 && strcmp(F.s{2},'cdiff'); H(:,2,:,[1,end],:)=0; end
+            if F.d>2 && strcmp(F.s{3},'cdiff'); H(:,3,:,:,[1,end])=0; end
         end
         
         function [G] = get_gradient(F)
+            if F.v ~= F.d; error('gradient is not well defined when F.d ~= F.v'); end
             G = am_lib.diag_(F.J);
         end
         
         function [D] = get_divergence(F)
+            if F.v ~= F.d; error('divergence is not well defined when F.d ~= F.v'); end
             D = am_lib.trace_(F.J);
         end
 
         function [L] = get_laplacian(F)
+            if F.v ~= F.d; error('laplacian is not well defined when F.d ~= F.v'); end
             L = am_lib.trace_(F.H);
         end
 
         function [C] = get_curl(F)
+            if any([F.v,F.d]~=3); error('curl is not well defined when F.d = F.v ~= 3'); end
             C = cat(1, F.J(3,2,:,:,:)-F.J(2,3,:,:,:), ...
                        F.J(1,3,:,:,:)-F.J(3,1,:,:,:), ...
                        F.J(2,1,:,:,:)-F.J(1,2,:,:,:));
@@ -1671,12 +1678,8 @@ classdef am_field < matlab.mixin.Copyable
         end
         
         function [Q] = get_topological_charge(F)
-            % copy
-            N = F.copy();
-            % normalize field
-            N.F = N.F./am_lib.normc_(N.F);
-            % recompute jacobian
-            N.J = N.get_jacobian();
+            % copy and normalize field
+            N = F.copy(); N.F = N.F./am_lib.normc_(N.F); N.J = N.get_jacobian();
             % compute charge
             switch F.d
                 case 3
