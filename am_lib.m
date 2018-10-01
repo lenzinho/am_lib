@@ -625,10 +625,8 @@ classdef am_lib
             %     C - matmulp_(A,B)
             %
 
-            import am_lib.sum_
-            
-            C = permute(sum_( permute(A,[1,2,6,3,4,5]) ...
-                           .* permute(B,[6,1,2,5,3,4]), [2,5]),[1,3,4,6,2,5]);
+            C = permute(am_lib.sum_( permute(A,[1,2,6,3,4,5]) ...
+                                  .* permute(B,[6,1,2,5,3,4]), [2,5]),[1,3,4,6,2,5]);
             
             if nargin == 2; applysqueeze = true; end
             if applysqueeze; C = squeeze(C); end
@@ -851,6 +849,7 @@ classdef am_lib
         
         function [A] = sum_(A,n,varargin)
             % sum over dimensions n: sum_(A,[2,3])
+            if nargin == 1; n = 1:ndims(A); end
             for i = 1:numel(n)
                 A = sum(A,n(i),varargin{:});
             end

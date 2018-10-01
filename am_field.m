@@ -63,7 +63,7 @@ classdef am_field < matlab.mixin.Copyable
 
     methods (Static)
         
-        function [F] = define(n,a,s,v) 
+        function [F]     = define(n,a,s,v) 
             % F = define(n,a,s)
             ndims = sum(n~=1); ndiscretes=sum(strcmp(s,'discrete'));
             if numel(s)~=ndims; error('s dimensions mismatch'); end
@@ -74,7 +74,50 @@ classdef am_field < matlab.mixin.Copyable
             F.F = zeros([F.v,F.n]);
         end
         
-        function [F] = demo()
+        function           tests()
+            
+            % list of tests
+            f_ = {test_hessian};
+            
+            % perform tests
+            for i = 1:numel(f_)
+                v = f_{i}();
+                if v<am_field.tiny
+                    fprintf('%3i: passed (%5.5g).\n',i,v); 
+                else
+                    fprintf('%3i: failed (%5.5g).\n',i,v); 
+                end
+            end
+            
+            
+            % library of tests
+            function pass = test_hessian()
+                F = am_field.define([2,2].^[5],[2,2],{'chebyshev','chebyshev'},1);
+                F.F = F.R(1,:,:,:).^2 + F.R(2,:,:,:).^2; F.H = F.get_hessian;
+                pass = am_lib.sum_(abs(am_lib.diag_(F.H)-[2;2]));
+            end
+            
+% NEED TO IMPLEMENT
+%             function pass = test_cdiff()
+%                 F = am_field.define([2,2].^[5],[2,2].^5,{'cdiff','cdiff'},1);
+%                 F.F = F.R(1,:,:,:).^2 + F.R(2,:,:,:).^2; F.H = F.get_hessian;
+%                 pass = am_lib.sum_(abs(am_lib.diag_(F.H)-[2;2]));
+%             end
+%             
+%             function pass = test_pdiff()
+%                 F = am_field.define([2,2].^[5],[2,2].^5,{'pdiff','pdiff'},1);
+%                 F.F = F.R(1,:,:,:).^2 + F.R(2,:,:,:).^2; F.H = F.get_hessian;
+%                 pass = am_lib.sum_(abs(am_lib.diag_(F.H)-[2;2]));
+%             end
+%             
+%             function pass = test_fourier()
+%                 F = am_field.define([2,2].^[5],[1,1],{'fourier','fourier'},1);
+%                 F.F = sin(F.R(1,:,:,:)*2*pi) + cos(F.R(2,:,:,:)*2*pi); F.H = F.get_hessian;
+%                 pass = am_lib.sum_(abs(am_lib.diag_(F.H)-cat(1,(2*pi)^2*sin(F.R(1,:,:,:)*2*pi),(2*pi)^2*cos(F.R(1,:,:,:)*2*pi))));
+%             end
+        end
+        
+        function [F]     = demo()
             
             F   = am_field.define([2,2].^[7,8],[2*pi,2*pi],{'cdiff','fourier'},1);
             F.F = cat(1,sin(F.R(1,:,:,:)), sin(F.R(2,:,:,:))); 
@@ -90,7 +133,7 @@ classdef am_field < matlab.mixin.Copyable
             
         end
 
-        function [F] = demo_biot_savart()
+        function [F]     = demo_biot_savart()
             
             F   = am_field.define([2,2,2].^[5,5,5],[1,1,1],{'chebyshev','chebyshev','chebyshev'},3);
             F.R = get_collocation_points(F);
@@ -116,7 +159,7 @@ classdef am_field < matlab.mixin.Copyable
             
         end
 
-        function [F] = demo_dipole_field()
+        function [F] 	 = demo_dipole_field()
             % calculate the field due to a dipole M at Rp
             clear;clc;
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'cdiff','cdiff'},2); % initialize object
@@ -139,7 +182,7 @@ classdef am_field < matlab.mixin.Copyable
             F.plot_field('F');
         end
         
-        function [F] = demo_dipole_field_convolution_2d()
+        function [F]     = demo_dipole_field_convolution_2d()
             clear;clc; Ref = am_field.demo_dipole_field();
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},2);
 
@@ -192,7 +235,7 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
         
-        function [F] = demo_dipole_field_convolution_3d()
+        function [F]     = demo_dipole_field_convolution_3d()
             
             % clear;clc;
             F = am_field.define([2,2,2].^6,[2,2,2].^6,{'pdiff','pdiff','pdiff'},3); % initialize object
@@ -232,7 +275,7 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
         
-        function [F] = demo_micromagnetics_2d()
+        function [F]     = demo_micromagnetics_2d()
             clear;clc;
             F = am_field.define([2,2].^[6,5],[2,2].^[6,5],{'pdiff','pdiff'},2); % initialize object
             F.F = rand([2,F.n]); F.F = F.F - mean(F.F(:)); % initialize random vector field
@@ -256,13 +299,13 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
 
-        function [F] = demo_hilliard_cahn()
+        function [F]     = demo_hilliard_cahn()
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},1); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
             F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},'runge-kutta',0.03,10000); % solve
         end
         
-        function [F] = demo_qin_pablo()
+        function [F]     = demo_qin_pablo()
             % Cahn-Hilliard Polymer (mean = -0.45: hexagons, mean = 0: lines)
             F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field, lines    (mean = 0)
@@ -271,7 +314,7 @@ classdef am_field < matlab.mixin.Copyable
             %
         end
         
-        function [F] = demo_lifshitz_petrich()
+        function [F]     = demo_lifshitz_petrich()
             % Lifshitz-Petrich x = {eps, alpha, q}; eps* = eps/alpha^2 = eps (for alpha fixed at 1)
             F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field
@@ -279,20 +322,20 @@ classdef am_field < matlab.mixin.Copyable
             %
         end
         
-        function [F] = demo_complex_ginzburg_landau()
+        function [F]     = demo_complex_ginzburg_landau()
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
             F = F.evolve_field({'GLXX',1},'explicit',0.1,1000);
         end
 
-        function [F] = demo_poisson_equation()
+        function [F]     = demo_poisson_equation()
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
             F.F = zeros([1,F.n]);
             rho = am_lib.gauss_(am_lib.normc_(F.R-[30;30])); % put a charge at (30,30)
             F = F.evolve_field('poisson',{-rho},'explicit',0.05,5000);
         end
         
-        function [F] = demo_parallel_plate_capacitor()
+        function [F]     = demo_parallel_plate_capacitor()
             clear;clc;
             
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'cdiff','cdiff'},1);
@@ -306,7 +349,7 @@ classdef am_field < matlab.mixin.Copyable
             F = F.evolve_field({'laplace'},'steady-state',0,0,'dirichlet',dirichlet);
         end
         
-        function [F] = demo_metal_inside_field()
+        function [F]     = demo_metal_inside_field()
             clear;clc
             % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
             F = am_field.define([2,2].^[7,7],[2 2].^7,{'cdiff','pdiff'},1);
@@ -327,7 +370,7 @@ classdef am_field < matlab.mixin.Copyable
             F = F.evolve_field({'laplace'},'steady-state',0,0,'dirichlet',[plates,metal]);
         end
 
-        function [F] = demo_dielectric_inside_field() 
+        function [F]     = demo_dielectric_inside_field() 
             clear;clc
             % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
             F = am_field.define([2,2].^7,[2 2].^7,{'cdiff','pdiff'},1);
@@ -354,7 +397,7 @@ classdef am_field < matlab.mixin.Copyable
             daspect([1 1 1]); axis tight; box on; xticks([]); yticks([]);
         end
 
-        function [F] = demo_dielectric_half_space()
+        function [F]     = demo_dielectric_half_space()
             clear;clc
             % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
             F = am_field.define([2,2].^7,[2,2].^7,{'cdiff','cdiff'},1);
@@ -381,7 +424,7 @@ classdef am_field < matlab.mixin.Copyable
             daspect([1 1 1]); axis tight; box on; xticks([]); yticks([]); 
         end
         
-        function [F] = demo_charge_in_dielectric()
+        function [F]     = demo_charge_in_dielectric()
             clear;clc
             % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
             F = am_field.define([2,2].^6,[2,2].^6,{'cdiff','cdiff'},1); 
@@ -408,7 +451,7 @@ classdef am_field < matlab.mixin.Copyable
         
         % HEAT DIFFUSION IS BROKEN, MOST LIKELY RELATED TO BOUNDARY CONDITIONS
 
-        function [F] = demo_heat_diffusion()
+        function [F]     = demo_heat_diffusion()
 
             clear;clc
             
@@ -425,7 +468,7 @@ classdef am_field < matlab.mixin.Copyable
 
         end
         
-        function [F] = demo_vortex_unbinding()
+        function [F]     = demo_vortex_unbinding()
             % make animation of vortex pair separation
             % m = winding number
             % n = phase offset
@@ -501,7 +544,7 @@ classdef am_field < matlab.mixin.Copyable
  
         end
         
-        function [F] = demo_ising_metropolis_periodic_bc()
+        function [F]     = demo_ising_metropolis_periodic_bc()
             F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
             % F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
             F.F = ones([1,F.n]); % initialize the field
@@ -550,7 +593,7 @@ classdef am_field < matlab.mixin.Copyable
             
         end
 
-        function [F] = demo_ising_metropolis_helical_bc()
+        function [F]     = demo_ising_metropolis_helical_bc()
             %isng model with helical boundary conditions
             clear;clc;
 
@@ -593,7 +636,7 @@ classdef am_field < matlab.mixin.Copyable
             line([1 1]*2/log(1+sqrt(2)),get(gca,'YLim'),'Color','k','linewidth',0.5); % ideal Tc 
         end
 
-        function [F] = demo_nudge_elastic_band()
+        function [F]     = demo_nudge_elastic_band()
             clear;clc;
             % define central-difference mesh between [0,1) 
             F = am_field.define([2,2].^8,[1,1],{'cdiff','cdiff'}); 
@@ -607,7 +650,7 @@ classdef am_field < matlab.mixin.Copyable
             get_minimum_energy_path(F,vi,vf,nnodes,ediff,flag)
         end
 
-        function [F] = demo_gpa()
+        function [F]     = demo_gpa()
             fname = '11_SnO_FS20nm_ADF_lowI30mrad_stack.dm3'; % good
             % fname = '10_SnO_FS10nm_ADF_lowI30mrad_stack.dm3'; % defect
             % fname = '08_SnO_FS10nm_ADF_lowI30mrad_stack.dm3'; % defect
@@ -623,7 +666,7 @@ classdef am_field < matlab.mixin.Copyable
             % am_lib.imagesc_(squeeze(Pr_g{1})) 
         end
 
-        function [F] = load_image(A,dx,dy)
+        function [F]     = load_image(A,dx,dy)
             % load image as scalar field
             if nargin == 1; dx=1;dy=1; end
             switch ndims(A)
@@ -640,14 +683,14 @@ classdef am_field < matlab.mixin.Copyable
 
     methods 
 
-        function [F] = set(F,varargin) % set field properties 
+        function [F]     = set(F,varargin) % set field properties 
             % parse remaining input
             nvs = numel(varargin);
             if ~am_lib.iseven_(nvs); error('{key, value} inputs required'); end; i=1; 
             while true; F.(varargin{i}) = varargin{i+1}; i=i+2; if i>nvs; break; end; end
         end
 
-        function [F] = load_model(F,model)
+        function [F]     = load_model(F,model)
             switch model
                 case 'Mueller'
                     % parameters in Mueller potential
@@ -663,7 +706,7 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
         
-        function [F] = extract_slice(F,i,j)
+        function [F]     = extract_slice(F,i,j)
             % i = dimension extracting
             % j = position along i
             import am_field.*
@@ -693,7 +736,7 @@ classdef am_field < matlab.mixin.Copyable
             end; end
         end
 
-        function [F] = get_derivatives(F)
+        function [F]     = get_derivatives(F)
             F.v = F.get_field_dimension();
             F.J = F.get_jacobian();
             F.Q = F.get_topological_charge();
@@ -705,7 +748,7 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
 
-        function [F] = evolve_field(F,f_,algorithm,dt,M,varargin) % evolve_field(F,{model,x(1),x(2),...},algorithm,dt,M,varargin)
+        function [F]     = evolve_field(F,f_,algorithm,dt,M,varargin) % evolve_field(F,{model,x(1),x(2),...},algorithm,dt,M,varargin)
             % examples
             % F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
@@ -869,7 +912,7 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
 
-        function [F] = get_minimum_energy_path(F,vi,vf,nnodes,ediff,flag)
+        function [F]     = get_minimum_energy_path(F,vi,vf,nnodes,ediff,flag)
             % nudge_elastic_band
             % nnodes = 10; 
             % % starting and ending positions
@@ -966,7 +1009,7 @@ classdef am_field < matlab.mixin.Copyable
             hold on; h = plot3(r(1,:,1),r(2,:,1),ones(size(r(2,:,1)))*1E10,'Marker','o','Color','k');
         end
 
-        function [r] = relax_points(F,r,ediff,flag)
+        function [r]     = relax_points(F,r,ediff,flag)
             % relax the coordinates of r [(x,y),n] points
             
 
@@ -1066,7 +1109,7 @@ classdef am_field < matlab.mixin.Copyable
             hold on; h = plot3(r(1,:,1),r(2,:,1),ones(size(r(2,:,1)))*1E10,'Marker','o','LineStyle','-','Color','k');
         end
         
-        function [F] = simulate_ising_(F,kT,M,algorithm,boundary)
+        function [F]     = simulate_ising_(F,kT,M,algorithm,boundary)
             % 2D ising model
             % F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
             % F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
@@ -1231,7 +1274,7 @@ classdef am_field < matlab.mixin.Copyable
            
         end
         
-        function [h] = plot_field(F,field)
+        function [h]     = plot_field(F,field)
             
             sl_ = @(field,i)   squeeze(F.(field)(i,:,:,:,:,:));
             
@@ -1296,7 +1339,7 @@ classdef am_field < matlab.mixin.Copyable
 
         end
 
-        function [ax]= plot_jacobian(F)
+        function [ax]    = plot_jacobian(F)
             
             if isempty(F.J); F.J = F.get_jacobian(); end
             
@@ -1315,7 +1358,7 @@ classdef am_field < matlab.mixin.Copyable
             linkaxes([ax{:}],'xy');
         end
 
-        function [ax]= plot_hessian(F)
+        function [ax]    = plot_hessian(F)
             
             if isempty(F.H); F.H = F.get_hessian(); end
             
@@ -1334,7 +1377,7 @@ classdef am_field < matlab.mixin.Copyable
             linkaxes([ax{:}],'xy');
         end
         
-        function [h] = plot_divergence(F)
+        function [h]     = plot_divergence(F)
             set(gcf,'color','w');
             
             sl_ = @(R,i) squeeze(R(i,:,:,:,:,:));
@@ -1351,7 +1394,7 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
         
-        function [h,f] = plot_statistical_function(F,varargin)
+        function [h,f]   = plot_statistical_function(F,varargin)
             
             if F.d~=2; error('plot_statistical_function is only implemented for 2d field'); end
             if ~all(contains(F.s,'diff')); error('statistical functions are only implemented for finite differences'); end
@@ -1533,7 +1576,7 @@ classdef am_field < matlab.mixin.Copyable
     
     methods %(Access = protected) % internal stuff
 
-        function [ex_] = define_mask(F,shape,varargin)
+        function [ex_]   = define_mask(F,shape,varargin)
             % clear;clc;
             % F = am_field.define([2,2,2].^[5],[2,2,2].^[5],{'pdiff','pdiff','pdiff'},1);
             % ex_ = F.define_mask('slab',[1;1;1],F.n/2,1); ex_ = reshape(ex_,F.n);
@@ -1574,7 +1617,7 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
         
-        function [R] = get_collocation_points(F)
+        function [R]     = get_collocation_points(F)
             for i = 1:F.d % loop over dimensions
                 n = F.n(1:F.d);
                 switch F.s{i}
@@ -1590,7 +1633,7 @@ classdef am_field < matlab.mixin.Copyable
             R = permute(cat(4,R{:}),[4,1,2,3]);
         end
 
-        function [v] = get_field_dimension(F)
+        function [v]     = get_field_dimension(F)
             if isempty(F.v)
                 v = size(F.F,1); 
             else
@@ -1598,7 +1641,7 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
 
-        function [J] = get_jacobian(F)
+        function [J]     = get_jacobian(F)
             % J = jacobian ( F.v , F.d , F.n )
             %     [ ( dF(x)/dx  dF(x)/dy  dF(x)/dz )              ]
             %     [ ( dF(y)/dx  dF(y)/dy  dF(y)/dz ) , x , y , z  ]
@@ -1622,7 +1665,7 @@ classdef am_field < matlab.mixin.Copyable
             if F.d>2 && strcmp(F.s{3},'cdiff'); J(:,3,:,:,[1,end])=0; end
         end
 
-        function [H] = get_hessian(F)
+        function [H]     = get_hessian(F)
             % hessian ( F.d , F.d , F.n )
             % H = jacobian (for scalar field)
             %     [ ( d2F/dxdx  d2F/dxdy  d2F/dxdz )              ]
@@ -1654,22 +1697,22 @@ classdef am_field < matlab.mixin.Copyable
             if F.d>2 && strcmp(F.s{3},'cdiff'); H(:,3,:,:,[1,end])=0; end
         end
         
-        function [G] = get_gradient(F)
+        function [G]     = get_gradient(F)
             if F.v ~= F.d; error('gradient is not well defined when F.d ~= F.v'); end
             G = am_lib.diag_(F.J);
         end
         
-        function [D] = get_divergence(F)
+        function [D]     = get_divergence(F)
             if F.v ~= F.d; error('divergence is not well defined when F.d ~= F.v'); end
             D = am_lib.trace_(F.J);
         end
 
-        function [L] = get_laplacian(F)
+        function [L]     = get_laplacian(F)
             if F.v ~= F.d; error('laplacian is not well defined when F.d ~= F.v'); end
             L = am_lib.trace_(F.H);
         end
 
-        function [C] = get_curl(F)
+        function [C]     = get_curl(F)
             if any([F.v,F.d]~=3); error('curl is not well defined when F.d = F.v ~= 3'); end
             C = cat(1, F.J(3,2,:,:,:)-F.J(2,3,:,:,:), ...
                        F.J(1,3,:,:,:)-F.J(3,1,:,:,:), ...
@@ -1677,7 +1720,7 @@ classdef am_field < matlab.mixin.Copyable
             C = permute(C,[1,3,4,5,6,7,8,2]);
         end
         
-        function [Q] = get_topological_charge(F)
+        function [Q]     = get_topological_charge(F)
             % copy and normalize field
             N = F.copy(); N.F = N.F./am_lib.normc_(N.F); N.J = N.get_jacobian();
             % compute charge
@@ -1770,7 +1813,7 @@ classdef am_field < matlab.mixin.Copyable
             D = am_field.get_differentiation_matrix_(x);
         end
         
-        function [x,D,w] = chebyshevTr_(n,flag) % roots of Chebyshev T (1st kind) (-1,+1)
+        function [x,D,w] = chebyshevTr_(n,flag) % roots of Chebyshev T (1st kind) (0,+1)
             if nargin<2; flag=''; end
             f_ = @(n) -cos(pi*(2*[1:n]-1)/(2*n)).';
             if contains(flag,'edge')
@@ -1778,13 +1821,14 @@ classdef am_field < matlab.mixin.Copyable
             else
                 x(:,1)=f_(n); 
             end
+            x = (x+1)/2;
             if nargout < 2; return; end
             D = am_field.get_differentiation_matrix_(x); D = cat(3,D,D^2);
             if nargout < 3; return; end
             w(:,1) = am_field.get_integration_weights_(x);
         end
         
-        function [x,D,w] = chebyshevUr_(n,flag) % roots of Chebyshev U (2nd kind) [-1,+1] 
+        function [x,D,w] = chebyshevUr_(n,flag) % roots of Chebyshev U (2nd kind) [0,+1] 
             if nargin<2; flag=''; end
             f_ = @(n) -cos(pi*[1:n]/(n+1)).';
             if contains(flag,'edge')
@@ -1792,6 +1836,7 @@ classdef am_field < matlab.mixin.Copyable
             else
                 x(:,1)=f_(n); 
             end
+            x = (x+1)/2;
             if nargout < 2; return; end
             D = am_field.get_differentiation_matrix_(x); D = cat(3,D,D^2);
             if nargout < 3; return; end
