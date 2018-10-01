@@ -73,16 +73,18 @@ classdef am_field < matlab.mixin.Copyable
             % allocate space
             F.F = zeros([F.v,F.n]);
         end
-        
+
         function           tests()
             
             % list of tests
-            f_ = {test_hessian};
+            f_ = {@()test_hessian_chebyshev, ...
+                  @()test_hessian_fourier, ...
+                  @()test_hessian_pdiff};
             
             % perform tests
             for i = 1:numel(f_)
-                v = f_{i}();
-                if v<am_field.tiny
+                [pass,v] = f_{i}();
+                if pass
                     fprintf('%3i: passed (%5.5g).\n',i,v); 
                 else
                     fprintf('%3i: failed (%5.5g).\n',i,v); 
@@ -91,30 +93,39 @@ classdef am_field < matlab.mixin.Copyable
             
             
             % library of tests
-            function pass = test_hessian()
+            function [pass,v] = test_hessian_chebyshev()
                 F = am_field.define([2,2].^[5],[2,2],{'chebyshev','chebyshev'},1);
                 F.F = F.R(1,:,:,:).^2 + F.R(2,:,:,:).^2; F.H = F.get_hessian;
-                pass = am_lib.sum_(abs(am_lib.diag_(F.H)-[2;2]));
+                v = am_lib.sum_(abs(am_lib.diag_(F.H)-[2;2]))/prod(F.n);
+                pass = v<am_field.tiny;
             end
             
-% NEED TO IMPLEMENT
-%             function pass = test_cdiff()
-%                 F = am_field.define([2,2].^[5],[2,2].^5,{'cdiff','cdiff'},1);
-%                 F.F = F.R(1,:,:,:).^2 + F.R(2,:,:,:).^2; F.H = F.get_hessian;
-%                 pass = am_lib.sum_(abs(am_lib.diag_(F.H)-[2;2]));
-%             end
-%             
+            function [pass,v] = test_hessian_fourier()
+                F = am_field.define([2,2].^[5],[1,1],{'fourier','fourier'},1);
+                F.F = sin(F.R(1,:,:,:)*2*pi) + cos(F.R(2,:,:,:)*2*pi); F.H = F.get_hessian;
+                v = am_lib.sum_(abs( ...
+                            am_lib.diag_(F.H) - cat(1, ...
+                               -(2*pi)^2*sin(F.R(1,:,:,:)*2*pi) , ...
+                               -(2*pi)^2*cos(F.R(2,:,:,:)*2*pi) ) ...
+                        ))/prod(F.n);
+                pass = v<am_field.tiny;
+            end
+
+            function [pass,v] = test_hessian_pdiff()
+                % a pass is less than 1 (does not have spectral accuracy)
+                F = am_field.define([2].^[5],[1],{'pdiff'},1);
+                F.F = sin(F.R(1,:,:,:)*2*pi); F.H = F.get_hessian;
+                v = am_lib.sum_(abs( F.H(:) -  -(2*pi)^2*sin(F.R(:)*2*pi) ))/prod(F.n);
+                pass = v<0.5;
+            end
+            
 %             function pass = test_pdiff()
 %                 F = am_field.define([2,2].^[5],[2,2].^5,{'pdiff','pdiff'},1);
 %                 F.F = F.R(1,:,:,:).^2 + F.R(2,:,:,:).^2; F.H = F.get_hessian;
 %                 pass = am_lib.sum_(abs(am_lib.diag_(F.H)-[2;2]));
 %             end
-%             
-%             function pass = test_fourier()
-%                 F = am_field.define([2,2].^[5],[1,1],{'fourier','fourier'},1);
-%                 F.F = sin(F.R(1,:,:,:)*2*pi) + cos(F.R(2,:,:,:)*2*pi); F.H = F.get_hessian;
-%                 pass = am_lib.sum_(abs(am_lib.diag_(F.H)-cat(1,(2*pi)^2*sin(F.R(1,:,:,:)*2*pi),(2*pi)^2*cos(F.R(1,:,:,:)*2*pi))));
-%             end
+            
+
         end
         
         function [F]     = demo()
@@ -279,7 +290,7 @@ classdef am_field < matlab.mixin.Copyable
             clear;clc;
             F = am_field.define([2,2].^[6,5],[2,2].^[6,5],{'pdiff','pdiff'},2); % initialize object
             F.F = rand([2,F.n]); F.F = F.F - mean(F.F(:)); % initialize random vector field
-            F = F.evolve_field(@(F) micromagnetics_(F),'explicit',1E-3,1000);
+            F = F.evolve_field(@(F) micromagnetics_(F),{'adams-bashforth',1E-3,1000});
 
             function dF = micromagnetics_(F)
                 % get differentiation matrix and allocate space
@@ -296,13 +307,15 @@ classdef am_field < matlab.mixin.Copyable
                 dF(:,:) = dF(:,:) + reshape( F.get_micromagnetics_demagnetization('2D-log'), [F.v, prod(F.n)])*20;
                 % Langevin noise
                 % dF(:,:) = normrnd(0,10,[1,numel(F.F)]);
+                % flatten
+                dF = dF(:);
             end
         end
 
         function [F]     = demo_hilliard_cahn()
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},1); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
-            F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},'runge-kutta',0.03,10000); % solve
+            F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},{'runge-kutta',0.03,10000}); % solve
         end
         
         function [F]     = demo_qin_pablo()
@@ -310,22 +323,22 @@ classdef am_field < matlab.mixin.Copyable
             F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field, lines    (mean = 0)
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.455; % initialize field, hexagons (mean = -0.455)
-            F = F.evolve_field({'QP13',@(x)(x^2-1)^2/4,0.5,0.1},'explicit',0.05,10000);
+            F = F.evolve_field({'QP13',@(x)(x^2-1)^2/4,0.5,0.1},{'explicit',0.05,10000});
             %
         end
         
         function [F]     = demo_lifshitz_petrich()
-            % Lifshitz-Petrich x = {eps, alpha, q}; eps* = eps/alpha^2 = eps (for alpha fixed at 1)
+            % Lifshitz-Petrich x = {eps, c, alpha, q}; eps* = eps/alpha^2 = eps (for alpha fixed at 1)
             F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field
-            F = F.evolve_field({'LP97',2,1,2*cos(pi/12)},'explicit',0.05,10000);
+            F = F.evolve_field({'LP97',2,1,2*cos(pi/12)},{'explicit',0.05,10000});
             %
         end
         
         function [F]     = demo_complex_ginzburg_landau()
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-            F = F.evolve_field({'GLXX',1},'explicit',0.1,1000);
+            F = F.evolve_field({'GLXX',1},{'explicit',0.1,1000});
         end
 
         function [F]     = demo_poisson_equation()
@@ -449,13 +462,11 @@ classdef am_field < matlab.mixin.Copyable
             plot(abs(diff(squeeze(F.F(1,end/2,:)))))
         end
         
-        % HEAT DIFFUSION IS BROKEN, MOST LIKELY RELATED TO BOUNDARY CONDITIONS
-
         function [F]     = demo_heat_diffusion()
 
             clear;clc
             
-            F = am_field.define([2].^[9],1,{'chebyshev'},1);
+            F = am_field.define([2].^[9],5,{'chebyshev'},1);
             % create boundary conditions
             dirichlet = [];
             dirichlet = [dirichlet;[1,10]];
@@ -464,7 +475,7 @@ classdef am_field < matlab.mixin.Copyable
             neumann   = [neumann;[F.n,0]];
             neumann   = neumann.';
 
-            F = F.evolve_field({'dissipative_diffusion',8,5},'steady-state',0,0,'dirichlet',dirichlet,'neumann',neumann);
+            F = F.evolve_field({'dissipative_diffusion',8,5},{'steady-state'},'dirichlet',dirichlet,'neumann',neumann);
 
         end
         
@@ -748,7 +759,7 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
 
-        function [F]     = evolve_field(F,f_,algorithm,dt,M,varargin) % evolve_field(F,{model,x(1),x(2),...},algorithm,dt,M,varargin)
+        function [F]     = evolve_field(F,f_,algorithm,varargin) % evolve_field(F,{model,x(1),x(2),...},algorithm,dt,M,varargin)
             % examples
             % F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
@@ -770,6 +781,7 @@ classdef am_field < matlab.mixin.Copyable
             neumann   = p.Results.neumann;   %   neumann( (index, value), n)
             
             % setup model
+            [algorithm,dt,M] = deal(algorithm{:});
             if iscell(f_)
                 switch algorithm
                     case {'explicit','crank-nicolson','adams-bashforth','runge-kutta'}
@@ -781,11 +793,14 @@ classdef am_field < matlab.mixin.Copyable
                 end
             end
             
+            % get gradient
+            [~,~,G] = F.get_flattened_differentiation_matrices();
+            
             switch algorithm
                 % explicit algorithms
                 case 'explicit' % explicit
                     for i = [1:M]
-                        UP = F.F(:,:); F.F(:,:) = F.F(:,:) + dt*f_(F);
+                        UP = F.F(:); F.F(:) = F.F(:) + dt*f_(F);
                         % b.c.
                         if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
                         if ~isempty(neumann); error('not yet implemented'); end
@@ -799,16 +814,17 @@ classdef am_field < matlab.mixin.Copyable
                         end
                     end
                 case 'adams-bashforth' % explicit
+                    k = zeros([F.v*prod(F.n),5]);
                     for i = [1:M]
-                        UP = F.F(:,:); f(:,:,1) = f_(F);
+                        UP = F.F(:); k(:,1) = f_(F);
                         switch i        
-                            case 1; F.F(:,:) = F.F(:,:) + dt*sum(f(:,:,1),3);
-                            case 2; F.F(:,:) = F.F(:,:) + dt*sum(f(:,:,1:2).*cat(3,3/2,-1/2),3);
-                            case 3; F.F(:,:) = F.F(:,:) + dt*sum(f(:,:,1:3).*cat(3,23/12,-4/3,5/12),3);
-                            case 4; F.F(:,:) = F.F(:,:) + dt*sum(f(:,:,1:4).*cat(3,55/24,-59/24,37/24,-3/8),3);
-                         otherwise; F.F(:,:) = F.F(:,:) + dt*sum(f(:,:,1:5).*cat(3,1901/720,-1387/360,109/30,-637/360,251/720),3);
+                            case 1; F.F(:) = F.F(:) + dt*sum(k(:,1),2);
+                            case 2; F.F(:) = F.F(:) + dt*sum(k(:,1:2).*cat(2,3/2,-1/2),2);
+                            case 3; F.F(:) = F.F(:) + dt*sum(k(:,1:3).*cat(2,23/12,-4/3,5/12),2);
+                            case 4; F.F(:) = F.F(:) + dt*sum(k(:,1:4).*cat(2,55/24,-59/24,37/24,-3/8),2);
+                         otherwise; F.F(:) = F.F(:) + dt*sum(k(:,1:5).*cat(2,1901/720,-1387/360,109/30,-637/360,251/720),2);
                         end
-                        f = circshift(f,[0,0,1]);
+                        k = circshift(k,[0,1]);
                         % b.c.
                         if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
                         if ~isempty(neumann); error('not yet implemented'); end
@@ -823,14 +839,14 @@ classdef am_field < matlab.mixin.Copyable
                     end
                 case 'runge-kutta' % explicit (LHS must not have an explicit time dependence!)
                     % create an auxiliary dummy field
-                    A = F.copy(); k = zeros([F.v,prod(F.n),4]); 
+                    A = F.copy(); k = zeros([F.v*prod(F.n),4]); 
                     for i = [1:M]
-                        UP = F.F(:,:);
-                        A.F = F.F(:,:);            k(:,:,1) = dt*f_(A);
-                        A.F = F.F(:,:)+k(:,:,1)/2; k(:,:,2) = dt*f_(A);
-                        A.F = F.F(:,:)+k(:,:,2)/2; k(:,:,3) = dt*f_(A);
-                        A.F = F.F(:,:)+k(:,:,3);   k(:,:,4) = dt*f_(A);
-                        F.F(:,:) = F.F(:,:)+sum(k.*(cat(3,1,2,2,1)./6),3);
+                        UP = F.F(:);
+                        A.F(:) = F.F(:);          k(:,1) = dt*f_(A);
+                        A.F(:) = F.F(:)+k(:,1)/2; k(:,2) = dt*f_(A);
+                        A.F(:) = F.F(:)+k(:,2)/2; k(:,3) = dt*f_(A);
+                        A.F(:) = F.F(:)+k(:,3);   k(:,4) = dt*f_(A);
+                        F.F(:) = F.F(:)+sum(k.*(cat(2,1,2,2,1)./6),2);
                         % b.c.
                         if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
                         if ~isempty(neumann); error('not yet implemented'); end
@@ -851,7 +867,7 @@ classdef am_field < matlab.mixin.Copyable
                     if F.v>1; error('currently only implemented for scalar potentials'); end
     
                     % initialize system of equations
-                    n = prod(F.n); V = zeros(n,1); O = f_(F); [~,~,G] = F.get_flattened_differentiation_matrices();
+                    n = prod(F.n); V = zeros(n,1); O = f_(F);
                     % add dirichlet boundary conditions
                     if ~isempty(dirichlet)
                         % make the b.c. robust by removing coupling to everything else
@@ -1497,73 +1513,77 @@ classdef am_field < matlab.mixin.Copyable
             % equations of the form F(n+1) = (1 - dt*LHS)\F(n)
             %                       LHS * F(n+1) = ( F(n+1) - F(n) ) / dt
             %                       i.e., LHS has a factor of F(n+1) removed
-            is_explicit = strcmp(algorithm,'explicit');
+            if iscell(algorithm)
+                is_explicit = strcmp(algorithm{1},'explicit');
+            else
+                is_explicit = strcmp(algorithm   ,'explicit');
+            end
             
             % Get flattened divergence, laplacian, gradient operators            
             [D,L,G] = F.get_flattened_differentiation_matrices(); N=prod(F.n); I = speye(N); 
-                
+  
             % Build model
             switch model{1}
                 case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
                     OP = model{2}*I - (L+I)^2 + model{3}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
-                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) ); nargs=2;
-                    else            f_ = @(F) transpose( OP          ); nargs=2;
+                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=2;
+                    else            f_ = @(F) ( OP          ); nargs=2;
                     end
                 case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {eps, c, alpha, q}
                     OP = I*model{2} - model{3}*(L+I)^2*(L + I*model{4}.^2)^2 + model{5}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
-                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) ); nargs=4;
-                    else            f_ = @(F) transpose( OP          ); nargs=4;
+                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=4;
+                    else            f_ = @(F) ( OP          ); nargs=4;
                     end
                 case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002; Arason & Tang PRL 1998)
                     OP = I*(1-1i*model{2}) + L - spdiags((1-1i*model{2})*abs(F.F(:)).^2,0,N,N);
-                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) ); nargs=1;
-                    else            f_ = @(F) transpose( OP          ); nargs=1;
+                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=1;
+                    else            f_ = @(F) ( OP          ); nargs=1;
                     end
                 case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
                     syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
-                    if is_explicit; f_ = @(F) transpose(   (         model{2}(F.F(:))        + model{3}*L*F.F(:) ) ); nargs=2;
-                    else            f_ = @(F) transpose(   ( spdiags(model{2}(F.F(:)),0,N,N) + model{3}*L        ) ); nargs=2;
+                    if is_explicit; f_ = @(F) (   (         model{2}(F.F(:))        + model{3}*L*F.F(:) ) ); nargs=2;
+                    else            f_ = @(F) (   ( spdiags(model{2}(F.F(:)),0,N,N) + model{3}*L        ) ); nargs=2;
                     end
                 case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
                     syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
-                    if is_explicit; f_ = @(F) transpose( L*(         model{2}(F.F(:))        - model{3}*L*F.F(:) ) ); nargs=2;
-                    else            f_ = @(F) transpose( L*( spdiags(model{2}(F.F(:)),0,N,N) - model{3}*L        ) ); nargs=2;
+                    if is_explicit; f_ = @(F) ( L*(         model{2}(F.F(:))        - model{3}*L*F.F(:) ) ); nargs=2;
+                    else            f_ = @(F) ( L*( spdiags(model{2}(F.F(:)),0,N,N) - model{3}*L        ) ); nargs=2;
                     end
                 case 'QP13' % Qin-Pablo (Soft Matter, 2013, 9, 11467)
                     syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
-                    if is_explicit; f_ = @(F) transpose( L*( model{2}(F.F(:)) - model{3}*L*F.F(:) ) - model{4}*(F.F(:) - mean(F.F(:))) ); nargs=3;
+                    if is_explicit; f_ = @(F) ( L*( model{2}(F.F(:)) - model{3}*L*F.F(:) ) - model{4}*(F.F(:) - mean(F.F(:))) ); nargs=3;
                     else;           error('not yet implemented');
                     end
                 case 'LS91' % Lai-das Sarma (PRL 1991)
                     % NEED TO TEST
-                    if is_explicit; f_ = @(F) transpose( -model{2}*L^2*F.F(:) + model{3}*L*(D*F.F(:))^2 + model{4}*randn(size(F)) ); nargs=2;
+                    if is_explicit; f_ = @(F) ( -model{2}*L^2*F.F(:) + model{3}*L*(D*F.F(:))^2 + model{4}*randn(size(F)) ); nargs=2;
                     else;           error('not yet implemented');
                     end
                 case 'dissipative_diffusion' % Diffusion equation with dissipation, x = { diffusivity, dissipation }
                     OP = ( model{2}*L - model{3}*I );
-                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) ); nargs=2;
-                    else            f_ = @(F) transpose( OP          ); nargs=2;
+                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=2;
+                    else            f_ = @(F) ( OP          ); nargs=2;
                     end
                 case 'poisson' % Poisson equation, x = { charge density }
-                    if is_explicit; f_ = @(F) transpose( L * F.F(:) - model{2}(:) ); nargs=1;
+                    if is_explicit; f_ = @(F) ( L * F.F(:) - model{2}(:) ); nargs=1;
                     else;           error('not yet implemented');
                     end
                 case 'npoisson' % Poisson equation with a spatial-dependent dielectric constant, x = { charge density, dielectric constant }
                     % seems ok
                     GE = cellfun(@(G) spdiags(G*model{3}(:),0,N,N), G, 'UniformOutput', false); 
                     OP = ( spdiags(model{3}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
-                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) - model{2}(:) ); nargs=2;
+                    if is_explicit; f_ = @(F) ( OP * F.F(:) - model{2}(:) ); nargs=2;
                     else;           error('not yet implemented');
                     end
                 case 'laplace' % Laplace equation, x = { }
-                    if is_explicit; f_ = @(F) transpose( L * F.F(:)  ); nargs=0;
-                    else            f_ = @(F) transpose( L           ); nargs=0;
+                    if is_explicit; f_ = @(F) ( L * F.F(:)  ); nargs=0;
+                    else            f_ = @(F) ( L           ); nargs=0;
                     end
                 case 'nlaplace' % Laplace equation with a spatial-dependent dielectric constant, x = { dielectric constant }
                     GE = cellfun(@(G) spdiags(G*model{2}(:),0,N,N), G, 'UniformOutput', false); 
                     OP = ( spdiags(model{2}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
-                    if is_explicit; f_ = @(F) transpose( OP * F.F(:) ); nargs=1;
-                    else            f_ = @(F) transpose( OP          ); nargs=1;
+                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=1;
+                    else            f_ = @(F) ( OP          ); nargs=1;
                     end
                 otherwise
                     error('invalid model')
@@ -1632,6 +1652,29 @@ classdef am_field < matlab.mixin.Copyable
             end
             R = permute(cat(4,R{:}),[4,1,2,3]);
         end
+        
+        function [Q]     = get_differentiation_matrices(F)
+            for i = 1:F.d % loop over dimensions
+                switch F.s{i}
+                    case 'chebyshev'; [~,Q{i}] = am_field.chebyshevUr_(F.n(i),'edge'); 
+                    case 'legendre';  [~,Q{i}] = am_field.legendrer_(F.n(i));
+                    case 'fourier';   [~,Q{i}] = am_field.fourierr_(F.n(i));
+                    case 'cdiff';     [~,Q{i}] = am_field.cdiff_(F.n(i));
+                    case 'pdiff';     [~,Q{i}] = am_field.pdiff_(F.n(i));
+                    otherwise; error('unknown s');
+                end 
+                Q{i} = Q{i}./reshape(F.a(i).^[1:2],1,1,2);
+            end
+            for i = 1:F.d
+                switch F.Y % convert to cylindrical or spherical coordinates
+                    case {'cartesian'} % do nothing
+                    case {'polar'};       if i == 1; elseif i == 2; Q{i}(:,:,1) = Q{i}(:,:,1)./permute(F.R(1,:,:),[2,3,1]); else; error('invalid dimension'); end
+                    case {'cylindrical'}; if i == 1; elseif i == 2; Q{i}(:,:,1) = Q{i}(:,:,1)./permute(F.R(1,:,:),[2,3,1]); elseif i == 3; else; error('invalid dimension'); end
+                    case {'spherical'};   if i == 1; elseif i == 2; Q{i}(:,:,1) = Q{i}(:,:,1)./permute(F.R(1,:,:),[2,3,1]); elseif i == 3; Q{i}(:,:,1) = Q{i}(:,:,1)./( permute(F.R(1,:,:),[2,3,1]).*sin(permute(F.R(2,:,:),[2,3,1])) ); else; error('invalid dimension'); end
+                    otherwise; error('unknown coordinate type');
+                end
+            end
+        end
 
         function [v]     = get_field_dimension(F)
             if isempty(F.v)
@@ -1659,10 +1702,6 @@ classdef am_field < matlab.mixin.Copyable
                 p = [1:F.d+1]; p([1,i+1])=p([i+1,1]); % permute accordingly
                 J(1:F.v,i,:,:,:) = permute(matmul_(D,permute(F.F,p)),p);
             end
-            % undefine boundaries
-            if F.d>0 && strcmp(F.s{1},'cdiff'); J(:,1,[1,end],:,:)=0; end
-            if F.d>1 && strcmp(F.s{2},'cdiff'); J(:,2,:,[1,end],:)=0; end
-            if F.d>2 && strcmp(F.s{3},'cdiff'); J(:,3,:,:,[1,end])=0; end
         end
 
         function [H]     = get_hessian(F)
@@ -1691,10 +1730,6 @@ classdef am_field < matlab.mixin.Copyable
                 p = [1:F.d+2]; p([1,i+2])=p([i+2,1]); % evaluate hessian from jacobian
                 H(:,i,:,:,:) = permute(matmul_(D,permute(F.J,p)),p);
             end
-            % undefine boundaries
-            if F.d>0 && strcmp(F.s{1},'cdiff'); H(:,1,[1,end],:,:)=0; end
-            if F.d>1 && strcmp(F.s{2},'cdiff'); H(:,2,:,[1,end],:)=0; end
-            if F.d>2 && strcmp(F.s{3},'cdiff'); H(:,3,:,:,[1,end])=0; end
         end
         
         function [G]     = get_gradient(F)
@@ -1767,29 +1802,6 @@ classdef am_field < matlab.mixin.Copyable
                 D = F.D_; L = F.L_; G = F.G_;
             end
             
-        end
-        
-        function [Q]     = get_differentiation_matrices(F)
-            for i = 1:F.d % loop over dimensions
-                switch F.s{i}
-                    case 'chebyshev'; [~,Q{i}] = am_field.chebyshevUr_(F.n(i),'edge'); 
-                    case 'legendre';  [~,Q{i}] = am_field.legendrer_(F.n(i));
-                    case 'fourier';   [~,Q{i}] = am_field.fourierr_(F.n(i));
-                    case 'cdiff';     [~,Q{i}] = am_field.cdiff_(F.n(i));
-                    case 'pdiff';     [~,Q{i}] = am_field.pdiff_(F.n(i));
-                    otherwise; error('unknown s');
-                end 
-                Q{i} = Q{i}./reshape(F.a(i).^[1:2],1,1,2);
-            end
-            for i = 1:F.d
-                switch F.Y % convert to cylindrical or spherical coordinates
-                    case {'cartesian'} % do nothing
-                    case {'polar'};       if i == 1; elseif i == 2; Q{i}(:,:,1) = Q{i}(:,:,1)./permute(F.R(1,:,:),[2,3,1]); else; error('invalid dimension'); end
-                    case {'cylindrical'}; if i == 1; elseif i == 2; Q{i}(:,:,1) = Q{i}(:,:,1)./permute(F.R(1,:,:),[2,3,1]); elseif i == 3; else; error('invalid dimension'); end
-                    case {'spherical'};   if i == 1; elseif i == 2; Q{i}(:,:,1) = Q{i}(:,:,1)./permute(F.R(1,:,:),[2,3,1]); elseif i == 3; Q{i}(:,:,1) = Q{i}(:,:,1)./( permute(F.R(1,:,:),[2,3,1]).*sin(permute(F.R(2,:,:),[2,3,1])) ); else; error('invalid dimension'); end
-                    otherwise; error('unknown coordinate type');
-                end
-            end
         end
         
     end
@@ -1917,7 +1929,6 @@ classdef am_field < matlab.mixin.Copyable
                 re = [0,0.5*(-1).^(1:n-1).*cot((1:n-1)*pi/n)]; 
                 im = (-1).^(1:n)*sqrt(-1)/2;
                 D  = real(2*pi*toeplitz(re+im,-re+im)); 
-                % D = D./(2*pi); % use this if x = [0,1); if x = [0,2pi) comment it out.
             end
         end
         
@@ -1928,7 +1939,7 @@ classdef am_field < matlab.mixin.Copyable
             D = zeros(n,n,2);
             for i = 1:2
                 [c,v] = am_field.get_differentiation_weights_([-1,0,1],i); nvs = numel(v); m = ceil(nvs/2);
-                D(:,:,i) = toeplitz([c(m:-1:1),zeros(1,n-m)],[c(m:end),zeros(1,n-m)])*n.^(i);
+                D(:,:,i) = toeplitz([c(m:-1:1),zeros(1,n-m)],[c(m:end),zeros(1,n-m)])*(-n).^(i);
             end
             if nargout < 3; return; end
             w(1:n,1) = 1;
@@ -1941,7 +1952,7 @@ classdef am_field < matlab.mixin.Copyable
             D = zeros(n,n,2);
             for i = 1:2
                 [c,v] = am_field.get_differentiation_weights_([-1,0,1],i); nvs = numel(v); m = ceil(nvs/2);
-                D(:,:,i) = am_lib.circulant_(circshift([c,zeros(1,n-nvs)],m-nvs))*n.^(i);
+                D(:,:,i) = am_lib.circulant_(circshift([c,zeros(1,n-nvs)],m-nvs))*(-n).^(i);
             end
             if nargout < 3; return; end
             w(1:n,1) = 1;
