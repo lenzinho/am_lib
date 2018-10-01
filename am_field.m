@@ -287,18 +287,19 @@ classdef am_field < matlab.mixin.Copyable
         end
         
         function [F]     = demo_micromagnetics_2d()
-            clear;clc;
+            clear;clc;clf;
             F = am_field.define([2,2].^[6,5],[2,2].^[6,5],{'pdiff','pdiff'},2); % initialize object
             F.F = rand([2,F.n]); F.F = F.F - mean(F.F(:)); % initialize random vector field
-            F = F.evolve_field(@(F) micromagnetics_(F),{'adams-bashforth',1E-3,1000});
+            % F = F.evolve_field(@(F) micromagnetics_(F),{'adams-bashforth',1E-3,1000});
+            F = F.evolve_field(@(F) micromagnetics_(F),{'VE',0.010,1000});
 
             function dF = micromagnetics_(F)
                 % get differentiation matrix and allocate space
                 [~,L,~] = F.get_flattened_differentiation_matrices(); dF = zeros(F.v,prod(F.n));
                 % Crystalline Anistropy
                 ex_ = F.define_mask('slab',[0;1],F.n/2,6);
-                dF(:, ex_) = dF(:, ex_) + F.get_micromagnetics_crystalline_potential('<111>',      ex_)*2;
-                dF(:,~ex_) = dF(:,~ex_) + F.get_micromagnetics_crystalline_potential('dielectric',~ex_)*10;
+                dF(:, ex_) = dF(:, ex_) + F.get_micromagnetics_crystalline_potential('<111>',      ex_);
+                dF(:,~ex_) = dF(:,~ex_) + F.get_micromagnetics_crystalline_potential('dielectric',~ex_)*20;
                 % Exchange (controls the size of the domain walls)
                 dF(:,:) = dF(:,:) + F.F(:,:)*transpose(L)*10;
                 % Zeman
@@ -315,7 +316,7 @@ classdef am_field < matlab.mixin.Copyable
         function [F]     = demo_hilliard_cahn()
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},1); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
-            F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},{'runge-kutta',0.03,10000}); % solve
+            F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},{'VE',0.01,100}); % solve
         end
         
         function [F]     = demo_qin_pablo()
@@ -326,7 +327,7 @@ classdef am_field < matlab.mixin.Copyable
             F = F.evolve_field({'QP13',@(x)(x^2-1)^2/4,0.5,0.1},{'explicit',0.05,10000});
             %
         end
-        
+
         function [F]     = demo_lifshitz_petrich()
             % Lifshitz-Petrich x = {eps, c, alpha, q}; eps* = eps/alpha^2 = eps (for alpha fixed at 1)
             F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'},1);
@@ -338,14 +339,13 @@ classdef am_field < matlab.mixin.Copyable
         function [F]     = demo_complex_ginzburg_landau()
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-            F = F.evolve_field({'GLXX',1},{'explicit',0.1,1000});
+            F = F.evolve_field({'GLXX',1},{'explicit',0.05,1000});
         end
 
         function [F]     = demo_poisson_equation()
-            F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'});
-            F.F = zeros([1,F.n]);
+            F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'},1);
             rho = am_lib.gauss_(am_lib.normc_(F.R-[30;30])); % put a charge at (30,30)
-            F = F.evolve_field('poisson',{-rho},'explicit',0.05,5000);
+            F = F.evolve_field({'poisson',-rho},{'explicit',0.05,5000});
         end
         
         function [F]     = demo_parallel_plate_capacitor()
@@ -780,16 +780,18 @@ classdef am_field < matlab.mixin.Copyable
             dirichlet = p.Results.dirichlet; % dirichlet( (index, value), n)
             neumann   = p.Results.neumann;   %   neumann( (index, value), n)
             
+            
+
             % setup model
             [algorithm,dt,M] = deal(algorithm{:});
             if iscell(f_)
                 switch algorithm
-                    case {'explicit','crank-nicolson','adams-bashforth','runge-kutta'}
+                    case {'E','explicit','VE','variable-explicit','AB','adams-bashforth','RK','runge-kutta'}
                         f_ = F.get_evolution_model(f_,'explicit'); 
-                    case {'implicit','steady-state','jacobi'}
+                    case {'I','implicit','S','steady-state','CN','crank-nicolson'}
                         f_ = F.get_evolution_model(f_,'implicit');
                     otherwise
-                        f_ = F.get_evolution_model(f_,algorithm);
+                        error('invalid algorithm');
                 end
             end
             
@@ -797,8 +799,8 @@ classdef am_field < matlab.mixin.Copyable
             [~,~,G] = F.get_flattened_differentiation_matrices();
             
             switch algorithm
-                % explicit algorithms
-                case 'explicit' % explicit
+                % explicit algorithms (f_ must return a flattened matrix for an explicit method!)
+                case {'E','explicit'} % explicit
                     for i = [1:M]
                         UP = F.F(:); F.F(:) = F.F(:) + dt*f_(F);
                         % b.c.
@@ -807,13 +809,32 @@ classdef am_field < matlab.mixin.Copyable
                         
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0
-                            ediff(i) = norm(UP(:)-F.F(:)); title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                            ediff(i) = norm(UP(:)-F.F(:))/dt; title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
                             subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect;
                             subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
                             if ediff(i)<F.tiny; break; end
                         end
                     end
-                case 'adams-bashforth' % explicit
+                case {'VE','variable-explicit'} % explicit with variable step size
+                    % J. R. Dormand, "Numerical Methods for Differential Equations: A Computational Approach", (2017), p 9.53, eq 5.3.
+                    UP = zeros(F.v*prod(F.n),1); dF = zeros(F.v*prod(F.n),1); tol = dt; dt = 1E-5;
+                    for i = [1:M]
+                        UP(:) = F.F(:); dF(:) = f_(F); F.F(:) = F.F(:) + dt*dF;
+                        % estimate optimal dt for a given tolerence
+                        dt = 0.9*(tol/max(abs(dF(:))));
+                        % b.c.
+                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                        if ~isempty(neumann); error('not yet implemented'); end
+                        
+                        if any(isnan(F.F(:))); warning('NaN'); break; end
+                        if mod(i,round(M/100))==0
+                            ediff(i) = norm(UP(:)-F.F(:))/dt; title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                            subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect;
+                            subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                            if ediff(i)<F.tiny; break; end
+                        end
+                    end
+                case {'AB','adams-bashforth'} % explicit
                     k = zeros([F.v*prod(F.n),5]);
                     for i = [1:M]
                         UP = F.F(:); k(:,1) = f_(F);
@@ -831,13 +852,13 @@ classdef am_field < matlab.mixin.Copyable
 
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0
-                            ediff(i) = norm(UP(:)-F.F(:)); title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                            ediff(i) = norm(UP(:)-F.F(:))/dt; title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
                             subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect;
                             subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
                             if ediff(i)<F.tiny; break; end
                         end
                     end
-                case 'runge-kutta' % explicit (LHS must not have an explicit time dependence!)
+                case {'RK','runge-kutta'} % explicit (LHS must not have an explicit time dependence!)
                     % create an auxiliary dummy field
                     A = F.copy(); k = zeros([F.v*prod(F.n),4]); 
                     for i = [1:M]
@@ -853,7 +874,7 @@ classdef am_field < matlab.mixin.Copyable
 
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0
-                            ediff(i) = norm(UP(:)-F.F(:)); title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                            ediff(i) = norm(UP(:)-F.F(:))/dt; title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
                             subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect;
                             subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
                             if ediff(i)<F.tiny; break; end
@@ -862,7 +883,7 @@ classdef am_field < matlab.mixin.Copyable
                     
                 % implicit algorithms ( NEED TO WORK ON THIS )
                 
-                case 'steady-state' % dF/dt = 0
+                case {'SS','steady-state'} % dF/dt = 0
                     
                     if F.v>1; error('currently only implemented for scalar potentials'); end
     
@@ -888,7 +909,7 @@ classdef am_field < matlab.mixin.Copyable
                     % plot
                     F.plot_field('F');
                     
-                case 'implicit' % more stable
+                case {'I','implicit'} % more stable
                     
                     if F.v>1; error('currently only implemented for scalar potentials'); end
 
@@ -897,7 +918,7 @@ classdef am_field < matlab.mixin.Copyable
                         UP = F.F(:); F.F(:) = (speye(N) - dt*f_(F))\F.F(:);
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0
-                            F.plot_field('F'); ediff = norm(UP(:)-F.F(:));
+                            F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/dt;
                             title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
                             if ediff<F.tiny; break; end
                         end
@@ -905,7 +926,8 @@ classdef am_field < matlab.mixin.Copyable
                         if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
                         if ~isempty(neumann); error('not yet implemented'); end
                     end
-                case 'crank-nicolson'
+                    
+                case {'CN','crank-nicolson'}
                     
                     if F.v>1; error('currently only implemented for scalar potentials'); end
 
@@ -914,7 +936,7 @@ classdef am_field < matlab.mixin.Copyable
                         UP = F.F(:); F.F(:) = ( (speye(N)-dt*f_(F))\F.F(:) + F.F(:)+dt*f_(F) )/2;
                         if any(isnan(F.F(:))); warning('NaN'); break; end
                         if mod(i,round(M/100))==0
-                            F.plot_field('F'); ediff = norm(UP(:)-F.F(:));
+                            F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/dt;
                             title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
                             if ediff<F.tiny; break; end
                         end
