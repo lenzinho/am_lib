@@ -288,7 +288,7 @@ classdef am_field < matlab.mixin.Copyable
         
         function [F]     = demo_micromagnetics_2d()
             clear;clc;clf;
-            F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},2); % initialize object
+            F = am_field.define([2,2].^[6,5],[2,2].^[6,5],{'pdiff','pdiff'},2); % initialize object
             F.F = rand([2,F.n]); F.F = F.F - mean(F.F(:)); % initialize random vector field
             % F = F.evolve_field(@(F) micromagnetics_(F),{'adams-bashforth',1E-3,1000});
             F = F.evolve_field(@(F) micromagnetics_(F),{'VE',0.010,1000});
@@ -298,11 +298,9 @@ classdef am_field < matlab.mixin.Copyable
                 [~,L,~] = F.get_flattened_differentiation_matrices(); dF = zeros(F.v,prod(F.n));
                 % Crystalline Anistropy 
                 ex_ = false(1,prod(F.n));
-%                 ex_ = F.define_mask('slab',[0;1],F.n*1/4,6) | F.define_mask('slab',[0;1],F.n*3/4,6);
-                ex_ = F.define_mask('slab',[0;1],F.n*1/4,7) | F.define_mask('slab',[0;1],F.n*3/4,7);
-%                 ex_ = F.define_mask('slab',[0;1],F.n/2,6);
-                dF(:, ex_) = dF(:, ex_) + F.get_micromagnetics_crystalline_potential('U(1)',       ex_);
-                dF(:,~ex_) = dF(:,~ex_) + F.get_micromagnetics_crystalline_potential('dielectric',~ex_);
+                ex_ = F.define_mask('slab',[0;1],F.n/2+0.1,6.5);
+                dF(:, ex_) = dF(:, ex_) + F.get_micromagnetics_crystalline_potential( ex_,{'anisotropic',0});
+                dF(:,~ex_) = dF(:,~ex_) + F.get_micromagnetics_crystalline_potential(~ex_,{'dielectric'});
                 % Exchange (controls the size of the domain walls)
                 dF(:,:) = dF(:,:) + F.F(:,:)*transpose(L)*10;
                 % Zeman
@@ -334,8 +332,9 @@ classdef am_field < matlab.mixin.Copyable
         function [F]     = demo_lifshitz_petrich()
             % Lifshitz-Petrich x = {eps, c, alpha, q}; eps* = eps/alpha^2 = eps (for alpha fixed at 1)
             F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'},1);
-            F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field
-            F = F.evolve_field({'LP97',2,1,2*cos(pi/12)},{'explicit',0.05,10000});
+            F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
+%             F = F.evolve_field({'LP97',2,10,1,2*cos(pi/12)},{'explicit',0.01,10000});
+            F = F.evolve_field({'LP97',2,0,1,2*cos(pi/12)},{'explicit',0.01,100000});
             %
         end
         
@@ -779,12 +778,12 @@ classdef am_field < matlab.mixin.Copyable
             checknbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == F.d+1);
             addParameter(p,'dirichlet',[],checkdbc_);
             addParameter(p,'neumann'  ,[],checknbc_);
+            addParameter(p,'plot',true,@(x)islogical(x));
             parse(p,varargin{:});
             dirichlet = p.Results.dirichlet; % dirichlet( (index, value), n)
             neumann   = p.Results.neumann;   %   neumann( (index, value), n)
+            isplot    = p.Results.plot;
             
-            
-
             % setup model
             [algorithm,dt,M] = deal(algorithm{:});
             if iscell(f_)
@@ -810,11 +809,13 @@ classdef am_field < matlab.mixin.Copyable
                         if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
                         if ~isempty(neumann); error('not yet implemented'); end
                         
-                        if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/100))==0
-                            ediff(i) = norm(UP(:)-F.F(:))/dt; title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
-                            subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
-                            subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                        if any(isnan(F.F(:))); warning(sprintf('NaN on run %i',i)); break; end
+                        if mod(i,round(M/10))==0
+                            ediff(i) = norm(UP(:)-F.F(:))/dt; 
+                            if isplot
+                                subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
+                                subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                            end
                             if ediff(i)<F.tiny; break; end
                         end
                     end
@@ -828,12 +829,14 @@ classdef am_field < matlab.mixin.Copyable
                         % b.c.
                         if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
                         if ~isempty(neumann); error('not yet implemented'); end
-                        
                         if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/100))==0
-                            ediff(i) = norm(UP(:)-F.F(:))/dt; title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
-                            subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
-                            subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                        if mod(i,round(M/10))==0
+                            ediff(i) = norm(UP(:)-F.F(:))/dt; 
+                            if isplot
+                                title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                                subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
+                                subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                            end
                             if ediff(i)<F.tiny; break; end
                         end
                     end
@@ -854,10 +857,13 @@ classdef am_field < matlab.mixin.Copyable
                         if ~isempty(neumann); error('not yet implemented'); end
 
                         if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/100))==0
-                            ediff(i) = norm(UP(:)-F.F(:))/dt; title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
-                            subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect;
-                            subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                        if mod(i,round(M/10))==0
+                            ediff(i) = norm(UP(:)-F.F(:))/dt; 
+                            if isplot
+                                title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                                subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
+                                subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                            end
                             if ediff(i)<F.tiny; break; end
                         end
                     end
@@ -876,10 +882,13 @@ classdef am_field < matlab.mixin.Copyable
                         if ~isempty(neumann); error('not yet implemented'); end
 
                         if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/100))==0
-                            ediff(i) = norm(UP(:)-F.F(:))/dt; title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
-                            subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect;
-                            subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                        if mod(i,round(M/10))==0
+                            ediff(i) = norm(UP(:)-F.F(:))/dt; 
+                            if isplot
+                                title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                                subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
+                                subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                            end
                             if ediff(i)<F.tiny; break; end
                         end
                     end
@@ -920,7 +929,7 @@ classdef am_field < matlab.mixin.Copyable
                     for i = [1:M]
                         UP = F.F(:); F.F(:) = (speye(N) - dt*f_(F))\F.F(:);
                         if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/100))==0
+                        if mod(i,round(M/10))==0
                             F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/dt;
                             title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
                             if ediff<F.tiny; break; end
@@ -938,7 +947,7 @@ classdef am_field < matlab.mixin.Copyable
                     for i = [1:M]
                         UP = F.F(:); F.F(:) = ( (speye(N)-dt*f_(F))\F.F(:) + F.F(:)+dt*f_(F) )/2;
                         if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/100))==0
+                        if mod(i,round(M/10))==0
                             F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/dt;
                             title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
                             if ediff<F.tiny; break; end
@@ -1456,22 +1465,22 @@ classdef am_field < matlab.mixin.Copyable
             H = zeros([F.v,sum(ex_(:))]);
             % build
             switch potential{1}
-                case {'U(1)','mexican-hat'}
+                case {'isotropic'}
                     % U = - 2 * (m_x^2 + m_y^2) + (m_x^2 + m_y^2)^2 = 2 |r|^2 + |r|^4  ,  minimum at |r| = 1
                     for i = 1:F.v
-                        H(i,:) = H(i,:) + ( -4*F.F(i,ex_) + F.F(i,ex_).^3 + F.F(i,ex_).*sum(F.F([1:F.v]~=i,ex_).^2,1) );
+                        H(i,:) = H(i,:) + -4*F.F(i,ex_) + F.F(i,ex_).^3 + F.F(i,ex_).*sum(F.F([1:F.v]~=i,ex_).^2,1);
                     end
-                case {'sin'}
-                    % U = - 2 * (m_x^2 + m_y^2) + (m_x^2 + m_y^2)^2 = 2 |r|^2 + |r|^4  ,  minimum at |r| = 1 with radial 
+                case {'anisotropic'}
+                    if F.d ~=2; error('not yet implemented'); end
+                    % U = - 2 * (m_x^2 - m_y^2) + (m_x^4 + m_y^4) + 2 * a * x^2 y^2 , for a = 0: minimum is at 
+                    % if a = 0 : minimum is at <111> (|r| = 1)
+                    % if a = 1 : minimum is at <100> (|r| = 1) 
+                    % if a is between 0 and 1, |r| ~= 1
+                    [a] = deal(potential{2});
                     for i = 1:F.v
-                        H(i,:) = H(i,:) + ( -4*F.F(i,ex_) + F.F(i,ex_).^3 + F.F(i,ex_).*sum(F.F([1:F.v]~=i,ex_).^2,1) );
+                        H(i,:) = H(i,:) + 4.*F.F(i,ex_).*(-1 + F.F(i,ex_).^2 + a*sum(F.F([1:F.v]~=i,ex_).^2,1));
                     end
-                case {'<111>'}
-                    % U = - 2 * (m_x^2 + m_y^2) + (m_x^2 + m_y^2)^2 = 2 |r|^2 + |r|^4  ,  minimum at |r| = 1
-                    for i = 1:F.v
-                        H(i,:) = H(i,:) + ( -4*F.F(i,ex_) + 3*F.F(i,ex_).^3 + F.F(i,ex_).*sum(F.F([1:F.v]~=i,ex_).^2,1) );
-                    end
-                case {'dielectric','diamagnetic'}
+                case {'dielectric','diamagnetic','harmonic'}
                     % U = (m_x^2 + m_y^2),  minimum at |r| = 0
                     for i = 1:F.v
                         H(i,:) = H(i,:) + F.F(i,ex_);
@@ -1527,9 +1536,8 @@ classdef am_field < matlab.mixin.Copyable
             S.F = zeros([2,S.n]); Delta = S.n(:)./S.a(:);
             % perform surface integration
             for m = [1:F.v]; for i = 1:size(A,2); for j = 1:size(B,2)
-                S.F(m,:) = S.F(m,:) + prod(A(:,i)) .* f_(circshift(S.R(:,:),m,1) + A(:,i).*Delta/2 + B(:,j).*circshift(F.n(:),m,1) )/(4*pi);
+                S.F(m,:) = S.F(m,:) + prod(A(:,i)) .* f_(circshift(S.R(:,:),m,1) + A(:,i).*Delta/2 + B(:,j).*circshift(F.n(:),m,1) )/(2.^(F.d-1)*pi);
             end; end; end
-            
     
             function f = f_2D_log(r)
                 n = am_lib.normc_(r(:,:));
@@ -1573,7 +1581,7 @@ classdef am_field < matlab.mixin.Copyable
                     else            f_ = @(F) ( OP          ); nargs=2;
                     end
                 case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {eps, c, alpha, q}
-                    OP = I*model{2} - model{3}*(L+I)^2*(L + I*model{4}.^2)^2 + model{5}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
+                    OP = I*model{2} - model{3}*(L+I)^2*(L+I*model{5}^2)^2 + model{4}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
                     if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=4;
                     else            f_ = @(F) ( OP          ); nargs=4;
                     end

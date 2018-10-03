@@ -39,7 +39,6 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             G.define('pg','o_h');
             G.get_group_properties();
             A=G.expand_crystal_field([1:6]);
-            A
         end
         
     end
@@ -417,7 +416,6 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             end
             x = G.multiply( G.multiply(u,v), G.I(u) );
         end
-        
         
         function [u]   = expand_multiplication_table(G,u)
 			% initialize

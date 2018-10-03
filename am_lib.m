@@ -2017,24 +2017,22 @@ classdef am_lib
             % subplot(2,2,4);imagesc(F); daspect([1 1 1]);
             % 
 
-            switch flag
-                case 'full'
-                    [m1]=size(A); [m2]=size(B); m = m1+m2-1;
-                    C = ifftn(fftn(A,m).*fftn(B,m));
-                case 'same'
-                    [m1] = size(A); [m2] = size(B); 
-                    m = m1 + m2 - 1; a = ceil((m2-1)./2);
-                    % pad and fft
-                    C = ifftn(fftn(A,m).* fftn(B,m)); 
-                    % unpad
-                    for i = 1:numel(a); x_{i} = a(i)+1:m1(i)+a(i); end
-                    C = C(x_{:});
-                case 'valid'
-                    [m1]=size(A); [m2]=size(B); m = m1+m2-1;
-                    C = ifftn(fftn(A,m).*fftn(B,m));
-                    C = C(m2(1):m1(1),m2(2):m1(2));
-                otherwise
-                    error('unknown flag');
+            % if no B is supplied, the dimensions needed for B in fourier space are returned.
+
+            if contains(flag,'B(k)')
+                % B is already in fourier space
+                [m1]=size(A); [m ]=size(B); m2 = m-m1+1; C = ifftn(fftn(A,m).*B); 
+            else
+                [m1]=size(A); [m2]=size(B); m = m1+m2-1; C = ifftn(fftn(A,m).*fftn(B,m));
+            end
+            
+            if contains(flag,'full') % do nothing
+            elseif contains(flag,'same') % unpad
+                a = ceil((m2-1)./2); for i = 1:numel(a); x_{i} = a(i)+1:m1(i)+a(i); end; C = C(x_{:});
+            elseif contains(flag,'valid') % uncrop
+                C = C(m2(1):m1(1),m2(2):m1(2));
+            else
+                error('unknown flag');
             end
         end
         
@@ -4882,14 +4880,22 @@ classdef am_lib
             g = -imag(fftshift(fft(f)));
         end
 
-        function [a]    = fft_autocorrelation_(x)
+        function [a]    = autocorrl_(x) % linear autocorrelation
             n = numel(x);
-            %FFT method based on zero padding
+            % FFT method based on zero padding
             f = fft([x; zeros(n,1)]); % zero pad and FFT
             a  = ifft(f.*conj(f)); % abs()^2 and IFFT
             % circulate to get the peak in the middle and drop one
             % excess zero to get to 2*n-1 samples
             a = [a(n+2:end); a(1:n)];
+        end
+        
+        function [A]    = autocorr_(H,varargin)
+            Hhat = fft(H,varargin{:}); A = ifft(Hhat.*conj(Hhat),varargin{:});
+        end
+        
+        function [A]    = autocorrn_(H)
+            Hhat = fftn(H); A = ifftn(Hhat.*conj(Hhat));
         end
         
         function [y,x]  = fftdn_(y) % down-sample y by half, x = [0,1)
