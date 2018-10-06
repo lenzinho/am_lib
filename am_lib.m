@@ -855,6 +855,14 @@ classdef am_lib
             end
         end
 
+        function [A] = mean_(A,n,varargin)
+            % sum over dimensions n: sum_(A,[2,3])
+            if nargin == 1; n = 1:ndims(A); end
+            for i = 1:numel(n)
+                A = mean(A,n(i),varargin{:});
+            end
+        end
+        
         function B   = changem_(A,newval,oldval)
             B = A;
             [valid,id] = max(bsxfun(@eq,A(:),oldval(:).'),[],2); %//'
