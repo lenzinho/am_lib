@@ -211,15 +211,19 @@ classdef am_field < matlab.mixin.Copyable
             F.F = zeros([2,F.n]); Mi = [[1;1],[1;0]]; i = [2081,1000]; F.F(:,i)=Mi;
 
             % convlute S and M to get scalar potential on vertices (vertices is better for edge points)
-            PHI=zeros([1,F.n+1]);
-            for i = 1:F.v; PHI = PHI + am_lib.conv_( padarray(F.F(i,:,:,:),[0,1,1],0,'pre'), ifftn(S.F(i,:,:,:)), 'same'); end
-            % differentiate scalar potential to get field on F: H = - GRAD * PHI
-            F.F = cat(1,diff(PHI(1,1:(F.n(1)+1),1:F.n(2)),1,2),diff(PHI(1,1:F.n(1),1:(F.n(2)+1)),1,3));
+            switch 'central'
+                case 'forward' % forward difference
+                    PHI=zeros([1,F.n+1]);
+                    for i = 1:F.v; PHI = PHI + am_lib.conv_( padarray(F.F(i,:,:,:),[0,1,1],0,'pre'), ifftn(S.F(i,:,:,:)), 'same'); end
+                    % differentiate scalar potential to get field on F: H = - GRAD * PHI
+                    F.F = cat(1,diff(PHI(1,1:(F.n(1)+1),1:F.n(2)),1,2),diff(PHI(1,1:F.n(1),1:(F.n(2)+1)),1,3));
+                case 'central' % central difference
+                    PHI=zeros([1,F.n+2]); a = F.a./F.n;
+                    for i = 1:F.v; PHI = PHI + am_lib.conv_( padarray(F.F(i,:,:,:),[0,1,1],0,'both'), ifftn(S.F(i,:,:,:)), 'same'); end
+                    F.F = cat(1,(PHI(1,3:(F.n(1)+2),1:F.n(2)    )-PHI(1,1:(F.n(1)+0),1:F.n(2))    )/a(1) , ...
+                                (PHI(1,1:F.n(1)    ,3:(F.n(2)+2))-PHI(1,1:F.n(1)    ,1:(F.n(2)+0)))/a(2) );
+            end
 
-            % % normalize for debugging
-            % F.F=F.F./am_lib.normc_(F.F);
-            % Ref.F=Ref.F./am_lib.normc_(Ref.F);
-            
             colormap('parula');
             subplot(4,2,[1,4]);
             imagesc(squeeze(PHI)); view([0 0 1]);
@@ -306,7 +310,7 @@ classdef am_field < matlab.mixin.Copyable
                 % Zeman
                 % dF(:,:) = dF(:,:) + repmat([1;0],1,prod(F.n));
                 % Demagnetization field (controls whether domains form)
-                dF(:,:) = dF(:,:) + reshape( F.get_micromagnetics_demagnetization('2D-log,pbc'), [F.v, prod(F.n)])*20;
+                dF(:,:) = dF(:,:) + reshape( F.get_micromagnetics_demagnetization('2D-log'), [F.v, prod(F.n)])*20;
                 % Langevin noise
                 % dF(:,:) = normrnd(0,10,[1,numel(F.F)]);
                 % flatten
@@ -1492,31 +1496,53 @@ classdef am_field < matlab.mixin.Copyable
         end
 
         function [H,V]   = get_micromagnetics_demagnetization(F,type)
+            % check that this is fourier finite difference otherwise 
+            if ~all(contains(F.s,'diff')); error('demag requires finite difference'); end
+            % get auxiliary scalar field for convolution
             if isempty(F.S_); F.S_ = get_micromagnetics_demagnetization_auxiliary_field(F,type); end
-            % allocate scalar potential
-            V = zeros([1,F.n+1]);
-            switch F.d
-                case 1; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:)    ,[0,1]    ,0,'pre'), F.S_.F(i,:)    , 'same'); end
-                case 2; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:,:)  ,[0,1,1]  ,0,'pre'), F.S_.F(i,:,:)  , 'same'); end
-                case 3; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:,:,:),[0,1,1,1],0,'pre'), F.S_.F(i,:,:,:), 'same'); end
-                otherwise; error('invalid dimensions');
+            % get derivatives
+            [~,~,G]=F.get_flattened_differentiation_matrices();
+            % chose an algorithm for differentiation
+            switch 'central' 
+                case 'forward' % forward (this biases the solution causing it to drift over time)
+                    % allocate scalar potential
+                    V = zeros([1,F.n+1]);
+                    switch F.d
+                        case 1; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:)    ,[0,1]    ,0,'pre'), F.S_.F(i,:)    , 'same'); end
+                        case 2; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:,:)  ,[0,1,1]  ,0,'pre'), F.S_.F(i,:,:)  , 'same'); end
+                        case 3; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:,:,:),[0,1,1,1],0,'pre'), F.S_.F(i,:,:,:), 'same'); end
+                        otherwise; error('invalid dimensions');
+                    end
+                    % lattice parameter
+                    a = F.a./F.n;
+                    switch F.d
+                        case 1; H =        diff(V(1,1:(F.n(1)+1)),1,2)/a(1);
+                        case 2; H = cat(1, diff(V(1,1:(F.n(1)+1),1:F.n(2)),1,2)/a(1),          diff(V(1,1:F.n(1),1:(F.n(2)+1)),1,3)/a(2) );
+                        case 3; H = cat(1, diff(V(1,1:(F.n(1)+1),1:F.n(2),1:F.n(3)),1,2)/a(1), diff(V(1,1:F.n(1),1:(F.n(2)+1),1:F.n(3)),1,3)/a(2), diff(V(1,1:F.n(1),1:F.n(2),1:(F.n(3)+1)),1,4)/a(3) );
+                        otherwise; error('invalid dimensions');
+                    end
+                case 'central' % central difference
+                    % allocate scalar potential
+                    V = zeros([1,F.n+2]); a = F.a./F.n;
+                    switch F.d
+                        case 1; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:)    ,[0,1]    ,0,'both'), F.S_.F(i,:)    , 'same'); end
+                        case 2; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:,:)  ,[0,1,1]  ,0,'both'), F.S_.F(i,:,:)  , 'same'); end
+                        case 3; for i = 1:F.v; V = V + am_lib.conv_( padarray(F.F(i,:,:,:),[0,1,1,1],0,'both'), F.S_.F(i,:,:,:), 'same'); end
+                        otherwise; error('invalid dimensions');
+                    end
+                    switch F.d
+                        case 1; H = cat(1,(V(1,3:(F.n(1)+2))-V(1,1:(F.n(1)+0)))/a(1) );
+                        case 2; H = cat(1,(V(1,3:(F.n(1)+2),2:F.n(2)+1  )-V(1,1:(F.n(1)+0),2:F.n(2)+1  ))/a(1) , ...
+                                          (V(1,2:F.n(1)+1  ,3:(F.n(2)+2))-V(1,2:F.n(1)+1  ,1:(F.n(2)+0)))/a(2) );
+                        case 3; error('not yet implemented');
+                        otherwise; error('invalid dimensions');
+                    end
+                    
             end
-            switch F.d
-                case 1; H =        diff(V(1,1:(F.n(1)+1)),1,2);
-                case 2; H = cat(1, diff(V(1,1:(F.n(1)+1),1:F.n(2)),1,2),          diff(V(1,1:F.n(1),1:(F.n(2)+1)),1,3) );
-                case 3; H = cat(1, diff(V(1,1:(F.n(1)+1),1:F.n(2),1:F.n(3)),1,2), diff(V(1,1:F.n(1),1:(F.n(2)+1),1:F.n(3)),1,3), diff(V(1,1:F.n(1),1:F.n(2),1:(F.n(3)+1)),1,4) );
-                otherwise; error('invalid dimensions');
-            end
-            
+                    
         end
         
         function [S]     = get_micromagnetics_demagnetization_auxiliary_field(F,type)
-            % apply periodic boundary conditions
-            if contains(type,'pbc')
-                ispbc = true; type = strrep(type,'pbc',''); type = strrep(type,',','');
-            else
-                ispbc = false;
-            end
             % select type of potential
             switch type
                 case '2D-log'; f_ = @(r) f_2D_log(r);
@@ -1526,10 +1552,16 @@ classdef am_field < matlab.mixin.Copyable
             end
             % setup auxiliary S transform
             S = am_field.define(2*F.n,2*F.n,F.s,F.v); S.R = S.R - floor(S.n(:)/2);
-            % initialize conditions for periodic images (sum over supercell first nearest neighbors only)
-            if ~ispbc; B = zeros(F.v,1); else
-            [B{1:S.d}] = ndgrid([-3:3]); B=reshape(permute(cat(3,B{:}),[3,1,2]),2,[]); 
+            % loop over dimensions, taking into account which dimensions are periodic
+            % and sum over supercell (first three nearest neighbors only)
+            neighbors = 5;
+            for i = 1:F.d
+                switch S.s{i}
+                    case {'pdiff','fourier'}; B{i} = [-neighbors:neighbors];
+                    otherwise; B{i} = 0;
+                end
             end
+            [B{1:S.d}] = ndgrid(B{:}); B=reshape(permute(cat(3,B{:}),[3,1,2]),2,[]); 
             % initialize parameters for surface integral
             [A{1:S.d}] = ndgrid([-1,1]); A=reshape(permute(cat(3,A{:}),[3,1,2]),2,[]); 
             % define S (PBC accounting for periodic images is not implemented yet)
@@ -1713,6 +1745,7 @@ classdef am_field < matlab.mixin.Copyable
         end
         
         function [Q]     = get_differentiation_matrices(F)
+            %
             for i = 1:F.d % loop over dimensions
                 switch F.s{i}
                     case 'chebyshev'; [~,Q{i}] = am_field.chebyshevUr_(F.n(i),'edge'); 
