@@ -43,6 +43,9 @@ classdef am_field < matlab.mixin.Copyable
                 %     [d^2F/dx^2 + d^2F/dy^2 + d^2F/dz^2 , x , y , z  ]
         Q = []; % topological charge
                 %     [ (               1              ) , x , y , z  ]
+        % auxiliary stuff
+        phase = []; % phase
+        mag   = []; % magnitude
         % AFM
        rACF=[]; % radial autocorrelation function
       rHHCF=[]; % radial height-height function
@@ -321,7 +324,7 @@ classdef am_field < matlab.mixin.Copyable
         function [F]     = demo_hilliard_cahn()
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},1); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
-            F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},{'VE',0.01,100}); % solve
+            F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},{'VE',0.01,1000}); % solve
         end
         
         function [F]     = demo_qin_pablo()
@@ -345,7 +348,9 @@ classdef am_field < matlab.mixin.Copyable
         function [F]     = demo_complex_ginzburg_landau()
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-            F = F.evolve_field({'GLXX',1},{'explicit',0.05,1000});
+            % F = F.evolve_field({'GLXX',0.00},{'explicit',0.01,1000});
+            F = F.evolve_field({'GLXX',1.25},{'explicit',0.01,1000});
+            % F = F.evolve_field({'GLXX',2.50},{'explicit',0.01,1000});
         end
 
         function [F]     = demo_poisson_equation()
@@ -676,8 +681,8 @@ classdef am_field < matlab.mixin.Copyable
             % correct drift and average over stack
             [d,~] = am_field.correct_stack_drift(d);
             % 
-            [~,th] = am_lib.imhorizonlevel_(d,'hough');
-            am_lib.imagesc_(flipud(dd));colormap('gray');
+            [~,th] = am_lib.level_horizon_(d,'hough');
+            am_lib.imagesc_(flipud(d));colormap('gray');
             [E,W,Ar_g,Pr_g,dPr_g] = am_field.gpa(d,'rot:field',th);
             [h,ax] = am_lib.overlay_(d, squeeze(E(2,2,:,:)), 5);%[-0.4:0.05:0.4]+0.025)
             % am_lib.imagesc_(squeeze(Pr_g{1})) 
@@ -765,7 +770,7 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
 
-        function [F]     = evolve_field(F,f_,algorithm,varargin) % evolve_field(F,{model,x(1),x(2),...},algorithm,dt,M,varargin)
+        function [F,M]   = evolve_field(F,f_,algorithm,varargin) % evolve_field(F,{model,x(1),x(2),...},algorithm,dt,M,varargin)
             % examples
             % F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
@@ -783,6 +788,7 @@ classdef am_field < matlab.mixin.Copyable
             addParameter(p,'dirichlet',[],checkdbc_);
             addParameter(p,'neumann'  ,[],checknbc_);
             addParameter(p,'plot',true,@(x)islogical(x));
+            addParameter(p,'movie',false,@(x)isbool(x));
             parse(p,varargin{:});
             dirichlet = p.Results.dirichlet; % dirichlet( (index, value), n)
             neumann   = p.Results.neumann;   %   neumann( (index, value), n)
@@ -814,18 +820,24 @@ classdef am_field < matlab.mixin.Copyable
                         if ~isempty(neumann); error('not yet implemented'); end
                         
                         if any(isnan(F.F(:))); warning(sprintf('NaN on run %i',i)); break; end
-                        if mod(i,round(M/10))==0
+                        if mod(i,20)==0
+                        % if mod(i,round(M/10))==0
+                        % if mod(i,round(M/100))==0
                             ediff(i) = norm(UP(:)-F.F(:))/dt; 
                             if isplot
-                                subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
-                                subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                                % set phase and mag
+                                F.phase=angle(F.F); F.mag=abs(F.F);
+                                % plot
+                                subplot(1,2,1); F.plot_field('phase'); xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect; 
+                                subplot(1,2,2); F.plot_field('mag'); xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect; 
+                                % subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
                             end
                             if ediff(i)<F.tiny; break; end
                         end
                     end
                 case {'VE','variable-explicit'} % explicit with variable step size
                     % J. R. Dormand, "Numerical Methods for Differential Equations: A Computational Approach", (2017), p 9.53, eq 5.3.
-                    UP = zeros(F.v*prod(F.n),1); dF = zeros(F.v*prod(F.n),1); tol = dt; dt = 1E-5;
+                    UP = zeros(F.v*prod(F.n),1); dF = zeros(F.v*prod(F.n),1); tol = dt; dt = 1E-5; 
                     for i = [1:M]
                         UP(:) = F.F(:); dF(:) = f_(F); F.F(:) = F.F(:) + dt*dF;
                         % estimate optimal dt for a given tolerence
@@ -1164,10 +1176,16 @@ classdef am_field < matlab.mixin.Copyable
         end
         
         function [F]     = simulate_ising_(F,kT,M,algorithm,boundary)
-            % 2D ising model
-            % F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'});
+            % 2D ising model         
+            % clear;clc;
+            % F = am_field.define([2,2].^5,[2,2].^5,{'pdiff','pdiff'},1);
+            % kT = 10;
             % F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
-            % F = F.simulate_ising_(2,20000,'MT53','pbc')
+            % F = F.simulate_ising_(kT,10000,'WL89','pbc');
+            % fprintf('<F> = %0.5f ± %0.5f\n',mean(F.F(:)),std(F.F(:)))
+            % F.F = 2*round(rand([1,F.n]))-1; % initialize binary field
+            % F = F.simulate_ising_(kT,10000,'MT53','pbc');
+            % fprintf('<F> = %0.5f ± %0.5f\n',mean(F.F(:)),std(F.F(:)))
 
             % multiplication is faster than division
             beta = 1./kT;
@@ -1218,7 +1236,7 @@ classdef am_field < matlab.mixin.Copyable
                     for j = 1:M
                         % pick a random coordinate to flip
                         i = randi(p(end));
-                        % flood fill
+                        % flood fill (I think there is a problem here. the probability should depend on the spin configuration and it doesn't here)
                         cluster = am_lib.floodfill_( F.F(:), G, 1-exp(-2*beta), i );
                         % flip cluster
                         F.F(1,cluster) = - F.F(1,cluster);
@@ -1332,6 +1350,24 @@ classdef am_field < matlab.mixin.Copyable
             
             sl_ = @(field,i)   squeeze(F.(field)(i,:,:,:,:,:));
             
+            % set the colormap
+            switch 2
+                case 1 
+                    cmap  = am_lib.colormap_('spectral',200); n = size(cmap,1); 
+                    phase = angle(F.(field))/(2*pi)+1/2; % [0,1]
+                    phase = 2*(phase-1/2); % [-1,1]
+                    amp   = log(abs(F.(field))); amp = (amp-min(amp(:)))./(max(amp(:))-min(amp(:)));
+                    cmap  = reshape( am_lib.clight_(cmap(ceil((n-1)*amp+1),:),phase) , [F.n,3]);
+                case 2 % phase
+                    cmap  = am_lib.colormap_('jet',201); n = size(cmap,1); 
+%                     phase = angle(F.(field))/(2*pi)+1/2; % [0,1]
+%                     cmap  = reshape( cmap(ceil(n*phase),:) , [F.n,3]);
+                case 3 % amplitude
+                    cmap  = am_lib.colormap_('jet',201); n = size(cmap,1); 
+                    amp   = log(abs(F.(field))); amp = (amp-min(amp(:)))./(max(amp(:))-min(amp(:))); 
+                    cmap  = reshape( cmap(ceil((n-1)*amp+1),:) , [F.n,3]);
+            end
+            
             switch size(F.(field),1)
                 case {1} % scalar
                     switch F.d
@@ -1339,31 +1375,14 @@ classdef am_field < matlab.mixin.Copyable
                             plot(F.R,F.(field));
                         case 2 % 2D
                             if isreal(F.(field))
-                                set(gcf,'color','w');
-%                                 imagesc(flipud(squeeze(F.(field)).'));
-                                h = surf(sl_('R',1), sl_('R',2), squeeze(F.(field)));  
-                                h.EdgeColor = 'none'; h.LineWidth = 1; 
-                                view([0 0 1]); daspect([1 1 1]); axis tight;
+                                set(gcf,'color','w'); am_lib.colormap_('jet',201);
+                                h = surf(sl_('R',1), sl_('R',2), squeeze(F.(field)));
+                                h.EdgeColor = 'none'; h.LineWidth = 1; % shading interp;
+                                view([0 0 1]); daspect([1 1 1]); axis tight; axis off;
                             else
-                                switch 1
-                                    case 1 
-                                        cmap  = am_lib.colormap_('spectral',200); n = size(cmap,1); 
-                                        phase = angle(F.(field))/(2*pi)+1/2; % [0,1]
-                                        phase = 2*(phase-1/2); % [-1,1]
-                                        amp   = log(abs(F.(field))); amp = (amp-min(amp(:)))./(max(amp(:))-min(amp(:)));
-                                        cmap  = reshape( am_lib.clight_(cmap(ceil((n-1)*amp+1),:),phase) , [F.n,3]);
-                                    case 2 % phase
-                                        cmap  = am_lib.colormap_('jet',200); n = size(cmap,1); 
-                                        phase = angle(F.(field))/(2*pi)+1/2; % [0,1]
-                                        cmap  = reshape( cmap(ceil(n*phase),:) , [F.n,3]);
-                                    case 3 % amplitude
-                                        cmap  = am_lib.colormap_('jet',200); n = size(cmap,1); 
-                                        amp   = log(abs(F.(field))); amp = (amp-min(amp(:)))./(max(amp(:))-min(amp(:))); 
-                                        cmap  = reshape( cmap(ceil((n-1)*amp+1),:) , [F.n,3]);
-                                end
                                 set(gcf,'color','w');
                                 h = surf(sl_('R',1), sl_('R',2), squeeze(abs(F.(field))), cmap); h.EdgeColor= 'none'; h.LineWidth = 1; 
-                                view([0 0 1]); daspect([1 1 1]); axis tight;
+                                view([0 0 1]); daspect([1 1 1]); axis tight; axis off;
                             end
                         case 3 % 3D
                             error('not yet implemented');
@@ -1608,19 +1627,19 @@ classdef am_field < matlab.mixin.Copyable
             % Build model
             switch model{1}
                 case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
-                    OP = model{2}*I - (L+I)^2 + model{3}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
-                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=2;
-                    else            f_ = @(F) ( OP          ); nargs=2;
+                    OP_ = @(F) model{2}*I - (L+I)^2 + model{3}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
+                    if is_explicit; f_ = @(F) ( OP_(F) * F.F(:) ); nargs=2;
+                    else            f_ = @(F) ( OP_(F)          ); nargs=2;
                     end
                 case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {eps, c, alpha, q}
-                    OP = I*model{2} - model{3}*(L+I)^2*(L+I*model{5}^2)^2 + model{4}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
-                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=4;
-                    else            f_ = @(F) ( OP          ); nargs=4;
+                    OP_ = @(F) I*model{2} - model{3}*(L+I)^2*(L+I*model{5}^2)^2 + model{4}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
+                    if is_explicit; f_ = @(F) ( OP_(F) * F.F(:) ); nargs=4;
+                    else            f_ = @(F) ( OP_(F)          ); nargs=4;
                     end
-                case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002; Arason & Tang PRL 1998)
-                    OP = I*(1-1i*model{2}) + L - spdiags((1-1i*model{2})*abs(F.F(:)).^2,0,N,N);
-                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=1;
-                    else            f_ = @(F) ( OP          ); nargs=1;
+                case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002; Arason & Tang PRL 1998; Michael Cross)
+                    OP_ = @(F) I*(1-1i*model{2}) + L - spdiags( (1-1i*model{2})*abs(F.F(:)).^2,0,N,N);
+                    if is_explicit; f_ = @(F) ( OP_(F) * F.F(:) ); nargs=1;
+                    else            f_ = @(F) ( OP_(F)          ); nargs=1;
                     end
                 case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
                     syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
@@ -1862,8 +1881,10 @@ classdef am_field < matlab.mixin.Copyable
             % compute charge
             switch F.d
                 case 3
-                    Q = cross(F.J(:,1,:,:,:),F.J(:,2,:,:,:),1); 
-                    Q = dot( F.F, permute(Q,[1,3,4,5,2]), 1);
+%                     N.J(3,:)=0;
+                    Q = cross(N.J(:,1,:,:,:),N.J(:,2,:,:,:),1); 
+                    Q = dot( N.F, permute(Q,[1,3,4,5,2]), 1);
+%                     Q = permute(Q(3,:,:,:,:),[1,3,4,5,2]);
                 case 2
                     Q = cross( padarray(N.J(:,1,:,:),1,0,'post') , padarray(N.J(:,2,:,:),1,0,'post'),1); 
                     Q = permute(Q(3,:,:,:),[1,3,4,2]);
@@ -2034,7 +2055,7 @@ classdef am_field < matlab.mixin.Copyable
         end
         
         function [x,D,w] = cdiff_(n) % evenly spaced central difference [0,1)
-            x(1:n,1) = [0:n-1]/n;
+            x = zeros(n,1); w = zeros(n,1); x(:) = [0:n-1]/n;
             if nargout < 2; return; end
             % get first and second derivative
             D = zeros(n,n,2);
@@ -2043,8 +2064,8 @@ classdef am_field < matlab.mixin.Copyable
                 D(:,:,i) = toeplitz([c(m:-1:1),zeros(1,n-m)],[c(m:end),zeros(1,n-m)])*(-n).^(i);
             end
             if nargout < 3; return; end
-            w(1:n,1) = 1;
-        end        
+            w(:) = 1;
+        end       
 
         function [x,D,w] = pdiff_(n) % evenly spaced periodic central difference [0,1)
             x(1:n,1) = [0:n-1]/n;
@@ -2237,7 +2258,7 @@ classdef am_field < matlab.mixin.Copyable
     
     methods (Static) % TEM analysis
         
-        function [E,W,Ar_g,Pr_g,dPr_g] = gpa(Ir,flag,th,ex_r_,ex_g_)
+        function [E,W,Ar_g,Pr_g,dPr_g,ex_r_,ex_g_] = gpa(Ir,flag,th,ex_r_,ex_g_)
             %
             % Geometric phase analysis. 
             %
@@ -2265,16 +2286,28 @@ classdef am_field < matlab.mixin.Copyable
 
             % get real space image and mask reference ROI
             if contains(flag,'interactive') || isempty(ex_r_)
-                figure(1); clf; hr = imagesc_(Ir); title('Select reference ROI');
+                figure(1); clf; hr = imagesc_(Ir); title('Select reference ROI'); 
                 er = imellipse(gca); ex_r_ = createMask(er,hr); 
+                if all(ex_r_(:)==0); ex_r_(:) = true; end
             end
 
             % get reciprocal space image and mask off reflection of interest
             nbraggs=2; Ik = fftshift(fftn(Ir));
             if contains(flag,'interactive') || isempty(ex_g_)
-                figure(2); clf; hk = imagesc_(log(abs(Ik).^2)); title('Zoom in on the image'); 
-                input('Press enter when done'); title(sprintf('Select %i reflections',nbraggs));
-                ex_g_ = cell(1,nbraggs); for q = 1:nbraggs; hg = imellipse(gca); ex_g_{q} = createMask(hg,hk); end
+                figure(2); clf; hk = imagesc_(log(abs(Ik).^2)); title('Zoom in on the image'); input('Press enter when done'); 
+                switch 'circle'
+                    case 'ellipse'
+                        title(sprintf('Select %i reflections',nbraggs));
+                        ex_g_ = cell(1,nbraggs); for q = 1:nbraggs; hg = imellipse(gca); ex_g_{q} = createMask(hg,hk); end
+                    case 'circle'
+                        [a,b]=size(Ir); [x,y]=ndgrid(1:a,1:b);
+                        title(sprintf('Select nearest reflections')); r0 = norm(ginput(1)-floor([b,a]/2+1)); r0 = r0/2;
+                        title(sprintf('Select %i reflections',nbraggs)); [a,b] = ginput(nbraggs);
+                        ex_g_ = cell(1,nbraggs); for q = 1:nbraggs
+                            plot_circle(a(q),b(q),r0);
+                            ex_g_{q} = sqrt((x-a(q)).^2 + (y-b(q)).^2) < r0; 
+                        end
+                end
             end
 
             % compute grids
@@ -2323,6 +2356,15 @@ classdef am_field < matlab.mixin.Copyable
 
             function h=imagesc_(A)
                 h=imagesc(A); axis tight; daspect([1 1 1]); axis off; 
+            end
+            
+            function h = plot_circle(x,y,r)
+                hold on
+                thc = 0:pi/50:2*pi;
+                xunit = r * cos(thc) + x;
+                yunit = r * sin(thc) + y;
+                h = plot(xunit, yunit);
+                hold off
             end
         end
 
@@ -2387,6 +2429,361 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
 
+        
+        function polarization_map_()
+            
+clear;clc;
+fname = '50nm_2048px_002.dm3';
+
+% load stack
+d = DM3Import(fname);
+%%
+% correct shift
+[A, ~, xs, ys] = am_field.correct_stack_drift(d.image_data);
+% save
+% imwrite(uint8(rescale(A,1,2^8)),strrep(fname,'.dm3','_merged.tif'));
+
+% smoothen data
+
+% A = A-imgaussfilt(A,20);
+% A = imgaussfilt(A,3);
+% A = A;
+% w = 30; w = am_lib.gaussw_(size(A,1),w)*am_lib.gaussw_(size(A,2),w).'; w = w./sum(w(:)).^2;
+% B = A - abs(fft2(fft2(A).*fftshift(w)));
+% fix rotation
+[A,~] = am_lib.level_horizon_(A,'fft');
+
+% a=3;b=3; B = conv2(B, ones(a,b), 'same');
+%%
+figure(1); set(gcf,'color','w'); colormap('gray');
+caxis(3*([-1,1])*std(A(:),'omitnan')+mean(A(:),'omitnan'))
+imagesc(A); daspect([1 1 1]); axis off;
+
+
+%% plot
+figure(1); set(gcf,'color','w'); colormap('gray');
+caxis(1.5*[-1,1]*std(A(:),'omitnan')+mean(A(:),'omitnan'))
+imagesc(A); daspect([1 1 1]); axis off;
+hgexport(gcf,strrep(fname,'.dm3','_merged.eps'))
+%% select basis
+% h{1} = impoint;
+h{2} = impoint;
+% h{3} = impoint;
+%% draw lines
+v1 = [h{2}.getPosition; h{1}.getPosition];
+v2 = [h{3}.getPosition; h{1}.getPosition];
+hold on; if exist('l1_','var'); delete(l1_); end; l1_ = line(v1(:,1),v1(:,2));
+hold on; if exist('l2_','var'); delete(l2_); end; l2_ = line(v2(:,1),v2(:,2));
+%%
+nx = 95; ny = 87; n = [0 0]; m = [1 1];
+% compute basis
+R = zeros(2);
+% first select origin then axes
+S      =  h{1}.getPosition;
+R(1,:) = (h{2}.getPosition - h{1}.getPosition)/nx;
+R(2,:) = (h{3}.getPosition - h{1}.getPosition)/ny;
+R = fliplr(R).'; S = fliplr(S);
+% generate lattice
+[x,y] = meshgrid(1+[-n(1)*nx:m(1)*nx],1+[-n(2)*ny:m(2)*ny]); p = am_lib.matmul_(R,permute(cat(3,x-1,y-1),[3,1,2]))+S(:);
+hold on; if exist('hax','var'); delete(hax); end; hax = plot(p(2,:),p(1,:),'.','color','r'); p = round(p);
+%% find Bi atoms (a-site)
+for i = 1:20
+    % reposition to correct for curvature/drift
+    if mod(i,10)==0
+        ft_ = fit( [x(:), y(:)], p(1,:).', 'poly33'); p(1,:,:) = round(feval(ft_,x,y));
+        ft_ = fit( [x(:), y(:)], p(2,:).', 'poly33'); p(2,:,:) = round(feval(ft_,x,y));
+    else
+        % optimize
+        p = find_local_max_fast(p,A,1);
+        hold on; if exist('hax','var'); delete(hax); end; hax = plot(p(2,:),p(1,:),'.','color','r');
+        drawnow;
+    end
+end
+%% define (a-site)
+p = find_local_max_parabola(round(p),A,11);
+hold on; if exist('hax','var'); delete(hax); end; hax = plot(p(2,:),p(1,:),'.','color','r');
+%% find Fe atoms (b-site)
+pa = (p+circshift(p,1,3)+circshift(p,1,2)+circshift(circshift(p,1,2),1,3))/4;
+pa(:,1,:)=[]; pa(:,:,1)=[]; pa =round(pa); pb=pa;
+for i = 1:5
+    % optimize
+    p = find_local_max_fast(p,A,1);
+    hold on; if exist('hfe','var'); delete(hfe); end; hfe = plot(pb(2,:),pb(1,:),'.','color','b');
+    drawnow;
+end
+
+%% refine (b-site)
+pb = find_local_max_parabola(round(pb),A,3);
+hold on; if exist('hax','var'); delete(hax); end; hax = plot(p(2,:),p(1,:),'.','color','r');
+
+%%
+
+% background correction: Linear vs Surface fit
+p(isnan(p(:)))=0;
+
+ex_ = x<11 | (x>26 & x<39) | (x>52 & x<65) | x>78;
+% ex_ = x>0;
+
+n=size(p,2); m =size(p,3); [x,y] = ndgrid(1:n,1:m);  
+
+% % manual plane fit.
+% % [Px] = [a,b,c,d,...] * [x;x^2;x^3; ... y; y^2; y^3; ... x*y ; x^2 * y^2 ; ...]
+% order = 2; Z = [];
+% for i = 0:order; for j = 0:order; Z = [Z,x(:).^i.*y(:).^j]; end; end
+% Px = squeeze(p(1,:,:)); Px(:) = (Px(:).' - (Px(ex_).'/Z(ex_,:).')*Z.').';
+
+Px = squeeze(p(1,:,:)); 
+Py = squeeze(p(2,:,:)); 
+
+Px = Px - conv2(Px,ones(3),'same');
+Py = Py - conv2(Py,ones(3),'same');
+
+ft_ = fit( [x(ex_), y(ex_)], Px(ex_), 'poly55','Normalize','on','Robust','on'); Px = Px - feval(ft_,x,y); 
+ft_ = fit( [x(ex_), y(ex_)], Py(ex_), 'poly55','Normalize','on','Robust','on'); Py = Py - feval(ft_,x,y);
+
+% [Px,Py]=deal(Px./sqrt(Px.^2+Py.^2),Py./sqrt(Px.^2+Py.^2));
+
+ex_ = abs(Px)-mean(Px(:)); ex_ = ex_ < std(ex_(:))/4; Px = Px.*ex_;
+ex_ = abs(Py)-mean(Py(:)); ex_ = ex_ < std(ex_(:))/4; Py = Py.*ex_;
+
+% get amplitude and phase
+th = mod( atan2d(Py,Px)+45+90*1, 360); mag = abs(Px+1i*Py); 
+
+% get topological charge
+F = am_field.define([size(Px)],[size(Px)],{'cdiff','cdiff'},2); % initialize object
+% F.F = permute(cat(3,Px,Py),[3,1,2]); F.F(3,:) = 0;
+F.Q = F.get_topological_charge();
+
+% [Px,Py]= deal(Px./sqrt(Px.^2+Py.^2),Py./sqrt(Px.^2+Py.^2));
+
+% plot field
+clf; am_lib.set_plot_defaults_; hold on;
+surf(squeeze(F.R(1,:,:)).'+1/2,squeeze(F.R(2,:,:)).'+1/2,th.'-1E8,'edgecolor','none'); 
+quiver(Py.',Px.',0.5,'linewidth',1,'color','k');
+box on; axis tight; view([0 0 1]); camroll(90); daspect([1 1 1]);
+yticks([]); xticks([]); xlim([0 size(Px,1)]); ylim([0.5 size(Px,2)-0.5]); 
+caxis([0,360]-1E8); colormap((am_lib.clight_(am_lib.colormap_('hsv',100),0.5)));
+
+% set(gcf,'Renderer','Painters');
+% save(['analysis_',strrep(fname,'.dm3','')],'p');
+% hgexport(gcf,strrep(fname,'.dm3','_polarization.eps'))
+
+%%
+% plot charge
+w = 21; w = am_lib.gaussw_(w,5)*am_lib.gaussw_(w,5).';
+Q = squeeze(F.Q); Q = conv2( Q, w, 'same');
+Q = Q - mean(Q(:)); Q = Q./std(Q(:));
+clf; am_lib.set_plot_defaults_; hold on;
+surf(squeeze(F.R(1,:,:)).'+1/2,squeeze(F.R(2,:,:)).'+1/2,Q.'-1E8,'edgecolor','none'); 
+quiver(Py.',Px.',0.5,'linewidth',1,'color','k');
+box on; axis tight; view([0 0 1]); camroll(90); daspect([1 1 1]);
+yticks([]); xticks([]); xlim([1 size(Px,1)]); ylim([0.5 size(Px,2)-0.5]); 
+caxis([-1,1]*3'-1E8); colormap(am_lib.clight_(am_lib.colormap_('red2blue'),0.5));
+
+set(gcf,'Renderer','painters');
+% hgexport(gcf,strrep(fname,'.dm3','_charge.eps'))
+
+%%
+subplot(2,1,1);
+ex_ = abs(Px)-mean(Px(:)); ex_ = ex_ < std(ex_(:))/3;
+imagesc(fliplr(flipud(conv2(Px.*1,ones(2),'same'))));
+colormap('gray'); daspect([1 1 1]); axis off;
+
+subplot(2,1,2);
+% ex_ = abs(Py)-mean(Py(:)); ex_ = ex_ < std(ex_(:))/3;
+imagesc(fliplr(flipud(conv2(Py.*1,ones(2),'same'))));
+colormap('gray'); daspect([1 1 1]); axis off;
+
+%% plot vector field on top of image
+clf;
+
+% ex_ = x>0;
+ex_ = x<11 | (x>26 & x<39) | (x>52 & x<65) | x>78;
+
+% background subtration
+n=size(p,2); m =size(p,3); [x,y] = ndgrid(1:n,1:m); 
+
+Px = squeeze(p(1,:,:)); 
+Py = squeeze(p(2,:,:)); 
+
+Px = Px - conv2(Px,ones(3),'same');
+Py = Py - conv2(Py,ones(3),'same');
+
+ft_ = fit( [x(ex_), y(ex_)], Px(ex_), 'poly33','Normalize','on','Robust','on'); Px = Px - feval(ft_,x,y); 
+ft_ = fit( [x(ex_), y(ex_)], Py(ex_), 'poly33','Normalize','on','Robust','on'); Py = Py - feval(ft_,x,y);
+
+% s=100;[Px,Py]=deal(Px*s,Py*s);
+[Px,Py]=deal(Px./sqrt(Px.^2+Py.^2),Py./sqrt(Px.^2+Py.^2));
+
+% get topological charge
+F = am_field.define([size(Px)],[size(Px)],{'cdiff','cdiff'}); % initialize object
+F.F = permute(cat(3,Px,Py),[3,1,2]); F.F(3,:) = 0;
+F.Q = F.get_topological_charge();
+w = 15; w = am_lib.gaussw_(w,5)*am_lib.gaussw_(w,5).';
+Q = squeeze(F.Q); Q = conv2( Q, w, 'same');
+Q = Q - mean(Q(:)); 
+Q = Q./std(Q(:)); % Q(1)=max(abs(Q(:)));Q(2)=-Q(1);
+
+
+% get amplitude and phase
+th = mod( atan2d(Py,Px)-45, 360); mag = abs(Px+1i*Py); 
+
+% X,Y,U,V,C,clist
+figure(1); set(gcf,'color','w'); colormap('gray');
+caxis(1.5*[-1,1]*std(A(:),'omitnan')+mean(A(:),'omitnan'))
+imagesc(A); daspect([1 1 1]); axis off; hold on;
+
+% RGB = clist(discretize(Q(:),size(clist,1)),:);
+% scatter(p(2,:),p(1,:),7,RGB,'filled');
+clist = am_lib.colormap_('magma',101);
+am_lib.quiverc_(p(2,:),p(1,:),Py(:).',Px(:).',Q(:).',clist);
+
+axis([min(p(2,:)) max(p(2,:)) min(p(1,:)) max(p(1,:))] )
+% axis([min(p(2,:)) 1400 min(p(1,:)) max(p(1,:))] )
+% axis([min(p(2,:)) 1926 min(p(1,:)) 1520] )
+camroll(90)
+
+%%
+set(gcf,'Renderer','painters');
+hgexport(gcf,strrep(fname,'.dm3','_overlay_magma.eps'))
+%%
+save(['analysis_',strrep(fname,'.dm3','')],'p');
+
+%%
+
+
+% get topological charge
+F = am_field.define([size(Px)],[size(Px)],{'cdiff','cdiff'}); % initialize object
+F.F = permute(cat(3,Px,Py),[3,1,2]); F.F(3,:) = 0;
+F.Q = F.get_topological_charge();
+
+% [Px,Py]= deal(Px./sqrt(Px.^2+Py.^2),Py./sqrt(Px.^2+Py.^2));
+
+% plot field
+clf; am_lib.set_plot_defaults_; hold on;
+surf(squeeze(F.R(1,:,:)).'+1/2,squeeze(F.R(2,:,:)).'+1/2,th.'-1E8,'edgecolor','none'); 
+quiver(Py.',Px.',0.5,'linewidth',1,'color','k');
+box on; axis tight; view([0 0 1]); camroll(90); daspect([1 1 1]);
+yticks([]); xticks([]); xlim([0 size(Px,1)]); ylim([0.5 size(Px,2)-0.5]); 
+caxis([0,360]-1E8); colormap((am_lib.clight_(am_lib.colormap_('hsv',100),0.5)));
+%%
+% machine learning on intensity
+% combine b and a site
+px=[p(:,:),pb(:,:)];
+% px = [p(:,:)];
+%%
+nclusters = 5;
+switch 'sum'
+    case 'max'
+        i = sub2ind(size(A),round(p(1,:)),round(p(2,:))); I = A(i).';
+    case 'sum'
+        I = find_local_intenity(px,A,21);
+        % 15 decent
+end
+
+switch 'kmeans'
+    case 'kmeans'
+        stream = RandStream('mlfg6331_64');
+        options = statset('UseParallel',1,'UseSubstreams',1, 'Streams',stream);
+        [IDX, C] = kmeans(I, nclusters, 'Display', 'final', 'Replicates', 10, 'Options', options);
+    case 'gauss'
+        GM = fitgmdist(I,nclusters);
+    case 'neural'
+        net = competlayer(nclusters,1E-5);
+%         wts = midpoint(nclusters,I.');
+%         biases = initcon(nclusters);
+        net.trainParam.epochs = 1;
+        net = train(net,I.');
+        IDX = vec2ind(sim(net,I.'));
+end
+%%
+clf; figure(1); set(gcf,'color','w'); colormap('gray'); hold on;
+caxis(1.5*[-1,1]*std(A(:),'omitnan')+mean(A(:),'omitnan'))
+imagesc(A);
+daspect([1 1 1]); axis off; hold on;
+clist = circshift(am_lib.colormap_('discrete',nclusters+3),1,3);
+mlist={'v','o','d','s','^'};
+for i = 1:5%:nclusters
+    switch i
+        case {1,4}
+            scatter(px(2,IDX==i),px(1,IDX==i),10,clist(i,:),mlist{i},'filled');
+        otherwise
+            scatter(px(2,IDX==i),px(1,IDX==i),10,clist(i,:),mlist{i},'filled');
+    end
+end
+axis([min(p(2,:)) max(p(2,:)) min(p(1,:)) max(p(1,:))] )
+% axis([701        1419         450        1097])
+% axis([772 1529 131 1967])
+camroll(90)
+
+%%
+IDX=IDX(1:8448);
+AX=reshape(IDX,[size(p,2),size(p,3)]);
+%%
+
+function I = find_local_intenity(p,A,w)
+    % p = [(x,y),i,j] - points
+    % A = [n,m]       - image intensity
+    % w = maximum taxicab search distance
+    p = round(p); f_ = @(x) x(:);
+    [n,m] = size(A); nps = size(p,2)*size(p,3);
+    parfor i = 1:nps
+        i_ = max(-w+p(1,i),1):min(+w+p(1,i),n);
+        j_ = max(-w+p(2,i),1):min(+w+p(2,i),m);
+        I(i,:) = f_(A(i_,j_));
+    end
+end
+
+function p = find_local_max_fast(p,A,w)
+    % p = [(x,y),i,j] - points
+    % A = [n,m]       - image intensity
+    % w = maximum taxicab search distance
+    p = round(p);
+    [n,m] = size(A); nps = size(p,2)*size(p,3);
+    for i = 1:nps
+        i_ = max(-w+p(1,i),1):min(+w+p(1,i),n);
+        j_ = max(-w+p(2,i),1):min(+w+p(2,i),m);
+        [a,b]=am_lib.max2_(A(i_,j_));
+        if isempty(a) || isempty(b)
+            % do nothing
+        else
+            [p(1,i),p(2,i)] = deal(i_(a),j_(b));
+        end
+    end
+end
+
+function p = find_local_max_gauss(p,A,w)
+    % p = [(x,y),i,j] - points
+    % A = [n,m]       - image intensity
+    % w = maximum taxicab search distance
+    [n,m] = size(A); nps = size(p,2)*size(p,3);
+    for i = 1:nps
+        i_ = max(-w+p(1,i),1):min(+w+p(1,i),n);
+        j_ = max(-w+p(2,i),1):min(+w+p(2,i),m);
+        y = sum(A(i_,j_),2)  ; y = y - min(y(:)); fti_ = fit(i_(:), y , 'gauss1');
+        y = sum(A(i_,j_),1).'; y = y - min(y(:)); ftj_ = fit(j_(:), y , 'gauss1');
+        [p(1,i),p(2,i)] = deal(fti_.b1,ftj_.b1);
+    end
+end
+
+function p = find_local_max_parabola(p,A,w)
+    % p = [(x,y),i,j] - points
+    % A = [n,m]       - image intensity
+    % w = maximum taxicab search distance
+    [n,m] = size(A); nps = size(p,2)*size(p,3);
+    for i = 1:nps
+        i_ = max(-w+p(1,i),1):min(+w+p(1,i),n);
+        j_ = max(-w+p(2,i),1):min(+w+p(2,i),m);
+        y = sum(A(i_,j_),2).'; y = y - min(y(:)); [i__] = y / [ i_.^2; i_; ones(size(i_)) ]; 
+        y = sum(A(i_,j_),1)  ; y = y - min(y(:)); [j__] = y / [ j_.^2; j_; ones(size(j_)) ];
+        % save max/min
+        [p(1,i),p(2,i)] = deal( -i__(2)/(2*i__(1)), -j__(2)/(2*j__(1)) );
+        % save curvature
+%         [p(3,i),p(4,i)] = deal(          2*i__(1) ,          2*j__(1)  );
+    end
+end
+ 
+        end
     end
 
 end
