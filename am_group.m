@@ -5,7 +5,7 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
     end
 
     properties
-        T  = []; % group type (space/point/translational/[empty])
+        T  = []; % group type (permutation/space/point/translational/[empty])
         nSs= []; % order of the group
         % representation
         GR = []; % ground representation (for subgroups)
@@ -38,7 +38,8 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             G = am_group();
             G.define('pg','o_h');
             G.get_group_properties();
-            A=G.expand_crystal_field([1:6]);
+            A=G.expand_crystal_field([1:3]);
+            fprintf('Crystal Field:\n'); disp(A);
         end
         
     end
@@ -47,15 +48,17 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
         
         function         define(G,P,S) % define(S), define('MT',MT), define('pg',pg_id), define('sg',sg_id), define('dg',dg_id)
             switch upper(P)
-                case 'MT'
+                case 'MT' % multiplication table
                     MT = S; S = [];
-                case 'PG'
+                case 'P' % permutation
+                    % not yet implemented
+                case 'PG' % point group
                     if ischar(S) || numel(S)==1;     S = am_group.generate_pg(S); end
                     MT = am_group.get_multiplication_table(S,am_group.tiny);
-                case 'DG'
+                case 'DG' % double group
                     if ischar(S) || numel(S)==1; [~,S] = am_group.generate_pg(S); end
                     MT = am_group.get_multiplication_table(S,am_group.tiny);
-                case 'SG'
+                case 'SG' % space group
                     if ischar(S) || numel(S)==1;     S = am_group.generate_sg(S); end
                     MT = am_group.get_multiplication_table(S,am_group.tiny);
                 case 'CG'
@@ -64,7 +67,6 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
                     error('invalid input');
             end
             G.S = S; G.T = P; G.MT = MT; G.get_order(); G.get_identity(); G.get_symmetry_inverses();
-
         end
         
         function         relabel_symmetries(G,fwd)
@@ -138,15 +140,15 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             G.identify_proper_subgroups();
             G.get_subgroup_quotients();
         end
-        
+
         function         get_order(G)
             G.nSs = size(G.MT,1);
         end
-        
+
         function         get_identity(G)
             G.E = find(all(G.MT==[1:G.nSs].',1));
         end
-        
+
         function         get_symmetry_inverses(G)
             if isempty(G.E); G = G.get_identity(); end
             G.I = [G.MT==G.E]*[1:G.nSs].';
@@ -181,8 +183,9 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             G.C = am_lib.reindex_using_occurances(C);
         end
 
-        function         get_symmetry_generators(G)
-            % returns all possible sets of generators with ngens elements
+        function         get_symmetry_generators(G,nmax)
+            % returns up to nmax generators (if nmax = 0 or not supplied, return all possible sets of generators with ngens elements)
+            if nargin == 1 || nmax == 0; nmax = Inf; end
             n = 0; N = [];
             for ngens = 1:G.nSs
                 % generate a list of all possible generators (incldues order of generator for completness)
@@ -191,6 +194,8 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
                 for i = 1:nPs
                     if numel( G.expand_multiplication_table(P(:,i)) ) == G.nSs
                         n=n+1; N(:,n) = P(:,i);
+                        % end if nmax exceeded
+                        if n==nmax; G.N = N; return; end
                     end
                 end
                 % smallest generating sets found 
@@ -227,7 +232,7 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             % check for uniqueness
             % X = arrayfun(@(x) any(x.s2g.'==[1:G.nSs].',2), G.H,'uniformoutput',false); size([X{:}]), size(am_lib.uniquec_(double([X{:}])));
         end
-        
+
         function         get_subgroup_coset_representatives(G,H)
             switch nargin
                 case 1
@@ -376,7 +381,7 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
                     ex_ = num2cell(ex_); [H.isproper] = ex_{:};
             end
         end
-        
+
         function         plot_cayley_graph(G)
             if isempty(G.N); G = G.get_generators_and_subgroups(); end
             i=[]; j=[]; x = G.MT(1,:); flatten_ = @(x) x(:);
@@ -740,7 +745,6 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             end
         end
 
-
         function [fwd,M]      = find_pointgroup_transformation(g,h,algo)
             % finds the permutation fwd and rotation M which transforms point group g into h:
             % matmul_(matmul_(M(:,:,k),g(:,:,:)),inv(M(:,:,k))) == h(:,:,bjc(:,k)) for any k
@@ -862,7 +866,7 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
                 end
                 end
 
-                S = am_cell.complete_group(S);
+                S = am_group.complete_group(S);
             end
 
             function recipe  = get_recipe(sg_id)
@@ -1156,8 +1160,6 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
 
         function [S,MT]       = complete_group(S,tol)
 
-            import am_lib.*
-            
             % set tolernece
             if nargin<2; tol=am_dft.tiny; end
 
@@ -1165,54 +1167,97 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             s=size(S); d=s(1)*s(2);
             
             % switch
-            if s(1)==4 && s(2)==4 && all_(eq_(S(4,1:4,:), [0,0,0,1], tol))
+            if numel(s) == 2 % permutation
+                algo = 0;
+            elseif s(1)==4 && s(2)==4 && am_lib.all_(am_lib.eq_(S(4,1:4,:), [0,0,0,1], tol))
                 algo = 2; % seitz symmetry
             else
                 algo = 1; % point symmetry
             end
 
-            % exclude empty symmetries
-            S = S(:,:,any(reshape(S,d,[])~=0,1)); 
-            
-            % add identity if not present 
-            E = eye(s(1),s(2)); if ~any(all(all(S==E))); S = cat(3,E,S); end
-            
-            % get number of symmetries at this point
-            nsyms=size(S,3);
+            switch algo
+                case {0}
+                    maxsyms = 1E3;
+                    
+                    % exclude empty symmetries
+                    S = S(:,~all(S==0,1));
+                    % add identity if not present 
+                    E = [1:s(1)].'; if ~any(all(S==E)); S = cat(2,E,S); end
+                    % get number of symmetries at this point
+                    nsyms=size(S,2);
+                    % allocate space
+                    S=cat(2,S,zeros(s(1),maxsyms));
 
-            % allocate space
-            S=cat(3,S,zeros(size(S,1),size(S,1),2*192-nsyms));
-
-            % add symmetry until no new symmetry is generated
-            nsyms_last=0; MT = zeros(2*192,2*192); 
-            while nsyms ~= nsyms_last
-                nsyms_last=nsyms;
-                for i = 1:nsyms_last
-                for j = 1:nsyms_last
-                    if MT(i,j)==0
-                        A = symmul_(S(:,:,i),S(:,:,j),algo,tol);
-                        A_id = member_(A(:),reshape(S(:,:,1:nsyms),d,[]),tol);
-                        if A_id == 0
-                            nsyms = nsyms+1; S(:,:,nsyms) = A; MT(i,j) = nsyms;
-                        else
-                            MT(i,j) = A_id;
+                    % add symmetry until no new symmetry is generated
+                    nsyms_last=0; MT = zeros(maxsyms,maxsyms); 
+                    while nsyms ~= nsyms_last
+                        nsyms_last=nsyms;
+                        for i = 1:nsyms_last
+                        for j = 1:nsyms_last
+                            if MT(i,j)==0
+                                A = S(S(:,j),i);
+                                A_id = am_lib.member_(A(:),S(:,1:nsyms),tol);
+                                if A_id == 0
+                                    nsyms = nsyms+1; S(:,nsyms) = A; MT(i,j) = nsyms;
+                                else
+                                    MT(i,j) = A_id;
+                                end
+                            end
+                        end
                         end
                     end
-                end
-                end
+            
+                    % trim output
+                    S  = S(:,1:nsyms);
+                    MT = MT(1:nsyms,1:nsyms);
+                    
+                case {1,2}
+                    maxsyms = 2*192;
+                    
+                    % exclude empty symmetries
+                    S = S(:,:,any(reshape(S,d,[])~=0,1)); 
+                    % add identity if not present 
+                    E = eye(s(1),s(2)); if ~any(all(all(S==E))); S = cat(3,E,S); end
+                    % get number of symmetries at this point
+                    nsyms=size(S,3);
+                    % allocate space
+                    S=cat(3,S,zeros(size(S,1),size(S,1),maxsyms-nsyms));
+
+                    % add symmetry until no new symmetry is generated
+                    nsyms_last=0; MT = zeros(maxsyms,maxsyms); 
+                    while nsyms ~= nsyms_last
+                        nsyms_last=nsyms;
+                        for i = 1:nsyms_last
+                        for j = 1:nsyms_last
+                            if MT(i,j)==0
+                                A = symmul_(S(:,:,i),S(:,:,j),algo,tol);
+                                A_id = am_lib.member_(A(:),reshape(S(:,:,1:nsyms),d,[]),tol);
+                                if A_id == 0
+                                    nsyms = nsyms+1; S(:,:,nsyms) = A; MT(i,j) = nsyms;
+                                else
+                                    MT(i,j) = A_id;
+                                end
+                            end
+                        end
+                        end
+                    end
+            
+                    % trim output
+                    S  = S(:,:,1:nsyms);
+                    MT = MT(1:nsyms,1:nsyms);
             end
             
-            % trim output
-            S  = S(:,:,1:nsyms);
-            MT = MT(1:nsyms,1:nsyms);
+            % check
+            if any(sum(MT,1)~=sum(MT(1,:))); error('MT is wrong'); end
+            if any(sum(MT,2)~=sum(MT(2,:))); error('MT is wrong'); end
             
             function C = symmul_(A,B,algo,tol)
                 switch algo
-                    case 1
-                        % point symmetry
+                    case 0 % permutation symmetry
+                        C = B(A);
+                    case 1 % point symmetry
                         C = A*B;
-                    case 2
-                        % seitz symmetry
+                    case 2 % seitz symmetry
                         C = A*B; C(1:3,4)=mod(C(1:3,4)+tol,1)-tol;
                 end
             end
@@ -1262,6 +1307,39 @@ classdef am_group < matlab.mixin.Copyable % everything is modified implicitly by
             end
         end
 
+        function [MT]         = generate_multiplication_table(P) % from permutation representation P(:,nsyms)
+            % returns all possible sets of generators with ngens elements
+            nPs = size(P,2);
+            for i = 1:nPs
+                for j = 1:nPs
+                    % MT(i,j) = P(:,i) * P(:,j);
+                    % first apply i then apply i: v = [1:n]; v=v(p(:,j)); v=v(p(:,i)); P(:,i) * P(:,j) => p(p(:,i),j)
+                    V = p(p(:,i),j);
+                    % check that symmetry is new
+                    for l = 1:nPs
+                        if all(V==p(:,l))
+                            nPs = nPs + 1; P = [P,V]; break;
+                        end
+                    end
+                end
+            end
+            
+            for ngens = 1:G.nSs
+                % generate a list of all possible generators (incldues order of generator for completness)
+                P = am_lib.perm_norep_(G.nSs,ngens); nPs = size(P,2);
+                % loop over the list one set of generators at a time, checking whether the entire multiplication table can be generated
+                for i = 1:nPs
+                    if numel( G.expand_multiplication_table(P(:,i)) ) == G.nSs
+                        n=n+1; N(:,n) = P(:,i);
+                    end
+                end
+                % smallest generating sets found 
+                if n~=0; break; end
+            end
+            % save
+            G.N = N;
+        end
+        
     end
 
 end
