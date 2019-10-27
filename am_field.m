@@ -8,7 +8,7 @@ classdef am_field < matlab.mixin.Copyable
     properties
         Y = []; % coordinate type (cartesian/polar/cylindrical/spherical)
         v = []; % field dimensions (1 = scalar, >1 = vector)
-        d = []; % spactial dimensions (2 or 3)
+        d = []; % spacial dimensions (2 or 3)
         s = []; % scheme{1:d} ('fourier/chebyshev/legendre/cdiff/discrete') for each dimension
         n = []; % grid points / cart. dimension    3D: [n(1),n(2),n(3)]     2D: [n(1),n(2)] 
         a = []; % lattice/grid spacing             3D: [a(1),a(2),a(3)]     2D: [n(1),n(2)] 
@@ -320,11 +320,25 @@ classdef am_field < matlab.mixin.Copyable
                 dF = dF(:);
             end
         end
-
+        
+        function [F]     = demo_mbe()
+            % 2+1D
+            switch '2+1D'
+                case '2+1D'
+                    F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},1); % initialize object
+                    F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
+                    F = F.evolve_field({'MBE',0.01,-0.1,0},{'E',0.1,10000}); % solve
+                case '1+1D'
+                    F = am_field.define([2].^[6],[2].^[6],{'pdiff'},1); % initialize object
+                    F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
+                    F = F.evolve_field({'MBE',0.01,-0.1,0},{'E',0.1,10000}); % solve
+            end
+        end
+        
         function [F]     = demo_hilliard_cahn()
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},1); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
-            F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},{'VE',0.01,1000}); % solve
+            F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},{'VE',0.01,10000}); % solve
         end
         
         function [F]     = demo_qin_pablo()
@@ -348,8 +362,8 @@ classdef am_field < matlab.mixin.Copyable
         function [F]     = demo_complex_ginzburg_landau()
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-            % F = F.evolve_field({'GLXX',0.00},{'explicit',0.01,1000});
-            F = F.evolve_field({'GLXX',1.25},{'explicit',0.01,1000});
+            F = F.evolve_field({'GLXX',0.00},{'explicit',0.01,1000});
+%             F = F.evolve_field({'GLXX',1.25},{'explicit',0.01,1000});
             % F = F.evolve_field({'GLXX',2.50},{'explicit',0.01,1000});
         end
 
@@ -495,7 +509,7 @@ classdef am_field < matlab.mixin.Copyable
             % m = winding number
             % n = phase offset
             % s = separation
-            
+
             clear;clc;
 
             coneplot2_ = @(x,y,u,v,c) ...
@@ -672,6 +686,55 @@ classdef am_field < matlab.mixin.Copyable
             get_minimum_energy_path(F,vi,vf,nnodes,ediff,flag)
         end
 
+        function [F]     = demo_schrodinger_equation()
+            
+            % initialize
+            F = am_field.define(2.^7,10,{'cdiff'},1);
+            
+            % define potential
+            a = 3; % define separattion
+            s = 2; % define scaling
+            d = 0.5; % define detuning
+            F.F = min([(F.R-(5-a/2)).^2;(F.R-(5+a/2)).^2 + d],[],1)/s; % potential
+
+            nDs = 5; % Define number of eigenstates nDs to solve for.
+            
+            % solve and plot
+            H = get_H(F); [En,psin] = solve_H(H,nDs); [E2,R2,lDOS] = get_lDOS(F,En,psin); plot_lDOS(F,E2,R2,lDOS)
+
+            % get Hamiltonian
+            function H = get_H(F)
+                m_e = 1; hbar = 1; % Define constants.
+                [~,L,~] = F.get_flattened_differentiation_matrices(); % Define laplacian.
+                H = -hbar^2/(2*m_e)*L + diag(F.F(:)); % Construct the Hamiltonian H.
+            end
+
+            % Solve Hamiltonian
+            function [En,psin] = solve_H(H,nDs)
+                [psin,En] = eigs(H,nDs,'sm'); En=real(diag(En)); % Solve the Schrodinger equation.
+            end
+
+            % get pDOS
+            function [E2,R2,lDOS] = get_lDOS(F,En,psin)
+                nEs = 500; % Define number of spectral points.
+                degauss=0.1; % Define energy smearing.
+                L_ = @(x) 1./(x.^2+1); % Define Lorentzian.
+                sum_ = @(A,B) repmat(A,1,length(B)) + repmat(B,length(A),1); % Define outer sum of two vectors.
+                % [Eq. 8.2.2, p. 192, Datta, Quantum Transport]
+                pDOS_ = @(E,D) L_(sum_(E,-transpose(D))/degauss)/degauss; % Define partial density of states.
+                lDOS_ = @(E,D,psi) abs(psi).^2 * transpose(pDOS_(E,D)); % Define local density of states.
+                E = linspace(0,max(En)*1.2,nEs)'; [E2,R2] = meshgrid(E,F.R); lDOS = lDOS_(E,En,psin); % get lDOS
+            end
+
+            function plot_lDOS(F,E2,R2,lDOS)
+                figure(1); set(gcf,'color','w');
+                surf(R2,E2,lDOS,'edgecolor','none');
+                ylabel('Local DOS'); xlabel('Distance r');
+                line(F.R,F.F(:),ones(F.n,1)*1000,'color','w','linewidth',2);
+                axis tight; view([0 0 1]); ylim([0,max(E2(:))]);
+            end
+        end
+        
         function [F]     = demo_gpa()
             fname = '11_SnO_FS20nm_ADF_lowI30mrad_stack.dm3'; % good
             % fname = '10_SnO_FS10nm_ADF_lowI30mrad_stack.dm3'; % defect
@@ -828,9 +891,15 @@ classdef am_field < matlab.mixin.Copyable
                                 % set phase and mag
                                 F.phase=angle(F.F); F.mag=abs(F.F);
                                 % plot
-                                subplot(1,2,1); F.plot_field('phase'); xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect; 
-                                subplot(1,2,2); F.plot_field('mag'); xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect; 
-                                % subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                                switch 'value'
+                                    case 'value'
+                                        title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                                        subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect; % daspect([1 1 1]); drawnow; daspect([1 1 1]); a=pbaspect; 
+                                        subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                                    case 'phase'
+                                        subplot(1,2,1); F.plot_field('phase'); xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect; 
+                                        subplot(1,2,2); F.plot_field('mag');   xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect;
+                                end
                             end
                             if ediff(i)<F.tiny; break; end
                         end
@@ -850,7 +919,7 @@ classdef am_field < matlab.mixin.Copyable
                             ediff(i) = norm(UP(:)-F.F(:))/dt; 
                             if isplot
                                 title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
-                                subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
+                                subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect; %daspect([1 1 1]); drawnow; daspect([1 1 1]); a=pbaspect; 
                                 subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
                             end
                             if ediff(i)<F.tiny; break; end
@@ -1658,7 +1727,16 @@ classdef am_field < matlab.mixin.Copyable
                     end
                 case 'LS91' % Lai-das Sarma (PRL 1991)
                     % NEED TO TEST
-                    if is_explicit; f_ = @(F) ( -model{2}*L^2*F.F(:) + model{3}*L*(D*F.F(:))^2 + model{4}*randn(size(F)) ); nargs=2;
+                    if is_explicit; f_ = @(F) ( -model{2}*L^2*F.F(:) + model{3}*L*(D*F.F(:)).^2 + model{4}*randn(size(F.F(:))) ); nargs=3;
+                    else;           error('not yet implemented');
+                    end
+                case 'KPZ' % Lai-das Sarma (PRL 1991)
+                    % NEED TO TEST
+                    if is_explicit; f_ = @(F) ( -model{2}*L^2*F.F(:) + model{3}*(D*F.F(:)).^2 + model{4}*randn(size(F.F(:))) ); nargs=3;
+                    else;           error('not yet implemented');
+                    end
+                case 'MBE' % Tamborenea, Lai, das Sarma (Surface Science 267 1992), Eq 7
+                    if is_explicit; f_ = @(F) ( -model{2}*L^2*F.F(:) + model{3}*L*(D*F.F(:)).^2 + model{4}*randn(size(F.F(:))) ); nargs=3;
                     else;           error('not yet implemented');
                     end
                 case 'dissipative_diffusion' % Diffusion equation with dissipation, x = { diffusivity, dissipation }
@@ -1879,7 +1957,7 @@ classdef am_field < matlab.mixin.Copyable
             % copy and normalize field
             N = F.copy(); N.F = N.F./am_lib.normc_(N.F); N.J = N.get_jacobian();
             % compute charge
-            switch F.d
+            switch F.v
                 case 3
 %                     N.J(3,:)=0;
                     Q = cross(N.J(:,1,:,:,:),N.J(:,2,:,:,:),1); 
@@ -2246,7 +2324,7 @@ classdef am_field < matlab.mixin.Copyable
     end
 
     methods (Static) % electricity/magnetism
-        
+
         function [A] = get_vector_potential(R,dI,I)
             % get the magnetic vector potential A [3,x,y,z] at positons R [x,y,z] given current flow dI [3,(x,y,z)] at positions I [3,(x,y,z)]
             I = reshape(I,3,[]); dI = reshape(dI,3,[]); M = size(I,2);
@@ -2296,17 +2374,17 @@ classdef am_field < matlab.mixin.Copyable
             if contains(flag,'interactive') || isempty(ex_g_)
                 figure(2); clf; hk = imagesc_(log(abs(Ik).^2)); title('Zoom in on the image'); input('Press enter when done'); 
                 switch 'circle'
-                    case 'ellipse'
-                        title(sprintf('Select %i reflections',nbraggs));
-                        ex_g_ = cell(1,nbraggs); for q = 1:nbraggs; hg = imellipse(gca); ex_g_{q} = createMask(hg,hk); end
-                    case 'circle'
-                        [a,b]=size(Ir); [x,y]=ndgrid(1:a,1:b);
-                        title(sprintf('Select nearest reflections')); r0 = norm(ginput(1)-floor([b,a]/2+1)); r0 = r0/2;
-                        title(sprintf('Select %i reflections',nbraggs)); [a,b] = ginput(nbraggs);
-                        ex_g_ = cell(1,nbraggs); for q = 1:nbraggs
-                            plot_circle(a(q),b(q),r0);
-                            ex_g_{q} = sqrt((x-a(q)).^2 + (y-b(q)).^2) < r0; 
-                        end
+                case 'ellipse'
+                    title(sprintf('Select %i reflections',nbraggs));
+                    ex_g_ = cell(1,nbraggs); for q = 1:nbraggs; hg = imellipse(gca); ex_g_{q} = createMask(hg,hk); end
+                case 'circle'
+                    [a,b]=size(Ir); [x,y]=ndgrid(1:a,1:b);
+                    title(sprintf('Select nearest reflections')); r0 = norm(ginput(1)-floor([b,a]/2+1)); r0 = r0/2;
+                    title(sprintf('Select %i reflections',nbraggs)); [a,b] = ginput(nbraggs);
+                    ex_g_ = cell(1,nbraggs); for q = 1:nbraggs
+                        plot_circle(a(q),b(q),r0);
+                        ex_g_{q} = sqrt((x-a(q)).^2 + (y-b(q)).^2) < r0; 
+                    end
                 end
             end
 
@@ -2428,7 +2506,6 @@ classdef am_field < matlab.mixin.Copyable
                 shifted_adf1=abs(ifft2( fft2( adf1 ) .* w )); % shift IF ADF
             end
         end
-
         
         function polarization_map_()
             
@@ -2784,6 +2861,7 @@ function p = find_local_max_parabola(p,A,w)
 end
  
         end
+        
     end
 
 end
