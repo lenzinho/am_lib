@@ -383,7 +383,7 @@ classdef am_field < matlab.mixin.Copyable
             bc = find(F.R(1,:,:)==54  & F.R(2,:,:)<100 & F.R(2,:,:)>20 ) ; dirichlet = [dirichlet;[bc,-ones(size(bc))]];
             bc = find(F.R(1,:,:)==74  & F.R(2,:,:)<100 & F.R(2,:,:)>20 ) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
             dirichlet = dirichlet.';
-            % find steadys tate field
+            % find steady state field
             F = F.evolve_field({'laplace'},'steady-state',0,0,'dirichlet',dirichlet);
         end
         
@@ -518,15 +518,15 @@ classdef am_field < matlab.mixin.Copyable
                          (x-u/2)*0.90,(y-v/2)*0.90,rescale(c,-1,1)*0.5, cat(3,c,c) );
 
             n = 4;
-            F = am_field.define([2,2].^[n,n+1],[2,2].^[n,n+1],{'cdiff','cdiff'});
+            F = am_field.define([2,2].^[n,n+1],[2,2].^[n,n+1],{'cdiff','cdiff'},2);
             F.R = F.R - [2;2].^[n-1;n];
 
             for i = [1:200]
-
+                % define field and get topological charge
                 m = +1; n = pi/2; s = (i-1)/10;
                 th_ = @(s) atan2(F.R(2,:,:)-s+0.5,F.R(1,:,:)+0.5);
                 F.F = cat(1,sin(m*th_(s)-m*th_(-s)+n),cos(m*th_(s)-m*th_(-s)+n));
-                F = F.get_topological_charge();
+                F.Q = F.get_topological_charge();
 
                 % plot
                 clist = am_lib.clight_(am_lib.colormap_('hsv',256),-0.2);
@@ -534,8 +534,9 @@ classdef am_field < matlab.mixin.Copyable
                 v = squeeze(F.F(2,:,:)); y = squeeze(F.R(2,:,:));
                 q = squeeze(F.Q); w = am_lib.gaussw_(21,5)*am_lib.gaussw_(21,5).';
                 q = conv2( q, w, 'same'); th = mod(atan2(u,v)+pi/2,2*pi); th(1) = 0; th(end)=2*pi;
-
-                switch 'fancy'
+                
+                % set plot  
+                switch 'simple'
                     case 'simple'
                         if i == 1
                             am_lib.set_plot_defaults_(); hold on; offset_ = 100;
@@ -563,11 +564,8 @@ classdef am_field < matlab.mixin.Copyable
                         caxis([-2 2]/2); colormap(flipud(am_lib.colormap_('red2blue',100)));
                         box on; % set(gcf,'renderer','painters');
                 end
-                
-                drawnow();
-
-                % get frame
-                f(i) = getframe();
+                % draw and get frame
+                drawnow(); f(i) = getframe();
 
             end
 
