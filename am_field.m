@@ -9,9 +9,9 @@ classdef am_field < matlab.mixin.Copyable
         Y = []; % coordinate type (cartesian/polar/cylindrical/spherical)
         v = []; % field dimensions (1 = scalar, >1 = vector)
         d = []; % spacial dimensions (2 or 3)
-        s = []; % scheme{1:d} ('fourier/chebyshev/legendre/cdiff/discrete') for each dimension
+        s = []; % scheme{1:d} ('fourier/chebyshev/legendre/cdiff/pdiff(periodic central differences)/discrete') for each dimension
         n = []; % grid points / cart. dimension    3D: [n(1),n(2),n(3)]     2D: [n(1),n(2)] 
-        a = []; % lattice/grid spacing             3D: [a(1),a(2),a(3)]     2D: [n(1),n(2)] 
+        a = []; % lattice/grid spacing             3D: [a(1),a(2),a(3)]     2D: [a(1),a(2)] 
         R = []; % coordinates                          [  x , y , z ] , [ r , th , z ] , [  r , phi , chi ]
         F = []; % field
                 % vector field ( F.v , F.n )
@@ -877,67 +877,6 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
 
-        function [F,M]   = evolve_field(F,f_,algorithm,varargin) % evolve_field(F,{model,x(1),x(2),...},algorithm,dt,M,varargin)
-            % examples
-            % F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
-            % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-            % F = F.evolve_field({'SW76',0.1,1.0},'implicit',2,500);         % hexagons
-            % F = F.evolve_field({'SW76',0.3,0.0},'implicit',2,500);         % finger prints
-            % F = F.evolve_field({'SW76',0.8,1.85},'explicit',0.03,5000);    % maze
-            % F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},'explicit',0.01,10000);
-            % F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},'implicit',1,1000);
-            % F = F.evolve_field({'GL50',@(x)(x^2-1)^2/4,1},'explicit',0.01,5000);
-            
-            % parse boundary conditions
-            p = inputParser; 
-            checkdbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == 2); 
-            checknbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == F.d+1);
-            addParameter(p,'dirichlet',[],checkdbc_);
-            addParameter(p,'neumann'  ,[],checknbc_);
-            addParameter(p,'plot',true,@(x)islogical(x));
-            addParameter(p,'movie',false,@(x)isbool(x));
-            parse(p,varargin{:});
-            dirichlet = p.Results.dirichlet; % dirichlet( (index, value), n)
-            neumann   = p.Results.neumann;   %   neumann( (index, value), n)
-            isplot    = p.Results.plot;
-            
-            % setup model
-            [algorithm,dt,M] = deal(algorithm{:});
-            if iscell(f_)
-                switch algorithm
-                    case {'E','explicit','VE','variable-explicit','AB','adams-bashforth','RK','runge-kutta'}
-                        f_ = F.get_evolution_model(f_,'explicit'); 
-                    case {'I','implicit','S','steady-state','CN','crank-nicolson'}
-                        f_ = F.get_evolution_model(f_,'implicit');
-                    otherwise
-                        error('invalid algorithm');
-                end
-            end
-            
-            switch algorithm
-                % explicit algorithms (f_ must return a flattened matrix for an explicit method!)
-                case {'E','explicit'} % explicit
-                    F = F.solver_explicit(f_,dt,M,dirichlet,neumann,isplot);
-                case {'VE','variable-explicit'} % explicit with variable step size
-                    F = solver_variable_explicit(F,f_,dt,M,dirichlet,neumann,isplot);
-                case {'AB','adams-bashforth'} % explicit
-                    F = solver_adams_bashforth(F,f_,dt,M,dirichlet,neumann,isplot);
-                case {'RK','runge-kutta'} % explicit (LHS must not have an explicit time dependence!)
-                    F = solver_runge_kutta(F,f_,dt,M,dirichlet,neumann,isplot);
-                    
-                % implicit algorithms ( NEED TO WORK ON THIS )
-                case {'SS','steady-state'} % dF/dt = 0
-                    F = solver_steady_state(F,f_,dt,M,dirichlet,neumann,isplot);                    
-                case {'I','implicit'} % more stable
-                    F = solver_implicit(F,f_,dt,M,dirichlet,neumann,isplot);                   
-                case {'CN','crank-nicolson'}
-                    F = solver_crank_nicolson(F,f_,dt,M,dirichlet,neumann,isplot);
-                    
-                otherwise
-                    error('invalid algorithm');
-            end
-        end
-
         function [F]     = get_minimum_energy_path(F,vi,vf,nnodes,ediff,flag)
             % nudge_elastic_band
             % nnodes = 10; 
@@ -1306,6 +1245,10 @@ classdef am_field < matlab.mixin.Copyable
            
         end
         
+    end
+    
+    methods % plotting functions
+        
         function [h]     = plot_field(F,field)
             
             sl_ = @(field,i)   squeeze(F.(field)(i,:,:,:,:,:));
@@ -1439,8 +1382,174 @@ classdef am_field < matlab.mixin.Copyable
         
     end
     
-    methods % micromagnetics
+    methods % models and differential equations
+       
+        function [f_]    = get_evolution_model(F,model,algorithm)
+            % explicit equations:
+            % equations of the form F(n+1) = F(n) + dt*( LHS + C )
+            %                       C + LHS          = ( F(n+1) - F(n) ) / dt = dF/dt
+            % implicit equations:
+            % equations of the form F(n+1) = (1 - dt*LHS)\(dt*C + F(n))
+            %                       C + LHS * F(n+1) = ( F(n+1) - F(n) ) / dt = dF/dt
+            %                       i.e., LHS has a factor of F(n+1) removed
+            %
+            % Note: C needs to be handled directly during the evolution. Currently, 
+            % it's not implemented (equal to zero). It's necessary to implement it 
+            % if a steady state (direct) solution to the Poisson equation is required.
+            
+            if iscell(algorithm)
+                is_explicit = strcmp(algorithm{1},'explicit');
+            else
+                is_explicit = strcmp(algorithm   ,'explicit');
+            end
+            
+            % Get flattened divergence, laplacian, gradient operators            
+            [D,L,G] = F.get_flattened_differentiation_matrices(); N=prod(F.n); I = speye(N); 
+  
+            % Build model
+            switch model{1}
+                case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
+                    OP_ = @(F) model{2}*I - (L+I)^2 + model{3}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
+                    if is_explicit; f_ = @(F) ( OP_(F) * F.F(:) ); nargs=2;
+                    else            f_ = @(F) ( OP_(F)          ); nargs=2;
+                    end
+                case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {eps, c, alpha, q}
+                    OP_ = @(F) I*model{2} - model{3}*(L+I)^2*(L+I*model{5}^2)^2 + model{4}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
+                    if is_explicit; f_ = @(F) ( OP_(F) * F.F(:) ); nargs=4;
+                    else            f_ = @(F) ( OP_(F)          ); nargs=4;
+                    end
+                case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002; Arason & Tang PRL 1998; Michael Cross)
+                    OP_ = @(F) I*(1-1i*model{2}) + L - spdiags( (1-1i*model{2})*abs(F.F(:)).^2,0,N,N);
+                    if is_explicit; f_ = @(F) ( OP_(F) * F.F(:) ); nargs=1;
+                    else            f_ = @(F) ( OP_(F)          ); nargs=1;
+                    end
+                case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
+                    syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
+                    if is_explicit; f_ = @(F) (   (         model{2}(F.F(:))        + model{3}*L*F.F(:) ) ); nargs=2;
+                    else            f_ = @(F) (   ( spdiags(model{2}(F.F(:)),0,N,N) + model{3}*L        ) ); nargs=2;
+                    end
+                case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
+                    syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
+                    if is_explicit; f_ = @(F) ( L*(         model{2}(F.F(:))        - model{3}*L*F.F(:) ) ); nargs=2;
+                    else            f_ = @(F) ( L*( spdiags(model{2}(F.F(:)),0,N,N) - model{3}*L        ) ); nargs=2;
+                    end
+                case 'QP13' % Qin-Pablo (Soft Matter, 2013, 9, 11467)
+                    syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
+                    if is_explicit; f_ = @(F) ( L*( model{2}(F.F(:)) - model{3}*L*F.F(:) ) - model{4}*(F.F(:) - mean(F.F(:))) ); nargs=3;
+                    else;           error('not yet implemented');
+                    end
+                case 'LS91' % Lai-das Sarma (PRL 1991)
+                    % NEED TO TEST
+                    if is_explicit; f_ = @(F) ( -model{2}*L^2*F.F(:) + model{3}*L*(D*F.F(:)).^2 + model{4}*randn(size(F.F(:))) ); nargs=3;
+                    else;           error('not yet implemented');
+                    end
+                case 'KPZ' % Lai-das Sarma (PRL 1991)
+                    % NEED TO TEST
+                    if is_explicit; f_ = @(F) ( -model{2}*L^2*F.F(:) + model{3}*(D*F.F(:)).^2 + model{4}*randn(size(F.F(:))) ); nargs=3;
+                    else;           error('not yet implemented');
+                    end
+                case 'MBE' % Tamborenea, Lai, das Sarma (Surface Science 267 1992), Eq 7
+                    if is_explicit; f_ = @(F) ( -model{2}*L^2*F.F(:) + model{3}*L*(D*F.F(:)).^2 + model{4}*randn(size(F.F(:))) ); nargs=3;
+                    else;           error('not yet implemented');
+                    end
+                case 'dissipative_diffusion' % Diffusion equation with dissipation, x = { diffusivity, dissipation }
+                    OP = ( model{2}*L - model{3}*I );
+                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=2;
+                    else            f_ = @(F) ( OP          ); nargs=2;
+                    end
+                case 'poisson' % Poisson equation, x = { charge density }
+                    % Q: How to solve the poisson equation directly with out time iteration?
+                    % A: Covert it to a nonhomgenous laplace equation: L\(rho/eps) vs. L\0. (Need to implement.)
+                    if is_explicit; f_ = @(F) ( L * F.F(:) - model{2}(:) ); nargs=1;
+                    else;           error('not yet implemented');
+                    end
+                case 'npoisson' % Poisson equation with a spatial-dependent dielectric constant, x = { charge density, dielectric constant }
+                    % seems ok
+                    GE = cellfun(@(G) spdiags(G*model{3}(:),0,N,N), G, 'UniformOutput', false); 
+                    OP = ( spdiags(model{3}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
+                    if is_explicit; f_ = @(F) ( OP * F.F(:) - model{2}(:) ); nargs=2;
+                    else;           error('not yet implemented');
+                    end
+                case 'laplace' % Laplace equation, x = { }
+                    if is_explicit; f_ = @(F) ( L * F.F(:) ); nargs=0;
+                    else            f_ = @(F) ( L          ); nargs=0;
+                    end
+                case 'nlaplace' % Laplace equation with a spatial-dependent dielectric constant, x = { dielectric constant }
+                    GE = cellfun(@(G) spdiags(G*model{2}(:),0,N,N), G, 'UniformOutput', false); 
+                    OP = ( spdiags(model{2}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
+                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=1;
+                    else            f_ = @(F) ( OP          ); nargs=1;
+                    end
+                otherwise
+                    error('invalid model')
+            end
+
+            if numel(model)~=nargs+1; error('incorrect number of parameters'); end % check parameters
+        end
         
+        function [F,M]   = evolve_field(F,f_,algorithm,varargin) % evolve_field(F,{model,x(1),x(2),...},{algorithm,dt,M},varargin)
+            % examples
+            % F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
+            % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
+            % F = F.evolve_field({'SW76',0.1,1.0},{'implicit',2,500});         % hexagons
+            % F = F.evolve_field({'SW76',0.3,0.0},{'implicit',2,500});         % finger prints
+            % F = F.evolve_field({'SW76',0.8,1.85},{'explicit',0.03,5000});    % maze
+            % F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},{'explicit',0.01,10000});
+            % F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},{'implicit',1,1000)};
+            % F = F.evolve_field({'GL50',@(x)(x^2-1)^2/4,1},{'explicit',0.01,5000});
+            
+            % parse boundary conditions
+            p = inputParser; 
+            checkdbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == 2); 
+            checknbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == F.d+1);
+            addParameter(p,'dirichlet',[],checkdbc_);
+            addParameter(p,'neumann'  ,[],checknbc_);
+            addParameter(p,'plot',true,@(x)islogical(x));
+            addParameter(p,'movie',false,@(x)isbool(x));
+            parse(p,varargin{:});
+            dirichlet = p.Results.dirichlet; % dirichlet( (index, value), n)
+            neumann   = p.Results.neumann;   %   neumann( (index, value), n)
+            isplot    = p.Results.plot;
+            
+            % setup model
+            [algo,dt,M] = deal(algorithm{1:3});
+            if iscell(f_)
+                switch algo
+                    case {'E','explicit','VE','variable-explicit','AB','adams-bashforth','RK','runge-kutta'}
+                        f_ = F.get_evolution_model(f_,'explicit'); 
+                    case {'I','implicit','CN','crank-nicolson','SS','steady-state'}
+                        f_ = F.get_evolution_model(f_,'implicit');
+                    otherwise
+                        error('invalid algorithm');
+                end
+            end
+            
+            switch algo
+                % explicit algorithms (f_ must return a flattened matrix for an explicit method!)
+                case {'E','explicit'} % explicit
+                    F = F.solver_explicit(f_,dt,M,dirichlet,neumann,isplot);
+                case {'VE','variable-explicit'} % explicit with variable step size
+                    F = F.solver_variable_explicit(f_,dt,M,dirichlet,neumann,isplot);
+                case {'AB','adams-bashforth'} % explicit
+                    F = F.solver_adams_bashforth(f_,dt,M,dirichlet,neumann,isplot);
+                case {'RK','runge-kutta'} % explicit (LHS must not have an explicit time dependence!)
+                    F = F.solver_runge_kutta(f_,dt,M,dirichlet,neumann,isplot);
+                    
+                % implicit algorithms                   
+                case {'I','implicit'} % more stable
+                    F = F.solver_implicit(f_,dt,M,dirichlet,neumann,isplot);                   
+                case {'CN','crank-nicolson'}
+                    F = F.solver_crank_nicolson(f_,dt,M,dirichlet,neumann,isplot);
+                    
+                % steady state algorithms
+                case {'SS','steady-state'}
+                    F = F.solver_steady_state(f_,dt,M,dirichlet,neumann,isplot); 
+
+                otherwise
+                    error('invalid algorithm');
+            end
+        end
+ 
         function [H]     = get_micromagnetics_crystalline_potential(F,ex_,potential)
             % mask
             if nargin < 3 || isempty(ex_); ex_ = true(1,prod(F.n)); end
@@ -1567,102 +1676,6 @@ classdef am_field < matlab.mixin.Copyable
             
         end
 
-        function [f_]    = get_evolution_model(F,model,algorithm)
-            % explicit equations:
-            % equations of the form F(n+1) = F(n) + dt * LHS
-            %                       LHS          = ( F(n+1) - F(n) ) / dt = dF/dt
-            % implicit equations:
-            % equations of the form F(n+1) = (1 - dt*LHS)\F(n)
-            %                       LHS * F(n+1) = ( F(n+1) - F(n) ) / dt = dF/dt
-            %                       i.e., LHS has a factor of F(n+1) removed
-            if iscell(algorithm)
-                is_explicit = strcmp(algorithm{1},'explicit');
-            else
-                is_explicit = strcmp(algorithm   ,'explicit');
-            end
-            
-            % Get flattened divergence, laplacian, gradient operators            
-            [D,L,G] = F.get_flattened_differentiation_matrices(); N=prod(F.n); I = speye(N); 
-  
-            % Build model
-            switch model{1}
-                case 'SW76' % Swift-Hohenberg (PRA 1976), x = {eps, g1}
-                    OP_ = @(F) model{2}*I - (L+I)^2 + model{3}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
-                    if is_explicit; f_ = @(F) ( OP_(F) * F.F(:) ); nargs=2;
-                    else            f_ = @(F) ( OP_(F)          ); nargs=2;
-                    end
-                case 'LP97' % Lifshitz-Petrich (PRL 1997), x = {eps, c, alpha, q}
-                    OP_ = @(F) I*model{2} - model{3}*(L+I)^2*(L+I*model{5}^2)^2 + model{4}*spdiags(F.F(:),0,N,N) - spdiags(F.F(:).^2,0,N,N);
-                    if is_explicit; f_ = @(F) ( OP_(F) * F.F(:) ); nargs=4;
-                    else            f_ = @(F) ( OP_(F)          ); nargs=4;
-                    end
-                case 'GLXX' % Complex Ginzburg-Landau (Kramer & Aranson, Rev Mod Phys 2002; Arason & Tang PRL 1998; Michael Cross)
-                    OP_ = @(F) I*(1-1i*model{2}) + L - spdiags( (1-1i*model{2})*abs(F.F(:)).^2,0,N,N);
-                    if is_explicit; f_ = @(F) ( OP_(F) * F.F(:) ); nargs=1;
-                    else            f_ = @(F) ( OP_(F)          ); nargs=1;
-                    end
-                case 'GL50' % Ginzburg-Landau (Zh. Eksp. Teor. Fiz. 1950), x = {P.E., gamma^2}
-                    syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
-                    if is_explicit; f_ = @(F) (   (         model{2}(F.F(:))        + model{3}*L*F.F(:) ) ); nargs=2;
-                    else            f_ = @(F) (   ( spdiags(model{2}(F.F(:)),0,N,N) + model{3}*L        ) ); nargs=2;
-                    end
-                case 'CH58' % Cahn-Hilliard (J. Chem. Phys. 1958), x = {P.E., gamma^2}
-                    syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
-                    if is_explicit; f_ = @(F) ( L*(         model{2}(F.F(:))        - model{3}*L*F.F(:) ) ); nargs=2;
-                    else            f_ = @(F) ( L*( spdiags(model{2}(F.F(:)),0,N,N) - model{3}*L        ) ); nargs=2;
-                    end
-                case 'QP13' % Qin-Pablo (Soft Matter, 2013, 9, 11467)
-                    syms z; model{2} = matlabFunction(diff(model{2}(z),z)); % P.E. derivative
-                    if is_explicit; f_ = @(F) ( L*( model{2}(F.F(:)) - model{3}*L*F.F(:) ) - model{4}*(F.F(:) - mean(F.F(:))) ); nargs=3;
-                    else;           error('not yet implemented');
-                    end
-                case 'LS91' % Lai-das Sarma (PRL 1991)
-                    % NEED TO TEST
-                    if is_explicit; f_ = @(F) ( -model{2}*L^2*F.F(:) + model{3}*L*(D*F.F(:)).^2 + model{4}*randn(size(F.F(:))) ); nargs=3;
-                    else;           error('not yet implemented');
-                    end
-                case 'KPZ' % Lai-das Sarma (PRL 1991)
-                    % NEED TO TEST
-                    if is_explicit; f_ = @(F) ( -model{2}*L^2*F.F(:) + model{3}*(D*F.F(:)).^2 + model{4}*randn(size(F.F(:))) ); nargs=3;
-                    else;           error('not yet implemented');
-                    end
-                case 'MBE' % Tamborenea, Lai, das Sarma (Surface Science 267 1992), Eq 7
-                    if is_explicit; f_ = @(F) ( -model{2}*L^2*F.F(:) + model{3}*L*(D*F.F(:)).^2 + model{4}*randn(size(F.F(:))) ); nargs=3;
-                    else;           error('not yet implemented');
-                    end
-                case 'dissipative_diffusion' % Diffusion equation with dissipation, x = { diffusivity, dissipation }
-                    OP = ( model{2}*L - model{3}*I );
-                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=2;
-                    else            f_ = @(F) ( OP          ); nargs=2;
-                    end
-                case 'poisson' % Poisson equation, x = { charge density }
-                    if is_explicit; f_ = @(F) ( L * F.F(:) - model{2}(:) ); nargs=1;
-                    else;           error('not yet implemented');
-                    end
-                case 'npoisson' % Poisson equation with a spatial-dependent dielectric constant, x = { charge density, dielectric constant }
-                    % seems ok
-                    GE = cellfun(@(G) spdiags(G*model{3}(:),0,N,N), G, 'UniformOutput', false); 
-                    OP = ( spdiags(model{3}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
-                    if is_explicit; f_ = @(F) ( OP * F.F(:) - model{2}(:) ); nargs=2;
-                    else;           error('not yet implemented');
-                    end
-                case 'laplace' % Laplace equation, x = { }
-                    if is_explicit; f_ = @(F) ( L * F.F(:)  ); nargs=0;
-                    else            f_ = @(F) ( L           ); nargs=0;
-                    end
-                case 'nlaplace' % Laplace equation with a spatial-dependent dielectric constant, x = { dielectric constant }
-                    GE = cellfun(@(G) spdiags(G*model{2}(:),0,N,N), G, 'UniformOutput', false); 
-                    OP = ( spdiags(model{2}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
-                    if is_explicit; f_ = @(F) ( OP * F.F(:) ); nargs=1;
-                    else            f_ = @(F) ( OP          ); nargs=1;
-                    end
-                otherwise
-                    error('invalid model')
-            end
-
-            if numel(model)~=nargs+1; error('incorrect number of parameters'); end % check parameters
-        end
-        
     end
     
     methods %(Access = protected) % internal stuff
@@ -2018,7 +2031,6 @@ classdef am_field < matlab.mixin.Copyable
             if F.v>1; error('currently only implemented for scalar potentials'); end
             % get gradient
             [~,~,G] = F.get_flattened_differentiation_matrices();
-
             % initialize system of equations
             n = prod(F.n); V = zeros(n,1); O = f_(F);
             % add dirichlet boundary conditions
