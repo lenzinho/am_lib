@@ -67,13 +67,19 @@ classdef am_field < matlab.mixin.Copyable
     methods (Static)
         
         function [F]     = define(n,a,s,v) 
-            % F = define(n,a,s)
+            % F = define(n,a,s,v)
+            % F = field instance
+            % n = number of points
+            % a = lattice parameter
+            % s = scheme used for differentiation
+            % v = field dimension (1 = scalar, 2 = planar vector, 3 = spatial vector, etc.)
+            
             ndims = sum(n~=1); ndiscretes=sum(strcmp(s,'discrete'));
             if numel(s)~=ndims; error('s dimensions mismatch'); end
             if numel(a)~=ndims; error('a dimensions mismatch'); end
             if ndiscretes>1; error('only one discrete dimension is supported at this time'); end
-            F = am_field(); F.a=a; F.n=n; F.s=s; F.d=ndims-ndiscretes; F.R = F.get_collocation_points(); F.Y = 'cartesian'; F.v = v; 
-            % allocate space
+            F = am_field(); F.a=a; F.n=n; F.s=s; F.d=ndims-ndiscretes; 
+            F.R = F.get_collocation_points(); F.Y = 'cartesian'; F.v = v; 
             F.F = zeros([F.v,F.n]);
         end
 
@@ -380,11 +386,22 @@ classdef am_field < matlab.mixin.Copyable
             F.F = zeros([1,F.n]);
             % create boundary conditions
             dirichlet = [];
-            bc = find(F.R(1,:,:)==54  & F.R(2,:,:)<100 & F.R(2,:,:)>20 ) ; dirichlet = [dirichlet;[bc,-ones(size(bc))]];
-            bc = find(F.R(1,:,:)==74  & F.R(2,:,:)<100 & F.R(2,:,:)>20 ) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
+            bc = find(F.R(1,:,:)==54 & F.R(2,:,:)<100 & F.R(2,:,:)>20); dirichlet = [dirichlet;[bc,-ones(size(bc))]];
+            bc = find(F.R(1,:,:)==74 & F.R(2,:,:)<100 & F.R(2,:,:)>20); dirichlet = [dirichlet;[bc,+ones(size(bc))]];
             dirichlet = dirichlet.';
             % find steady state field
-            F = F.evolve_field({'laplace'},'steady-state',0,0,'dirichlet',dirichlet);
+            F = F.evolve_field({'laplace'},{'steady-state',0,0},'dirichlet',dirichlet,'plot',false);
+            % get derivatives
+            F = F.get_derivatives();
+            % plot field
+            figure(1); clf; am_lib.set_plot_defaults_(); hold on; clist=am_lib.colormap_('magma',100); colormap(clist); n=2;
+            J = F.J; J = J./am_lib.normc_(J,2); J(isnan(J))=0;
+            hc = contour(squeeze(F.R(1,:,:)),squeeze(F.R(2,:,:)),squeeze(F.F(1,:,:)),20,'linewidth',2);
+            hq = am_lib.quiverc_( ...
+                   squeeze(F.R(1,1:n:end,1:n:end)),squeeze(F.R(2,1:n:end,1:n:end)),...
+                   squeeze(J(1,1,1:n:end,1:n:end)),squeeze(J(1,2,1:n:end,1:n:end)),squeeze(F.F(1,1:n:end,1:n:end)),clist);
+            hq.LineWidth=1.2;
+            daspect([1 1 1]); axis tight; box on; xticks([]); yticks([]); 
         end
         
         function [F]     = demo_metal_inside_field()
@@ -396,16 +413,39 @@ classdef am_field < matlab.mixin.Copyable
             dirichlet = [];
             bc = find(F.R(1,:,:)==min(F.R(1,:))) ; dirichlet = [dirichlet;[bc,-ones(size(bc))]];
             bc = find(F.R(1,:,:)==max(F.R(1,:))) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
-            dirichlet = dirichlet.'; plates = dirichlet;
-            % find steady state field
-            F = F.evolve_field({'laplace'},'steady-state',0,0,'dirichlet',plates);
+            plates = dirichlet.';
+            % find steady state field (without metal inside)
+            % F = F.evolve_field({'laplace'},{'steady-state',0,0},'dirichlet',plates,'plot',false);
+            % % get derivatives
+            % F = F.get_derivatives();
+            % % plot field
+            % figure(2); clf; am_lib.set_plot_defaults_(); hold on; clist=am_lib.colormap_('magma',100); colormap(clist); n=2;
+            % J = F.J; J = J./am_lib.normc_(J,2); J(isnan(J))=0;
+            % hc = contour(squeeze(F.R(1,:,:)),squeeze(F.R(2,:,:)),squeeze(F.F(1,:,:)),20,'linewidth',2);
+            % hq = am_lib.quiverc_( ...
+            %        squeeze(F.R(1,1:n:end,1:n:end)),squeeze(F.R(2,1:n:end,1:n:end)),...
+            %        squeeze(J(1,1,1:n:end,1:n:end)),squeeze(J(1,2,1:n:end,1:n:end)),squeeze(F.F(1,1:n:end,1:n:end)),clist);
+            % hq.LineWidth=1.2;
+            % daspect([1 1 1]); axis tight; box on; xticks([]); yticks([]); 
+            
             % create conductor [inside conductor: 1) equipotential, 2) electric field, 3) no charge]
             ex_=F.define_mask('square',F.n/2,F.n/8);
             dirichlet = []; mean_ = @(f,ex_) repmat(mean(f(ex_(:))), sum(ex_(:)), 1);
             bc = find(ex_); dirichlet = [dirichlet;[bc,mean_(F.F,ex_)]]; 
-            dirichlet = dirichlet.'; metal = dirichlet;
+            metal = dirichlet.';
             % find steady state field with the metal
-            F = F.evolve_field({'laplace'},'steady-state',0,0,'dirichlet',[plates,metal]);
+            F = F.evolve_field({'laplace'},{'steady-state',0,0},'dirichlet',[plates,metal],'plot',false);
+            % get derivatives
+            F = F.get_derivatives();
+            % plot field
+            figure(1); clf; am_lib.set_plot_defaults_(); hold on; clist=am_lib.colormap_('magma',100); colormap(clist); n=2;
+            J = F.J; J = J./am_lib.normc_(J,2); J(isnan(J))=0;
+            hc = contour(squeeze(F.R(1,:,:)),squeeze(F.R(2,:,:)),squeeze(F.F(1,:,:)),20,'linewidth',2);
+            hq = am_lib.quiverc_( ...
+                   squeeze(F.R(1,1:n:end,1:n:end)),squeeze(F.R(2,1:n:end,1:n:end)),...
+                   squeeze(J(1,1,1:n:end,1:n:end)),squeeze(J(1,2,1:n:end,1:n:end)),squeeze(F.F(1,1:n:end,1:n:end)),clist);
+            hq.LineWidth=1.2;
+            daspect([1 1 1]); axis tight; box on; xticks([]); yticks([]); 
         end
 
         function [F]     = demo_dielectric_inside_field() 
@@ -420,17 +460,17 @@ classdef am_field < matlab.mixin.Copyable
             % define dielectric constant
             ex_ = F.define_mask('circle',F.n/2,F.n(1)/5); epsilon = 3*ex_ + 1*(~ex_); 
             % find steady state field
-            F = F.evolve_field({'nlaplace',epsilon},'steady-state',0,0,'dirichlet',plates);
+            F = F.evolve_field({'nlaplace',epsilon},{'steady-state',0,0},'dirichlet',plates);
             % F = F.evolve_field('nlaplace',{epsilon},'explicit',0.05,100000,'dirichlet',plates);
             % get derivatives
             F = F.get_derivatives();
             % plot field
             clf; am_lib.set_plot_defaults_(); hold on; clist=am_lib.colormap_('magma',100); colormap(clist); n=2;
-            J = am_lib.diag_(F.J); J = J./am_lib.normc_(J); J(isnan(J))=0;
+            J = F.J; J = J./am_lib.normc_(J,2); J(isnan(J))=0;
             hc = contour(squeeze(F.R(1,:,:)),squeeze(F.R(2,:,:)),squeeze(F.F(1,:,:)),10,'linewidth',2);
             hq = am_lib.quiverc_( ...
                    squeeze(F.R(1,1:n:end,1:n:end)),squeeze(F.R(2,1:n:end,1:n:end)),...
-                   squeeze(J(1,1:n:end,1:n:end)),squeeze(J(2,1:n:end,1:n:end)),squeeze(F.F(1,1:n:end,1:n:end)),clist);
+                   squeeze(J(1,1,1:n:end,1:n:end)),squeeze(J(1,2,1:n:end,1:n:end)),squeeze(F.F(1,1:n:end,1:n:end)),clist);
             hq.LineWidth=1.2;
             daspect([1 1 1]); axis tight; box on; xticks([]); yticks([]);
         end
@@ -447,17 +487,17 @@ classdef am_field < matlab.mixin.Copyable
             %       interesting... the field inside the dielectric flips orientation at eps_r = 1/5 ... is this real?
             ex_ = F.define_mask('halfspace',F.n(1)/3); epsilon = 5*ex_ + 1*(~ex_); 
             % find steady state field
-            F = F.evolve_field({'nlaplace',epsilon},'steady-state',0,0,'dirichlet',charge);
-            % F = F.evolve_field('nlaplace',{epsilon},'explicit',0.05,100000,'dirichlet',plates);
+            F = F.evolve_field({'nlaplace',epsilon},{'steady-state',0,0},'dirichlet',charge);
+            % F = F.evolve_field('nlaplace',{epsilon},{'explicit',0.05,100000},'dirichlet',plates);
             % get derivatives
             F = F.get_derivatives();
             % plot field
             clf; am_lib.set_plot_defaults_(); hold on; clist=am_lib.colormap_('magma',100); colormap(clist); n=2;
-            J = am_lib.diag_(F.J); J = J./am_lib.normc_(J); J(isnan(J))=0;
+            J = F.J; J = J./am_lib.normc_(J,2); J(isnan(J))=0;
             hc = contour(squeeze(F.R(1,:,:)),squeeze(F.R(2,:,:)),squeeze(F.F(1,:,:)),20,'linewidth',2);
             hq = am_lib.quiverc_( ...
                    squeeze(F.R(1,1:n:end,1:n:end)),squeeze(F.R(2,1:n:end,1:n:end)),...
-                   squeeze(J(1,1:n:end,1:n:end)),squeeze(J(2,1:n:end,1:n:end)),squeeze(F.F(1,1:n:end,1:n:end)),clist);
+                   squeeze(J(1,1,1:n:end,1:n:end)),squeeze(J(1,2,1:n:end,1:n:end)),squeeze(F.F(1,1:n:end,1:n:end)),clist);
             hq.LineWidth=1.2;
             daspect([1 1 1]); axis tight; box on; xticks([]); yticks([]); 
         end
@@ -471,16 +511,16 @@ classdef am_field < matlab.mixin.Copyable
             % define charge_
             charge  = F.define_mask('point',F.n/2); charge = -10*charge;
             % find steady state field
-            F = F.evolve_field({'npoisson',charge,epsilon},'explicit',0.1,1E5);
+            F = F.evolve_field({'npoisson',charge,epsilon},{'explicit',0.1,1E5});
             % get derivatives
             F = F.get_derivatives();
             % plot field
             clf; am_lib.set_plot_defaults_(); hold on; clist=am_lib.colormap_('magma',100); colormap(clist); n=2;
-            J = am_lib.diag_(F.J); % J = J./am_lib.normc_(J); J(isnan(J))=0;
-            hc = contour(squeeze(F.R(1,:,:)),squeeze(F.R(2,:,:)),squeeze(F.F(1,:,:)),10,'linewidth',2);
+            J = F.J; J = J./am_lib.normc_(J,2); J(isnan(J))=0;
+            hc = contour(squeeze(F.R(1,:,:)),squeeze(F.R(2,:,:)),squeeze(F.F(1,:,:)),20,'linewidth',2);
             hq = am_lib.quiverc_( ...
                    squeeze(F.R(1,1:n:end,1:n:end)),squeeze(F.R(2,1:n:end,1:n:end)),...
-                   squeeze(J(1,1:n:end,1:n:end)),squeeze(J(2,1:n:end,1:n:end)),squeeze(F.F(1,1:n:end,1:n:end)),clist);
+                   squeeze(J(1,1,1:n:end,1:n:end)),squeeze(J(1,2,1:n:end,1:n:end)),squeeze(F.F(1,1:n:end,1:n:end)),clist);
             hq.LineWidth=1.2;
             daspect([1 1 1]); axis tight; box on; xticks([]); yticks([]); 
             %
@@ -822,12 +862,18 @@ classdef am_field < matlab.mixin.Copyable
         function [F]     = get_derivatives(F)
             F.v = F.get_field_dimension();
             F.J = F.get_jacobian();
-            F.Q = F.get_topological_charge();
-            F.D = F.get_divergence();
-            F.C = F.get_curl();
+            if F.v > 1
+                F.Q = F.get_topological_charge();
+            end
+            if F.v == F.d
+                F.D = F.get_divergence();
+                F.C = F.get_curl();
+            end
             if F.v==1
                 F.H = F.get_hessian(); 
-                F.L = F.get_laplacian();
+                if F.v == F.d
+                    F.L = F.get_laplacian();
+                end                
             end
         end
 
@@ -987,7 +1033,7 @@ classdef am_field < matlab.mixin.Copyable
                     % add dirichlet boundary conditions
                     if ~isempty(dirichlet)
                         % make the b.c. robust by removing coupling to everything else
-%                         O(dirichlet(1,:),:) = []; V(dirichlet(1,:),:) = [];
+                        O(dirichlet(1,:),:) = []; V(dirichlet(1,:),:) = [];
                         % add boundary conditions
                         Op = speye(n); Op = Op(dirichlet(1,:),:); Vp = dirichlet(2,:).';
                         % augment
@@ -1002,7 +1048,9 @@ classdef am_field < matlab.mixin.Copyable
                     % evaluate
                     F.F(:) = O\V;
                     % plot
-                    F.plot_field('F');
+                    if isplot
+                        F.plot_field('F');
+                    end
                     
                 case {'I','implicit'} % more stable
                     
@@ -1677,10 +1725,10 @@ classdef am_field < matlab.mixin.Copyable
         function [f_]    = get_evolution_model(F,model,algorithm)
             % explicit equations:
             % equations of the form F(n+1) = F(n) + dt * LHS
-            %                       LHS = ( F(n+1) - F(n)) / dt = dF/dt
+            %                       LHS          = ( F(n+1) - F(n) ) / dt = dF/dt
             % implicit equations:
             % equations of the form F(n+1) = (1 - dt*LHS)\F(n)
-            %                       LHS * F(n+1) = ( F(n+1) - F(n) ) / dt
+            %                       LHS * F(n+1) = ( F(n+1) - F(n) ) / dt = dF/dt
             %                       i.e., LHS has a factor of F(n+1) removed
             if iscell(algorithm)
                 is_explicit = strcmp(algorithm{1},'explicit');

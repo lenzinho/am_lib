@@ -966,9 +966,10 @@ classdef am_lib
             C = A(bsxfun(@plus,I,[0:size(A,2)-1]*size(A,1)));
         end
         
-        function [C] = normc_(A)
-            % get length of each column vector
-            C = sqrt(sum(abs(A).^2,1));
+        function [C] = normc_(A,d)
+            % get length of each vector along dimension d
+            if nargin == 1; d = 1; end
+            C = sqrt(sum(abs(A).^2,d));
         end
         
         function [C] = norm_(A)
@@ -2378,7 +2379,7 @@ classdef am_lib
 
         
         % combinatorial 
-        
+
         function [x]    = nchoosek_(n,k)
             % much faster than matlab's nchoosek
             kk=min(k,n-k);
@@ -2418,7 +2419,7 @@ classdef am_lib
             end
             x=x.';
         end
-        
+
         function [x]    = nchoosrk_(n,k)
             % with duplications allowed
             
@@ -2876,14 +2877,14 @@ classdef am_lib
                     case 1; [C]=deal(varargin{:}); V=[];
                     otherwise; error('invalid input');
                 end
-                % over lay the strain on the image
+                % overlay the strain on the image
                 h(1) = am_lib.imagesc_(flipud(I.')); hold on; drawnow; 
                 % overlay statistical function on field
                 ax(1) = gca; ax(2) = axes('position',get(gca,'position')); linkaxes(ax); colormap(ax(1),colormap('gray'));
                 % plot isostrain
-%                 if isempty(V); [~,h(2)]=am_lib.imcontour_(flipud(C.')); else; [~,h(2)]=am_lib.imcontour_(flipud(C.'),V); end
+                if isempty(V); [~,h(2)]=am_lib.imcontour_(flipud(C.')); else; [~,h(2)]=am_lib.imcontour_(flipud(C.'),V); end
 %                 if isempty(V); [~,h(2)]=contourf(flipud(C.')); else; [~,h(2)]=contourf(flipud(C.'),V); end
-                am_lib.imagesc(flipud(C.'),'alphadata',rescale(I));
+                % am_lib.imagesc_(flipud(C.'),'alphadata',rescale(I));
                 % remove white background
                 set(gca,'color','none'); set(h(2),'linewidth',1); colormap(ax(2),flipud(am_lib.colormap_('red2blue'))); 
             else
@@ -3024,7 +3025,7 @@ classdef am_lib
                 % center
                     [T,R] = am_lib.cart2pol_(U,V); I=abs(X(:).'-X(:)); S = min(I(I(:)~=0))./max(R(R(:)~=0));
                     [U,V] = am_lib.pol2cart_(T,R*S);
-                    % X = X - U/2; Y = Y - V/2;
+                    X = X - U/2; Y = Y - V/2;
                 h = quiver(X, Y, U, V, 0.5, 'linewidth', 1.5);
             elseif nargin == 4
                 [U,V,C,clist]=deal(varargin{:});
