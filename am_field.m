@@ -914,179 +914,24 @@ classdef am_field < matlab.mixin.Copyable
                 end
             end
             
-            % get gradient
-            [~,~,G] = F.get_flattened_differentiation_matrices();
-            
             switch algorithm
                 % explicit algorithms (f_ must return a flattened matrix for an explicit method!)
                 case {'E','explicit'} % explicit
-                    for i = [1:M]
-                        UP = F.F(:); F.F(:) = F.F(:) + dt*f_(F);
-                        % b.c.
-                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                        if ~isempty(neumann); error('not yet implemented'); end
-                        
-                        if any(isnan(F.F(:))); warning(sprintf('NaN on run %i',i)); break; end
-                        if mod(i,20)==0
-                        % if mod(i,round(M/10))==0
-                        % if mod(i,round(M/100))==0
-                            ediff(i) = norm(UP(:)-F.F(:))/dt; 
-                            if isplot
-                                % set phase and mag
-                                F.phase=angle(F.F); F.mag=abs(F.F);
-                                % plot
-                                switch 'value'
-                                    case 'value'
-                                        title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
-                                        subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect; % daspect([1 1 1]); drawnow; daspect([1 1 1]); a=pbaspect; 
-                                        subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
-                                    case 'phase'
-                                        subplot(1,2,1); F.plot_field('phase'); xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect; 
-                                        subplot(1,2,2); F.plot_field('mag');   xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect;
-                                end
-                            end
-                            if ediff(i)<F.tiny; break; end
-                        end
-                    end
+                    F = F.solver_explicit(f_,dt,M,dirichlet,neumann,isplot);
                 case {'VE','variable-explicit'} % explicit with variable step size
-                    % J. R. Dormand, "Numerical Methods for Differential Equations: A Computational Approach", (2017), p 9.53, eq 5.3.
-                    UP = zeros(F.v*prod(F.n),1); dF = zeros(F.v*prod(F.n),1); tol = dt; dt = 1E-5; 
-                    for i = [1:M]
-                        UP(:) = F.F(:); dF(:) = f_(F); F.F(:) = F.F(:) + dt*dF;
-                        % estimate optimal dt for a given tolerence
-                        dt = 0.9*(tol/max(abs(dF(:))));
-                        % b.c.
-                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                        if ~isempty(neumann); error('not yet implemented'); end
-                        if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/10))==0
-                            ediff(i) = norm(UP(:)-F.F(:))/dt; 
-                            if isplot
-                                title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
-                                subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect; %daspect([1 1 1]); drawnow; daspect([1 1 1]); a=pbaspect; 
-                                subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
-                            end
-                            if ediff(i)<F.tiny; break; end
-                        end
-                    end
+                    F = solver_variable_explicit(F,f_,dt,M,dirichlet,neumann,isplot);
                 case {'AB','adams-bashforth'} % explicit
-                    k = zeros([F.v*prod(F.n),5]);
-                    for i = [1:M]
-                        UP = F.F(:); k(:,1) = f_(F);
-                        switch i        
-                            case 1; F.F(:) = F.F(:) + dt*sum(k(:,1),2);
-                            case 2; F.F(:) = F.F(:) + dt*sum(k(:,1:2).*cat(2,3/2,-1/2),2);
-                            case 3; F.F(:) = F.F(:) + dt*sum(k(:,1:3).*cat(2,23/12,-4/3,5/12),2);
-                            case 4; F.F(:) = F.F(:) + dt*sum(k(:,1:4).*cat(2,55/24,-59/24,37/24,-3/8),2);
-                         otherwise; F.F(:) = F.F(:) + dt*sum(k(:,1:5).*cat(2,1901/720,-1387/360,109/30,-637/360,251/720),2);
-                        end
-                        k = circshift(k,[0,1]);
-                        % b.c.
-                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                        if ~isempty(neumann); error('not yet implemented'); end
-
-                        if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/10))==0
-                            ediff(i) = norm(UP(:)-F.F(:))/dt; 
-                            if isplot
-                                title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
-                                subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
-                                subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
-                            end
-                            if ediff(i)<F.tiny; break; end
-                        end
-                    end
+                    F = solver_adams_bashforth(F,f_,dt,M,dirichlet,neumann,isplot);
                 case {'RK','runge-kutta'} % explicit (LHS must not have an explicit time dependence!)
-                    % create an auxiliary dummy field
-                    A = F.copy(); k = zeros([F.v*prod(F.n),4]); 
-                    for i = [1:M]
-                        UP = F.F(:);
-                        A.F(:) = F.F(:);          k(:,1) = dt*f_(A);
-                        A.F(:) = F.F(:)+k(:,1)/2; k(:,2) = dt*f_(A);
-                        A.F(:) = F.F(:)+k(:,2)/2; k(:,3) = dt*f_(A);
-                        A.F(:) = F.F(:)+k(:,3);   k(:,4) = dt*f_(A);
-                        F.F(:) = F.F(:)+sum(k.*(cat(2,1,2,2,1)./6),2);
-                        % b.c.
-                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                        if ~isempty(neumann); error('not yet implemented'); end
-
-                        if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/10))==0
-                            ediff(i) = norm(UP(:)-F.F(:))/dt; 
-                            if isplot
-                                title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
-                                subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
-                                subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
-                            end
-                            if ediff(i)<F.tiny; break; end
-                        end
-                    end
+                    F = solver_runge_kutta(F,f_,dt,M,dirichlet,neumann,isplot);
                     
                 % implicit algorithms ( NEED TO WORK ON THIS )
-                
                 case {'SS','steady-state'} % dF/dt = 0
-                    
-                    if F.v>1; error('currently only implemented for scalar potentials'); end
-    
-                    % initialize system of equations
-                    n = prod(F.n); V = zeros(n,1); O = f_(F);
-                    % add dirichlet boundary conditions
-                    if ~isempty(dirichlet)
-                        % make the b.c. robust by removing coupling to everything else
-                        O(dirichlet(1,:),:) = []; V(dirichlet(1,:),:) = [];
-                        % add boundary conditions
-                        Op = speye(n); Op = Op(dirichlet(1,:),:); Vp = dirichlet(2,:).';
-                        % augment
-                        O = [O;Op]; V = [V;Vp];
-                    end
-                    % add neuamnn boundary conditions for each dimension
-                    if ~isempty(neumann); k = 1;
-                        for j = 1:F.d; for i = 1:F.v; k=k+1;
-                            Op = G{j}(neumann(1,:),:); Vp = neumann(k,:).'; O = [O;Op]; V = [V;Vp];
-                        end; end
-                    end
-                    % evaluate
-                    F.F(:) = O\V;
-                    % plot
-                    if isplot
-                        F.plot_field('F');
-                    end
-                    
+                    F = solver_steady_state(F,f_,dt,M,dirichlet,neumann,isplot);                    
                 case {'I','implicit'} % more stable
-                    
-                    if F.v>1; error('currently only implemented for scalar potentials'); end
-
-                    N = prod(F.n);
-                    for i = [1:M]
-                        UP = F.F(:); F.F(:) = (speye(N) - dt*f_(F))\F.F(:);
-                        if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/10))==0
-                            F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/dt;
-                            title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
-                            if ediff<F.tiny; break; end
-                        end
-                        % b.c.
-                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                        if ~isempty(neumann); error('not yet implemented'); end
-                    end
-                    
+                    F = solver_implicit(F,f_,dt,M,dirichlet,neumann,isplot);                   
                 case {'CN','crank-nicolson'}
-                    
-                    if F.v>1; error('currently only implemented for scalar potentials'); end
-
-                    N = prod(F.n);
-                    for i = [1:M]
-                        UP = F.F(:); F.F(:) = ( (speye(N)-dt*f_(F))\F.F(:) + F.F(:)+dt*f_(F) )/2;
-                        if any(isnan(F.F(:))); warning('NaN'); break; end
-                        if mod(i,round(M/10))==0
-                            F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/dt;
-                            title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
-                            if ediff<F.tiny; break; end
-                        end
-                        % b.c.
-                        if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                        if ~isempty(neumann); error('not yet implemented'); end
-                    end
+                    F = solver_crank_nicolson(F,f_,dt,M,dirichlet,neumann,isplot);
                     
                 otherwise
                     error('invalid algorithm');
@@ -2050,6 +1895,191 @@ classdef am_field < matlab.mixin.Copyable
             
         end
         
+    end
+    
+    methods (Access = protected) % solvers
+        
+        % explicit
+        
+        function [F] = solver_explicit(F,f_,dt,M,dirichlet,neumann,isplot)
+            for i = [1:M]
+                UP = F.F(:); F.F(:) = F.F(:) + dt*f_(F);
+                % b.c.
+                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                if ~isempty(neumann); error('not yet implemented'); end
+
+                if any(isnan(F.F(:))); warning(sprintf('NaN on run %i',i)); break; end
+                if mod(i,20)==0
+                % if mod(i,round(M/10))==0
+                % if mod(i,round(M/100))==0
+                    ediff(i) = norm(UP(:)-F.F(:))/dt; 
+                    if isplot
+                        % set phase and mag
+                        F.phase=angle(F.F); F.mag=abs(F.F);
+                        % plot
+                        switch 'value'
+                            case 'value'
+                                title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                                subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect; % daspect([1 1 1]); drawnow; daspect([1 1 1]); a=pbaspect; 
+                                subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                            case 'phase'
+                                subplot(1,2,1); F.plot_field('phase'); xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect; 
+                                subplot(1,2,2); F.plot_field('mag');   xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect;
+                        end
+                    end
+                    if ediff(i)<F.tiny; break; end
+                end
+            end
+        end
+
+        function [F] = solver_variable_explicit(F,f_,dt,M,dirichlet,neumann,isplot)
+            % J. R. Dormand, "Numerical Methods for Differential Equations: A Computational Approach", (2017), p 9.53, eq 5.3.
+            UP = zeros(F.v*prod(F.n),1); dF = zeros(F.v*prod(F.n),1); tol = dt; dt = 1E-5; 
+            for i = [1:M]
+                UP(:) = F.F(:); dF(:) = f_(F); F.F(:) = F.F(:) + dt*dF;
+                % estimate optimal dt for a given tolerence
+                dt = 0.9*(tol/max(abs(dF(:))));
+                % b.c.
+                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                if ~isempty(neumann); error('not yet implemented'); end
+                if any(isnan(F.F(:))); warning('NaN'); break; end
+                if mod(i,round(M/10))==0
+                    ediff(i) = norm(UP(:)-F.F(:))/dt; 
+                    if isplot
+                        title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                        subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect; %daspect([1 1 1]); drawnow; daspect([1 1 1]); a=pbaspect; 
+                        subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                    end
+                    if ediff(i)<F.tiny; break; end
+                end
+            end
+        end
+
+        function [F] = solver_adams_bashforth(F,f_,dt,M,dirichlet,neumann,isplot)
+            k = zeros([F.v*prod(F.n),5]);
+            for i = [1:M]
+                UP = F.F(:); k(:,1) = f_(F);
+                switch i        
+                    case 1; F.F(:) = F.F(:) + dt*sum(k(:,1),2);
+                    case 2; F.F(:) = F.F(:) + dt*sum(k(:,1:2).*cat(2,3/2,-1/2),2);
+                    case 3; F.F(:) = F.F(:) + dt*sum(k(:,1:3).*cat(2,23/12,-4/3,5/12),2);
+                    case 4; F.F(:) = F.F(:) + dt*sum(k(:,1:4).*cat(2,55/24,-59/24,37/24,-3/8),2);
+                 otherwise; F.F(:) = F.F(:) + dt*sum(k(:,1:5).*cat(2,1901/720,-1387/360,109/30,-637/360,251/720),2);
+                end
+                k = circshift(k,[0,1]);
+                % b.c.
+                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                if ~isempty(neumann); error('not yet implemented'); end
+
+                if any(isnan(F.F(:))); warning('NaN'); break; end
+                if mod(i,round(M/10))==0
+                    ediff(i) = norm(UP(:)-F.F(:))/dt; 
+                    if isplot
+                        title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                        subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
+                        subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                    end
+                    if ediff(i)<F.tiny; break; end
+                end
+            end
+        end
+
+        function [F] = solver_runge_kutta(F,f_,dt,M,dirichlet,neumann,isplot)
+            % create an auxiliary dummy field
+            A = F.copy(); k = zeros([F.v*prod(F.n),4]); 
+            for i = [1:M]
+                UP = F.F(:);
+                A.F(:) = F.F(:);          k(:,1) = dt*f_(A);
+                A.F(:) = F.F(:)+k(:,1)/2; k(:,2) = dt*f_(A);
+                A.F(:) = F.F(:)+k(:,2)/2; k(:,3) = dt*f_(A);
+                A.F(:) = F.F(:)+k(:,3);   k(:,4) = dt*f_(A);
+                F.F(:) = F.F(:)+sum(k.*(cat(2,1,2,2,1)./6),2);
+                % b.c.
+                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                if ~isempty(neumann); error('not yet implemented'); end
+
+                if any(isnan(F.F(:))); warning('NaN'); break; end
+                if mod(i,round(M/10))==0
+                    ediff(i) = norm(UP(:)-F.F(:))/dt; 
+                    if isplot
+                        title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
+                        subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
+                        subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                    end
+                    if ediff(i)<F.tiny; break; end
+                end
+            end
+        end 
+
+        % implicit
+        
+        function [F] = solver_steady_state(F,f_,~,~,dirichlet,neumann,isplot)
+            % check dimension
+            if F.v>1; error('currently only implemented for scalar potentials'); end
+            % get gradient
+            [~,~,G] = F.get_flattened_differentiation_matrices();
+
+            % initialize system of equations
+            n = prod(F.n); V = zeros(n,1); O = f_(F);
+            % add dirichlet boundary conditions
+            if ~isempty(dirichlet)
+                % make the b.c. robust by removing coupling to everything else
+                O(dirichlet(1,:),:) = []; V(dirichlet(1,:),:) = [];
+                % add boundary conditions
+                Op = speye(n); Op = Op(dirichlet(1,:),:); Vp = dirichlet(2,:).';
+                % augment
+                O = [O;Op]; V = [V;Vp];
+            end
+            % add neuamnn boundary conditions for each dimension
+            if ~isempty(neumann); k = 1;
+                for j = 1:F.d; for i = 1:F.v; k=k+1;
+                    Op = G{j}(neumann(1,:),:); Vp = neumann(k,:).'; O = [O;Op]; V = [V;Vp];
+                end; end
+            end
+            % evaluate
+            F.F(:) = O\V;
+            % plot
+            if isplot
+                F.plot_field('F');
+            end
+        end
+        
+        function [F] = solver_implicit(F,f_,dt,M,dirichlet,neumann,isplot)
+            if F.v>1; error('currently only implemented for scalar potentials'); end
+
+            N = prod(F.n);
+            for i = [1:M]
+                UP = F.F(:); F.F(:) = (speye(N) - dt*f_(F))\F.F(:);
+                if any(isnan(F.F(:))); warning('NaN'); break; end
+                if mod(i,round(M/10))==0
+                    F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/dt;
+                    title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
+                    if ediff<F.tiny; break; end
+                end
+                % b.c.
+                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                if ~isempty(neumann); error('not yet implemented'); end
+            end
+        end
+       
+        function [F] = solver_crank_nicolson(F,f_,dt,M,dirichlet,neumann,isplot)
+            if F.v>1; error('currently only implemented for scalar potentials'); end
+
+            N = prod(F.n);
+            for i = [1:M]
+                UP = F.F(:); F.F(:) = ( (speye(N)-dt*f_(F))\F.F(:) + F.F(:)+dt*f_(F) )/2;
+                if any(isnan(F.F(:))); warning('NaN'); break; end
+                if mod(i,round(M/10))==0
+                    F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/dt;
+                    title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
+                    if ediff<F.tiny; break; end
+                end
+                % b.c.
+                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
+                if ~isempty(neumann); error('not yet implemented'); end
+            end
+        end
+
     end
      
     methods (Static, Access = protected) % polynomials and spectral methods
