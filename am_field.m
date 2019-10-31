@@ -303,8 +303,9 @@ classdef am_field < matlab.mixin.Copyable
             clear;clc;clf;
             F = am_field.define([2,2].^[6,5],[2,2].^[6,5],{'pdiff','pdiff'},2); % initialize object
             F.F = rand([2,F.n]); F.F = F.F - mean(F.F(:)); % initialize random vector field
-            % F = F.evolve_field(@(F) micromagnetics_(F),{'adams-bashforth',1E-3,1000});
-            F = F.evolve_field(@(F) micromagnetics_(F),{'VE',0.010,1000});
+            opts = am_field.set_solver_options('algo','adams-bashforth','dt',1E-3,'M',1000);
+            opts = am_field.set_solver_options('algo','VE','dt',0.01,'M',1000);
+            F = F.evolve_field(@(F) micromagnetics_(F), opts);
 
             function dF = micromagnetics_(F)
                 % get differentiation matrix and allocate space
@@ -328,23 +329,26 @@ classdef am_field < matlab.mixin.Copyable
         end
         
         function [F]     = demo_mbe()
+            % solver option
+            opts = am_field.set_solver_options('algo','E','dt',0.1,'M',10000);
             % 2+1D
-            switch '2+1D'
+            switch '1+1D'
                 case '2+1D'
                     F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},1); % initialize object
                     F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
-                    F = F.evolve_field({'MBE',0.01,-0.1,0},{'E',0.1,10000}); % solve
+                    F = F.evolve_field({'MBE',0.01,-0.1,0},opts); % solve
                 case '1+1D'
                     F = am_field.define([2].^[6],[2].^[6],{'pdiff'},1); % initialize object
                     F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
-                    F = F.evolve_field({'MBE',0.01,-0.1,0},{'E',0.1,10000}); % solve
+                    F = F.evolve_field({'MBE',0.01,-0.1,0},opts); % solve
             end
         end
         
         function [F]     = demo_hilliard_cahn()
             F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'},1); % initialize object
             F.F = rand([1,F.n]); F.F = F.F - mean(F.F(:)); % initialize random field
-            F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},{'VE',0.01,10000}); % solve
+            opts = am_field.set_solver_options('algo','VE','dt',0.01,'M',10000);
+            F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},opts);
         end
         
         function [F]     = demo_qin_pablo()
@@ -352,7 +356,8 @@ classdef am_field < matlab.mixin.Copyable
             F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.000; % initialize field, lines    (mean = 0)
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); F.F=F.F-0.455; % initialize field, hexagons (mean = -0.455)
-            F = F.evolve_field({'QP13',@(x)(x^2-1)^2/4,0.5,0.1},{'explicit',0.05,10000});
+            opts = am_field.set_solver_options('algo','E','dt',0.05,'M',10000);
+            F = F.evolve_field({'QP13',@(x)(x^2-1)^2/4,0.5,0.1},opts);
             %
         end
 
@@ -360,23 +365,25 @@ classdef am_field < matlab.mixin.Copyable
             % Lifshitz-Petrich x = {eps, c, alpha, q}; eps* = eps/alpha^2 = eps (for alpha fixed at 1)
             F = am_field.define([2,2].^7,[2,2].^7,{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-%             F = F.evolve_field({'LP97',2,10,1,2*cos(pi/12)},{'explicit',0.01,10000});
-            F = F.evolve_field({'LP97',2,0,1,2*cos(pi/12)},{'explicit',0.01,100000});
-            %
+            opts = am_field.set_solver_options('algo','E','dt',0.01,'M',10000);
+            % F = F.evolve_field({'LP97',2,10,1,2*cos(pi/12)},opts);
+            F = F.evolve_field({'LP97',2,0,1,2*cos(pi/12)},opts);
         end
         
         function [F]     = demo_complex_ginzburg_landau()
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'},1);
             F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
-            F = F.evolve_field({'GLXX',0.00},{'explicit',0.01,1000});
-%             F = F.evolve_field({'GLXX',1.25},{'explicit',0.01,1000});
-            % F = F.evolve_field({'GLXX',2.50},{'explicit',0.01,1000});
+            opts = am_field.set_solver_options('algo','E','dt',0.01,'M',10000);
+            F = F.evolve_field({'GLXX',0.00},opts);
+            % F = F.evolve_field({'GLXX',1.25},opts);
+            % F = F.evolve_field({'GLXX',2.50},opts);
         end
 
         function [F]     = demo_poisson_equation()
             F = am_field.define([2,2].^[7,7],[2,2].^[7,7],{'pdiff','pdiff'},1);
             rho = am_lib.gauss_(am_lib.normc_(F.R-[30;30])); % put a charge at (30,30)
-            F = F.evolve_field({'poisson',-rho},{'explicit',0.05,5000});
+            opts = am_field.set_solver_options('algo','E','dt',0.05,'M',5000);
+            F = F.evolve_field({'poisson',-rho},opts);
         end
         
         function [F]     = demo_parallel_plate_capacitor()
@@ -390,7 +397,8 @@ classdef am_field < matlab.mixin.Copyable
             bc = find(F.R(1,:,:)==74 & F.R(2,:,:)<100 & F.R(2,:,:)>20); dirichlet = [dirichlet;[bc,+ones(size(bc))]];
             dirichlet = dirichlet.';
             % find steady state field
-            F = F.evolve_field({'laplace'},{'steady-state',0,0},'dirichlet',dirichlet,'plot',false);
+            opts = am_field.set_solver_options('algo','SS','dt',[],'M',[],'dirichlet',dirichlet);
+            F = F.evolve_field({'laplace'},opts);
             % get derivatives
             F = F.get_derivatives();
             % plot field
@@ -415,7 +423,8 @@ classdef am_field < matlab.mixin.Copyable
             bc = find(F.R(1,:,:)==max(F.R(1,:))) ; dirichlet = [dirichlet;[bc,+ones(size(bc))]];
             plates = dirichlet.';
             % find steady state field (without metal inside)
-            % F = F.evolve_field({'laplace'},{'steady-state',0,0},'dirichlet',plates,'plot',false);
+            % opts = am_field.set_solver_options('algo','SS','dt',[],'M',[],'dirichlet',[plates]);
+            % F = F.evolve_field({'laplace'},opts);
             % % get derivatives
             % F = F.get_derivatives();
             % % plot field
@@ -434,7 +443,8 @@ classdef am_field < matlab.mixin.Copyable
             bc = find(ex_); dirichlet = [dirichlet;[bc,mean_(F.F,ex_)]]; 
             metal = dirichlet.';
             % find steady state field with the metal
-            F = F.evolve_field({'laplace'},{'steady-state',0,0},'dirichlet',[plates,metal],'plot',false);
+            opts = am_field.set_solver_options('algo','SS','dt',[],'M',[],'dirichlet',[plates,metal]);
+            F = F.evolve_field({'laplace'},opts);
             % get derivatives
             F = F.get_derivatives();
             % plot field
@@ -460,7 +470,8 @@ classdef am_field < matlab.mixin.Copyable
             % define dielectric constant
             ex_ = F.define_mask('circle',F.n/2,F.n(1)/5); epsilon = 3*ex_ + 1*(~ex_); 
             % find steady state field
-            F = F.evolve_field({'nlaplace',epsilon},{'steady-state',0,0},'dirichlet',plates);
+            opts = am_field.set_solver_options('algo','SS','dt',[],'M',[],'dirichlet',[plates]);
+            F = F.evolve_field({'nlaplace',epsilon},opts);
             % F = F.evolve_field('nlaplace',{epsilon},'explicit',0.05,100000,'dirichlet',plates);
             % get derivatives
             F = F.get_derivatives();
@@ -477,7 +488,7 @@ classdef am_field < matlab.mixin.Copyable
 
         function [F]     = demo_dielectric_half_space()
             clear;clc
-            % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
+            % initialize
             F = am_field.define([2,2].^7,[2,2].^7,{'cdiff','cdiff'},1);
             % create capactior plates
             dirichlet = [];
@@ -485,10 +496,12 @@ classdef am_field < matlab.mixin.Copyable
             dirichlet = dirichlet.'; charge = dirichlet;
             % define dielectric constant 
             %       interesting... the field inside the dielectric flips orientation at eps_r = 1/5 ... is this real?
-            ex_ = F.define_mask('halfspace',F.n(1)/3); epsilon = 5*ex_ + 1*(~ex_); 
+            ex_ = F.define_mask('halfspace',F.n(1)/3); epsilon = 1/2*ex_ + 1*(~ex_); 
             % find steady state field
-            F = F.evolve_field({'nlaplace',epsilon},{'steady-state',0,0},'dirichlet',charge);
-            % F = F.evolve_field('nlaplace',{epsilon},{'explicit',0.05,100000},'dirichlet',plates);
+            opts = am_field.set_solver_options('algo','SS','dt',[],'M',[],'dirichlet',charge);
+            F = F.evolve_field({'nlaplace',epsilon},opts);
+            % opts = am_field.set_solver_options('algo','E','dt',0.05,'M',1E4,'dirichlet',[charge]);
+            % F = F.evolve_field({'nlaplace',epsilon},opts);
             % get derivatives
             F = F.get_derivatives();
             % plot field
@@ -507,11 +520,14 @@ classdef am_field < matlab.mixin.Copyable
             % initialize (can also use {'cdiff','pdiff'} for infinately long capacitor plates)
             F = am_field.define([2,2].^6,[2,2].^6,{'cdiff','cdiff'},1); 
             % define dielectric constant
-            epsilon = F.define_mask('annulus',F.n/2,[F.n(1)/8,F.n(1)/4]); epsilon = 2.5*epsilon + 1*(~epsilon); 
-            % define charge_
+            epsilon = F.define_mask('halfspace',F.n(1)/3); epsilon = 2.5*epsilon + 1*(~epsilon);
+%             epsilon = F.define_mask('annulus',F.n/2,[F.n(1)/8,F.n(1)/4]); epsilon = 2.5*epsilon + 1*(~epsilon); 
+            % define charge
             charge  = F.define_mask('point',F.n/2); charge = -10*charge;
+            % define solver options
+            opts = am_field.set_solver_options('algo','E','dt',0.1,'M',1E3);
             % find steady state field
-            F = F.evolve_field({'npoisson',charge,epsilon},{'explicit',0.1,1E5});
+            F = F.evolve_field({'npoisson',charge,epsilon},opts);
             % get derivatives
             F = F.get_derivatives();
             % plot field
@@ -539,8 +555,11 @@ classdef am_field < matlab.mixin.Copyable
             neumann   = [];
             neumann   = [neumann;[F.n,0]];
             neumann   = neumann.';
+            
+            % define solver options
+            opts = am_field.set_solver_options('algo','steady-state','dt',[],'M',[],'dirichlet',dirichlet,'neumann',neumann);
 
-            F = F.evolve_field({'dissipative_diffusion',8,5},{'steady-state'},'dirichlet',dirichlet,'neumann',neumann);
+            F = F.evolve_field({'dissipative_diffusion',8,5},opts);
 
         end
         
@@ -1458,14 +1477,16 @@ classdef am_field < matlab.mixin.Copyable
                     else            f_ = @(F) ( OP          ); nargs=2;
                     end
                 case 'poisson' % Poisson equation, x = { charge density }
+                    % GRAD_R^2 psi(R) = - rho(R) / (eps0 * eps)
                     % Q: How to solve the poisson equation directly with out time iteration?
-                    % A: Covert it to a nonhomgenous laplace equation: L\(rho/eps) vs. L\0. (Need to implement.)
+                    % A: Covert it to a nonhomgenous laplace equation: L\(rho/eps) vs. L\0.
+                    %    (Need to implement via constant C. See notes at function header.)
                     if is_explicit; f_ = @(F) ( L * F.F(:) - model{2}(:) ); nargs=1;
                     else;           error('not yet implemented');
                     end
                 case 'npoisson' % Poisson equation with a spatial-dependent dielectric constant, x = { charge density, dielectric constant }
-                    % seems ok
-                    GE = cellfun(@(G) spdiags(G*model{3}(:),0,N,N), G, 'UniformOutput', false); 
+                    % eps0 * DEL_R . ( eps(R) GRAD_R psi(R) ) = - rho(R)
+                    GE = cellfun(@(G) spdiags(G*model{3}(:),0,N,N), G, 'UniformOutput', false);
                     OP = ( spdiags(model{3}(:),0,N,N) * L  +  cat(2,GE{:}) * cat(1,G{:}) );
                     if is_explicit; f_ = @(F) ( OP * F.F(:) - model{2}(:) ); nargs=2;
                     else;           error('not yet implemented');
@@ -1487,7 +1508,7 @@ classdef am_field < matlab.mixin.Copyable
             if numel(model)~=nargs+1; error('incorrect number of parameters'); end % check parameters
         end
         
-        function [F,M]   = evolve_field(F,f_,algorithm,varargin) % evolve_field(F,{model,x(1),x(2),...},{algorithm,dt,M},varargin)
+        function [F]     = evolve_field(F,f_,opts) % evolve_field(F,{model,x(1),x(2),...},{algorithm,dt,M},varargin)
             % examples
             % F = am_field.define([2,2].^[6,6],[2,2].^[6,6],{'pdiff','pdiff'}); % initialize field
             % F.F = rand([1,F.n]); F.F = F.F-mean(F.F(:)); % initialize field
@@ -1498,23 +1519,10 @@ classdef am_field < matlab.mixin.Copyable
             % F = F.evolve_field({'CH58',@(x)(x^2-1)^2/4,1},{'implicit',1,1000)};
             % F = F.evolve_field({'GL50',@(x)(x^2-1)^2/4,1},{'explicit',0.01,5000});
             
-            % parse boundary conditions
-            p = inputParser; 
-            checkdbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == 2); 
-            checknbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == F.d+1);
-            addParameter(p,'dirichlet',[],checkdbc_);
-            addParameter(p,'neumann'  ,[],checknbc_);
-            addParameter(p,'plot',true,@(x)islogical(x));
-            addParameter(p,'movie',false,@(x)isbool(x));
-            parse(p,varargin{:});
-            dirichlet = p.Results.dirichlet; % dirichlet( (index, value), n)
-            neumann   = p.Results.neumann;   %   neumann( (index, value), n)
-            isplot    = p.Results.plot;
+            am_field.check_solver_options(F,opts)
             
-            % setup model
-            [algo,dt,M] = deal(algorithm{1:3});
             if iscell(f_)
-                switch algo
+                switch opts.algo
                     case {'E','explicit','VE','variable-explicit','AB','adams-bashforth','RK','runge-kutta'}
                         f_ = F.get_evolution_model(f_,'explicit'); 
                     case {'I','implicit','CN','crank-nicolson','SS','steady-state'}
@@ -1524,32 +1532,32 @@ classdef am_field < matlab.mixin.Copyable
                 end
             end
             
-            switch algo
+            switch opts.algo
                 % explicit algorithms (f_ must return a flattened matrix for an explicit method!)
                 case {'E','explicit'} % explicit
-                    F = F.solver_explicit(f_,dt,M,dirichlet,neumann,isplot);
+                    F = F.solver_explicit(f_,opts);
                 case {'VE','variable-explicit'} % explicit with variable step size
-                    F = F.solver_variable_explicit(f_,dt,M,dirichlet,neumann,isplot);
+                    F = F.solver_variable_explicit(f_,opts);
                 case {'AB','adams-bashforth'} % explicit
-                    F = F.solver_adams_bashforth(f_,dt,M,dirichlet,neumann,isplot);
+                    F = F.solver_adams_bashforth(f_,opts);
                 case {'RK','runge-kutta'} % explicit (LHS must not have an explicit time dependence!)
-                    F = F.solver_runge_kutta(f_,dt,M,dirichlet,neumann,isplot);
+                    F = F.solver_runge_kutta(f_,opts);
                     
                 % implicit algorithms                   
                 case {'I','implicit'} % more stable
-                    F = F.solver_implicit(f_,dt,M,dirichlet,neumann,isplot);                   
+                    F = F.solver_implicit(f_,opts);                   
                 case {'CN','crank-nicolson'}
-                    F = F.solver_crank_nicolson(f_,dt,M,dirichlet,neumann,isplot);
+                    F = F.solver_crank_nicolson(f_,opts);
                     
                 % steady state algorithms
                 case {'SS','steady-state'}
-                    F = F.solver_steady_state(f_,dt,M,dirichlet,neumann,isplot); 
+                    F = F.solver_steady_state(f_,opts); 
 
                 otherwise
                     error('invalid algorithm');
             end
         end
- 
+
         function [H]     = get_micromagnetics_crystalline_potential(F,ex_,potential)
             % mask
             if nargin < 3 || isempty(ex_); ex_ = true(1,prod(F.n)); end
@@ -1910,23 +1918,77 @@ classdef am_field < matlab.mixin.Copyable
         
     end
     
+    methods (Static) % solver options
+
+        % solver options
+        
+        function opts = set_solver_options(varargin)
+            opts.algo           = []; % algorithm used
+            opts.dirichlet      = []; % boundary conditions
+            opts.neumann        = []; % boundary conditions
+            opts.nonhomogeneous = []; % b in Ax = b
+            opts.makeplot       = true; % generate plot while running
+            opts.makemovie      = false; % generate movie while running
+            opts.dt             = []; % step size of iteration (controls speed v stability)
+            opts.M              = []; % maximum number of iterations
+            
+            i=1;
+            while i<nargin
+                opts.(varargin{i})=varargin{i+1}; i=i+2;
+            end
+            
+        end
+         
+        function check_solver_options(F,opts)
+
+            checkdbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == 2); 
+            checknbc_ = @(x) isempty(x) || (isnumeric(x) && size(x,1) == F.d+1);
+
+            if ~checkdbc_(opts.dirichlet)
+                error('Dimension mismatch 1.');
+            end
+            if ~checknbc_(opts.neumann)
+                error('Dimension mismatch 2.');
+            end
+            if ~islogical(opts.makeplot)
+                error('Invalid data type.');
+            end
+            if ~islogical(opts.makemovie)
+                error('Invalid data type.');
+            end
+            switch opts.algo
+                case {'E','explicit','VE','variable-explicit','AB','adams-bashforth','RK','runge-kutta',...
+                      'I','implicit','CN','crank-nicolson','SS','steady-state'}
+                      % do nothing
+                otherwise
+                    error('Invalid algorithm.');
+            end
+            
+            if isempty(opts.makeplot)
+                opts.makeplot=false;
+            end
+
+        end
+        
+    end
+       
     methods (Access = protected) % solvers
         
         % explicit
         
-        function [F] = solver_explicit(F,f_,dt,M,dirichlet,neumann,isplot)
-            for i = [1:M]
-                UP = F.F(:); F.F(:) = F.F(:) + dt*f_(F);
+        function [F] = solver_explicit(F,f_,opts)
+            for i = [1:opts.M]
+                UP = F.F(:); F.F(:) = F.F(:) + opts.dt*f_(F);
                 % b.c.
-                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                if ~isempty(neumann); error('not yet implemented'); end
+                if ~isempty(opts.dirichlet); F.F(:,opts.dirichlet(1,:)) = opts.dirichlet(2:end,:); end
+                if ~isempty(opts.neumann); error('not yet implemented'); end
 
                 if any(isnan(F.F(:))); warning(sprintf('NaN on run %i',i)); break; end
                 if mod(i,20)==0
-                % if mod(i,round(M/10))==0
-                % if mod(i,round(M/100))==0
-                    ediff(i) = norm(UP(:)-F.F(:))/dt; 
-                    if isplot
+                % if mod(i,round(opts.M/10))==0
+                % if mod(i,round(opts.M/100))==0
+                    ediff(i) = norm(UP(:)-F.F(:))/opts.dt; 
+                    if opts.makeplot
                         % set phase and mag
                         F.phase=angle(F.F); F.mag=abs(F.F);
                         % plot
@@ -1934,7 +1996,7 @@ classdef am_field < matlab.mixin.Copyable
                             case 'value'
                                 title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
                                 subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect; % daspect([1 1 1]); drawnow; daspect([1 1 1]); a=pbaspect; 
-                                subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                                subplot(2,1,2); semilogy(ediff,'.'); xlim([1 opts.M]); pbaspect(a); 
                             case 'phase'
                                 subplot(1,2,1); F.plot_field('phase'); xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect; 
                                 subplot(1,2,2); F.plot_field('mag');   xticks([]); yticks([]); drawnow; daspect([1 1 1]); a=pbaspect;
@@ -1945,79 +2007,79 @@ classdef am_field < matlab.mixin.Copyable
             end
         end
 
-        function [F] = solver_variable_explicit(F,f_,dt,M,dirichlet,neumann,isplot)
+        function [F] = solver_variable_explicit(F,f_,opts)
             % J. R. Dormand, "Numerical Methods for Differential Equations: A Computational Approach", (2017), p 9.53, eq 5.3.
-            UP = zeros(F.v*prod(F.n),1); dF = zeros(F.v*prod(F.n),1); tol = dt; dt = 1E-5; 
-            for i = [1:M]
-                UP(:) = F.F(:); dF(:) = f_(F); F.F(:) = F.F(:) + dt*dF;
-                % estimate optimal dt for a given tolerence
-                dt = 0.9*(tol/max(abs(dF(:))));
+            UP = zeros(F.v*prod(F.n),1); dF = zeros(F.v*prod(F.n),1); tol = opts.dt; opts.dt = 1E-5; 
+            for i = [1:opts.M]
+                UP(:) = F.F(:); dF(:) = f_(F); F.F(:) = F.F(:) + opts.dt*dF;
+                % estimate optimal opts.dt for a given tolerence
+                opts.dt = 0.9*(tol/max(abs(dF(:))));
                 % b.c.
-                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                if ~isempty(neumann); error('not yet implemented'); end
+                if ~isempty(opts.dirichlet); F.F(:,opts.dirichlet(1,:)) = opts.dirichlet(2:end,:); end
+                if ~isempty(opts.neumann); error('not yet implemented'); end
                 if any(isnan(F.F(:))); warning('NaN'); break; end
-                if mod(i,round(M/10))==0
-                    ediff(i) = norm(UP(:)-F.F(:))/dt; 
-                    if isplot
+                if mod(i,round(opts.M/10))==0
+                    ediff(i) = norm(UP(:)-F.F(:))/opts.dt; 
+                    if opts.makeplot
                         title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
                         subplot(2,1,1); F.plot_field('F'); drawnow; a=pbaspect; %daspect([1 1 1]); drawnow; daspect([1 1 1]); a=pbaspect; 
-                        subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                        subplot(2,1,2); semilogy(ediff,'.'); xlim([1 opts.M]); pbaspect(a); 
                     end
                     if ediff(i)<F.tiny; break; end
                 end
             end
         end
 
-        function [F] = solver_adams_bashforth(F,f_,dt,M,dirichlet,neumann,isplot)
+        function [F] = solver_adams_bashforth(F,f_,opts)
             k = zeros([F.v*prod(F.n),5]);
-            for i = [1:M]
+            for i = [1:opts.M]
                 UP = F.F(:); k(:,1) = f_(F);
                 switch i        
-                    case 1; F.F(:) = F.F(:) + dt*sum(k(:,1),2);
-                    case 2; F.F(:) = F.F(:) + dt*sum(k(:,1:2).*cat(2,3/2,-1/2),2);
-                    case 3; F.F(:) = F.F(:) + dt*sum(k(:,1:3).*cat(2,23/12,-4/3,5/12),2);
-                    case 4; F.F(:) = F.F(:) + dt*sum(k(:,1:4).*cat(2,55/24,-59/24,37/24,-3/8),2);
-                 otherwise; F.F(:) = F.F(:) + dt*sum(k(:,1:5).*cat(2,1901/720,-1387/360,109/30,-637/360,251/720),2);
+                    case 1; F.F(:) = F.F(:) + opts.dt*sum(k(:,1),2);
+                    case 2; F.F(:) = F.F(:) + opts.dt*sum(k(:,1:2).*cat(2,3/2,-1/2),2);
+                    case 3; F.F(:) = F.F(:) + opts.dt*sum(k(:,1:3).*cat(2,23/12,-4/3,5/12),2);
+                    case 4; F.F(:) = F.F(:) + opts.dt*sum(k(:,1:4).*cat(2,55/24,-59/24,37/24,-3/8),2);
+                 otherwise; F.F(:) = F.F(:) + opts.dt*sum(k(:,1:5).*cat(2,1901/720,-1387/360,109/30,-637/360,251/720),2);
                 end
                 k = circshift(k,[0,1]);
                 % b.c.
-                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                if ~isempty(neumann); error('not yet implemented'); end
+                if ~isempty(opts.dirichlet); F.F(:,opts.dirichlet(1,:)) = opts.dirichlet(2:end,:); end
+                if ~isempty(opts.neumann); error('not yet implemented'); end
 
                 if any(isnan(F.F(:))); warning('NaN'); break; end
-                if mod(i,round(M/10))==0
-                    ediff(i) = norm(UP(:)-F.F(:))/dt; 
-                    if isplot
+                if mod(i,round(opts.M/10))==0
+                    ediff(i) = norm(UP(:)-F.F(:))/opts.dt; 
+                    if opts.makeplot
                         title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
                         subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
-                        subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                        subplot(2,1,2); semilogy(ediff,'.'); xlim([1 opts.M]); pbaspect(a); 
                     end
                     if ediff(i)<F.tiny; break; end
                 end
             end
         end
 
-        function [F] = solver_runge_kutta(F,f_,dt,M,dirichlet,neumann,isplot)
+        function [F] = solver_runge_kutta(F,f_,opts)
             % create an auxiliary dummy field
             A = F.copy(); k = zeros([F.v*prod(F.n),4]); 
-            for i = [1:M]
+            for i = [1:opts.M]
                 UP = F.F(:);
-                A.F(:) = F.F(:);          k(:,1) = dt*f_(A);
-                A.F(:) = F.F(:)+k(:,1)/2; k(:,2) = dt*f_(A);
-                A.F(:) = F.F(:)+k(:,2)/2; k(:,3) = dt*f_(A);
-                A.F(:) = F.F(:)+k(:,3);   k(:,4) = dt*f_(A);
+                A.F(:) = F.F(:);          k(:,1) = opts.dt*f_(A);
+                A.F(:) = F.F(:)+k(:,1)/2; k(:,2) = opts.dt*f_(A);
+                A.F(:) = F.F(:)+k(:,2)/2; k(:,3) = opts.dt*f_(A);
+                A.F(:) = F.F(:)+k(:,3);   k(:,4) = opts.dt*f_(A);
                 F.F(:) = F.F(:)+sum(k.*(cat(2,1,2,2,1)./6),2);
                 % b.c.
-                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                if ~isempty(neumann); error('not yet implemented'); end
+                if ~isempty(opts.dirichlet); F.F(:,opts.dirichlet(1,:)) = opts.dirichlet(2:end,:); end
+                if ~isempty(opts.neumann); error('not yet implemented'); end
 
                 if any(isnan(F.F(:))); warning('NaN'); break; end
-                if mod(i,round(M/10))==0
-                    ediff(i) = norm(UP(:)-F.F(:))/dt; 
-                    if isplot
+                if mod(i,round(opts.M/10))==0
+                    ediff(i) = norm(UP(:)-F.F(:))/opts.dt; 
+                    if opts.makeplot
                         title(sprintf('%i, %0.5g',i,ediff(i))); drawnow; 
                         subplot(2,1,1); F.plot_field('F'); drawnow; daspect([1 1 1]); a=pbaspect;
-                        subplot(2,1,2); semilogy(ediff,'.'); xlim([1 M]); pbaspect(a); 
+                        subplot(2,1,2); semilogy(ediff,'.'); xlim([1 opts.M]); pbaspect(a); 
                     end
                     if ediff(i)<F.tiny; break; end
                 end
@@ -2026,75 +2088,75 @@ classdef am_field < matlab.mixin.Copyable
 
         % implicit
         
-        function [F] = solver_steady_state(F,f_,~,~,dirichlet,neumann,isplot)
+        function [F] = solver_steady_state(F,f_,opts)
             % check dimension
             if F.v>1; error('currently only implemented for scalar potentials'); end
             % get gradient
             [~,~,G] = F.get_flattened_differentiation_matrices();
             % initialize system of equations
             n = prod(F.n); V = zeros(n,1); O = f_(F);
-            % add dirichlet boundary conditions
-            if ~isempty(dirichlet)
+            % add opts.dirichlet boundary conditions
+            if ~isempty(opts.dirichlet)
                 % make the b.c. robust by removing coupling to everything else
-                O(dirichlet(1,:),:) = []; V(dirichlet(1,:),:) = [];
+                O(opts.dirichlet(1,:),:) = []; V(opts.dirichlet(1,:),:) = [];
                 % add boundary conditions
-                Op = speye(n); Op = Op(dirichlet(1,:),:); Vp = dirichlet(2,:).';
+                Op = speye(n); Op = Op(opts.dirichlet(1,:),:); Vp = opts.dirichlet(2,:).';
                 % augment
                 O = [O;Op]; V = [V;Vp];
             end
             % add neuamnn boundary conditions for each dimension
-            if ~isempty(neumann); k = 1;
+            if ~isempty(opts.neumann); k = 1;
                 for j = 1:F.d; for i = 1:F.v; k=k+1;
-                    Op = G{j}(neumann(1,:),:); Vp = neumann(k,:).'; O = [O;Op]; V = [V;Vp];
+                    Op = G{j}(opts.neumann(1,:),:); Vp = opts.neumann(k,:).'; O = [O;Op]; V = [V;Vp];
                 end; end
             end
             % evaluate
             F.F(:) = O\V;
             % plot
-            if isplot
+            if opts.makeplot
                 F.plot_field('F');
             end
         end
-        
-        function [F] = solver_implicit(F,f_,dt,M,dirichlet,neumann,isplot)
+
+        function [F] = solver_implicit(F,f_,opts)
             if F.v>1; error('currently only implemented for scalar potentials'); end
 
             N = prod(F.n);
-            for i = [1:M]
-                UP = F.F(:); F.F(:) = (speye(N) - dt*f_(F))\F.F(:);
+            for i = [1:opts.M]
+                UP = F.F(:); F.F(:) = (speye(N) - opts.dt*f_(F))\F.F(:);
                 if any(isnan(F.F(:))); warning('NaN'); break; end
-                if mod(i,round(M/10))==0
-                    F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/dt;
+                if mod(i,round(opts.M/10))==0
+                    F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/opts.dt;
                     title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
                     if ediff<F.tiny; break; end
                 end
                 % b.c.
-                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                if ~isempty(neumann); error('not yet implemented'); end
+                if ~isempty(opts.dirichlet); F.F(:,opts.dirichlet(1,:)) = opts.dirichlet(2:end,:); end
+                if ~isempty(opts.neumann); error('not yet implemented'); end
             end
         end
        
-        function [F] = solver_crank_nicolson(F,f_,dt,M,dirichlet,neumann,isplot)
+        function [F] = solver_crank_nicolson(F,f_,opts)
             if F.v>1; error('currently only implemented for scalar potentials'); end
 
             N = prod(F.n);
-            for i = [1:M]
-                UP = F.F(:); F.F(:) = ( (speye(N)-dt*f_(F))\F.F(:) + F.F(:)+dt*f_(F) )/2;
+            for i = [1:opts.M]
+                UP = F.F(:); F.F(:) = ( (speye(N)-opts.dt*f_(F))\F.F(:) + F.F(:)+opts.dt*f_(F) )/2;
                 if any(isnan(F.F(:))); warning('NaN'); break; end
-                if mod(i,round(M/10))==0
-                    F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/dt;
+                if mod(i,round(opts.M/10))==0
+                    F.plot_field('F'); ediff = norm(UP(:)-F.F(:))/opts.dt;
                     title(sprintf('%i, %0.5g',i,ediff)); drawnow; 
                     if ediff<F.tiny; break; end
                 end
                 % b.c.
-                if ~isempty(dirichlet); F.F(:,dirichlet(1,:)) = dirichlet(2:end,:); end
-                if ~isempty(neumann); error('not yet implemented'); end
+                if ~isempty(opts.dirichlet); F.F(:,opts.dirichlet(1,:)) = opts.dirichlet(2:end,:); end
+                if ~isempty(opts.neumann); error('not yet implemented'); end
             end
         end
-
+        
     end
      
-    methods (Static, Access = protected) % polynomials and spectral methods
+    methods (Static) %(Static, Access = protected) % polynomials and spectral methods
 
         function [x]     = canonicalr_(n) % roots of canonical all-one polynomial
            x(:,1) = zeros(n,1);
